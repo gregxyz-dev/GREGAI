@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# gregai - JEDNO polecenie do wszystkiego wokół GREGAI (1.11.0).
+#
+#     gregai                 to samo co: gregai status
+#     gregai install [opcje] instalacja/naprawa od zera (to install.sh; opcje: --train --no-host --here --yes)
+#     gregai update          po wgraniu nowej wersji kodu: przepięcie usług, .env, restart (to aktualizuj.sh)
+#     gregai update PLIK.zip bezpieczna aktualizacja z paczki: sprawdzenie, kopia obecnego kodu, podmiana,
+#                            restart i automatyczny powrót, gdy GREGAI nie wstanie (notatki, pamięć, data, .env nietknięte)
+#     gregai rollback        powrót do kodu sprzed ostatniej aktualizacji z paczki (kopia w ~/.local/share/gregai/kopie)
+#     gregai check           kontrole na tym laptopie (to check.sh)
+#     gregai diagnoza        internet GREGAI warstwa po warstwie (WARP, tunel, DNS, wyszukiwarki, dostawcy AI)
+#                            i co naprawić; liczone W USŁUDZE (ta sama zapora co prawdziwe zapytania)
+#     gregai eval [--zywo] [--k N]   testy regresji GREGAI: szybkie bez sieci, --zywo pyta prawdziwe modele
+#                            (pass@k / pass^k, porównanie z poprzednim przebiegiem; --zywo kosztuje tokeny)
+#     gregai start|stop|restart   usługa systemd gregai
+#     gregai status          wersja, usługa, port, WARP, Ollama, koryto (Claude/darmowi), SYSOP - w jednej tabelce
+#     gregai logs [N]        ostatnie N linii dziennika usługi (domyślnie 50), potem na żywo
+#     gregai open            otwórz czat w przeglądarce
+#     gregai version         numer wersji
+#     gregai help            ten opis
+#
+# install.sh, aktualizuj.sh i check.sh zostają w folderze jako osobne skrypty:
+# ten plik ich nie zastępuje, tylko daje jedno wejście (łatwiej zapamiętać
+# jedno słowo niż trzy nazwy plików). Instalator dopisuje dowiązanie
+# ~/.local/bin/gregai -> <folder>/gregai, więc polecenie działa z każdego
+# miejsca; bez instalacji: bash <folder>/gregai ...
+# Nie dotyka zabezpieczeń (WARP, ufw, apparmor) - te robią install.sh/check.sh.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P)"
+PORT=7777  # 1.29.0: port serwera jest stały (agent/main.py), zmienna GREGAI_PORT nic nie zmieniała
+need_sudo() { if [ "$(id -u)" -ne 0 ]; then sudo "$@"; else "$@"; fi; }
+have() { command -v "$1" >/dev/null 2>&1; }
+row() { printf '  %-14s %s\n' "$1" "$2"; }
+die() { printf 'gregai: %s\n' "$*" >&2; exit 1; }
+
+cmd_help() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+cmd_version() { cat "$ROOT/VERSION" 2>/dev/null || echo "?"; }
+
+unit_exists() { have systemctl && systemctl cat gregai.service >/dev/null 2>&1; }
+
+cmd_start()   { unit_exists || die "usługa gregai nie istnieje - najpierw: gregai install"; need_sudo systemctl start gregai && echo "gregai uruchomiony: http://localhost:$PORT"; }
+cmd_stop()    { unit_exists || die "usługa gregai nie istnieje"; need_sudo systemctl stop gregai && echo "gregai zatrzymany"; }
+cmd_restart() { unit_exists || die "usługa gregai nie istnieje - najpierw: gregai install"; need_sudo systemctl restart gregai && echo "gregai zrestartowany: http://localhost:$PORT"; }
+
+cmd_logs() {
+  unit_exists || die "usługa gregai nie istnieje - najpierw: gregai install"
+  local n="${1:-50}"
+  case "$n" in ''|*[!0-9]*) die "podaj liczbę linii, np.: gregai logs 100" ;; esac
+  journalctl -u gregai -n "$n" -f
+}
+
+cmd_open() {
+  local url="http://localhost:$PORT"
+  if have xdg-open; then xdg-open "$url" >/dev/null 2>&1 & disown; echo "otwieram $url"; else echo "$url"; fi
+}
+
+cmd_status() {
+  printf '\n\033[1;36m== GREGAI %s\033[0m\n' "$(cmd_version)"
+  row "folder" "$ROOT"
+  if unit_exists; then
+    if systemctl is-active --quiet gregai; then row "systemd" "$(printf '\033[32mdziała\033[0m') (od $(systemctl show -p ActiveEnterTimestamp --value gregai 2>/dev/null | cut -d' ' -f2-3))"
+    else row "systemd" "$(printf '\033[33mnie działa\033[0m') - gregai start"; fi
+    local wd; wd="$(systemctl show -p WorkingDirectory --value gregai 2>/dev/null)"
+    [ -n "$wd" ] && [ "$wd" != "$ROOT" ] && row "" "$(printf '\033[33mUWAGA\033[0m') usługa wskazuje inny folder: $wd (gregai update)"
+  else
+    row "systemd" "$(printf '\033[33mnie zainstalowana\033[0m') - gregai install"
+  fi
+  local code; code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$PORT/api/status" 2>/dev/null)"; [ -n "$code" ] || code=000
+  if [ "$code" = "200" ]; then row "czat" "http://localhost:$PORT (odpowiada)"; else row "czat" "http://localhost:$PORT $(printf '\033[33mnie odpowiada\033[0m') (HTTP $code)"; fi
+  # 1.19.0: najpierw sam klient WARP (lokalnie, bez sieci); zapytanie do Cloudflare
+  # tylko gdy klient mówi "Connected" - przy rozłączonym WARP poszłoby obok niego.
+  # 1.32.0: --accept-tos jak w agent/netguard.py (nowsze klienty bez niego pytają o warunki); starsze go nie znają.
+  local wst; wst="$(warp-cli --accept-tos status </dev/null 2>/dev/null | head -1 || true)"
+  [ -n "$wst" ] || wst="$(warp-cli status </dev/null 2>/dev/null | head -1 || true)"
+  if ! grep -q '\bConnected\b' <<<"$wst"; then
+    row "WARP" "$(printf '\033[31mrozłączony\033[0m') (${wst:-brak warp-cli}) - internet dla GREGAI zablokowany; szczegóły: gregai diagnoza"
+  elif have curl; then
+    local trace; trace="$(curl -fsS --noproxy '*' --max-time 8 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)"
+    if grep -q '^warp=\(on\|plus\)' <<<"$trace"; then row "WARP" "$(printf '\033[32mpołączony\033[0m')"
+    else row "WARP" "$(printf '\033[33mklient połączony, ale ruch nie idzie przez Cloudflare\033[0m') - warp-cli disconnect && warp-cli connect"; fi
+  fi
+  local oll; oll="$(curl -s --max-time 3 http://127.0.0.1:11434/api/tags 2>/dev/null | python3 -c 'import sys,json; print(", ".join(m["name"] for m in json.load(sys.stdin).get("models", [])) or "brak modeli")' 2>/dev/null || echo "nie odpowiada")"
+  row "Ollama" "$oll"
+  if [ "$code" = "200" ]; then
+    curl -s --max-time 15 "http://127.0.0.1:$PORT/api/system_info" 2>/dev/null | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+def row(k, v): print("  %-14s %s" % (k, v))
+k = d.get("koryto") or {}
+if k:
+    row("koryto", k.get("opis") or " -> ".join(k.get("kolejnosc") or []))
+    # 1.18.0: kiedy wolno liczyć lokalnie (KORYTO_LOKALNIE) i czy routing/planer idą siecią
+    extra = []
+    if k.get("lokalnie"): extra.append("lokalnie: " + ("tylko bez internetu" if k["lokalnie"] == "bez_internetu" else "także po porażce sieci"))
+    if "routing_siecia" in k: extra.append("routing: " + ("siecią" if k["routing_siecia"] else "lokalnie"))
+    if "zadania_siecia" in k: extra.append("planer: " + ("siecią" if k["zadania_siecia"] else "lokalnie"))
+    # 1.19.0: wewnątrz basha w apostrofach - w Pythonie tylko cudzysłowy (dawniej
+    # k[\x27budzet_s\x27] traciło apostrofy i każde "gregai status" kończyło się NameError).
+    if k.get("budzet_s"): extra.append("budżet łańcucha %s s" % k["budzet_s"])
+    if k.get("budzet_wiadomosc_s"): extra.append("budżet wiadomości %s s" % k["budzet_wiadomosc_s"])
+    if extra: row("", ", ".join(extra))
+c = d.get("cloud") or {}
+if c: row("Claude", c.get("reason", "?"))
+j = d.get("juggler") or {}
+if j: row("darmowa pula", j.get("reason", "?"))
+for name, p in (j.get("providers") or {}).items():
+    b = p.get("bezpiecznik") or {}
+    if b.get("stan") == "cooldown": row("", "%s: odpoczywa jeszcze %s s" % (name, b.get("sekund", 0)))
+    elif b.get("stan") == "wylaczony": row("", "%s: wyłączony do restartu (%s)" % (name, b.get("powod", "")))
+s = d.get("sysop") or {}
+if s: row("SYSOP", ("TRYB PEŁNY (pytania: %s)" % s.get("pytaj", "?")) if s.get("full") else ("włączony" if s.get("enabled") else "wyłączony"))
+' 2>/dev/null
+  fi
+  echo
+}
+
+# 1.32.0: diagnoza internetu. Najpierw przez usługę (/api/diagnoza - liczona tam, gdzie
+# działa zapora jądra usługi); gdy usługa nie odpowiada, awaryjnie tutaj, z ostrzeżeniem.
+cmd_diagnoza() {
+  local out
+  out="$(curl -s --max-time 75 "http://127.0.0.1:$PORT/api/diagnoza" 2>/dev/null \
+         | python3 -c 'import sys, json; print(json.load(sys.stdin).get("tekst", ""))' 2>/dev/null || true)"
+  if [ -n "$out" ]; then printf '\n%s\n\n' "$out"; return 0; fi
+  echo "Usługa gregai nie odpowiada - diagnoza poza usługą (bez jej zapory jądra):"
+  python3 "$ROOT/agent/diagnoza.py"
+}
+
+cmd_eval() { python3 "$ROOT/agent/ewaluacja.py" "$@"; }
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  help|-h|--help) cmd_help ;;
+  version|-v|--version) cmd_version ;;
+  install) exec bash "$ROOT/install.sh" "$@" ;;
+  update|aktualizuj) exec bash "$ROOT/aktualizuj.sh" "$@" ;;
+  rollback|cofnij) exec bash "$ROOT/aktualizuj.sh" --rollback "$@" ;;
+  check|kontrola|doctor) exec bash "$ROOT/check.sh" "$@" ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  status) cmd_status ;;
+  logs|log) cmd_logs "$@" ;;
+  open|otworz|otwórz) cmd_open ;;
+  diagnoza|diagnose|internet) cmd_diagnoza ;;
+  eval|ewaluacja|testy) cmd_eval "$@" ;;
+  *) printf 'gregai: nieznane polecenie "%s"\n\n' "$cmd" >&2; cmd_help >&2; exit 2 ;;
+esac

@@ -1,0 +1,58 @@
+{"id": "pogoda-warszawa", "typ": "routing", "wiadomosc": "okej, jaka jest dzis pogoda w warszawie", "oczekiwane": "weather", "zrodlo": "rozmowa 2026-10-23: lista linków zamiast prognozy"}
+{"id": "pogoda-deszcz", "typ": "routing", "wiadomosc": "czy jutro będzie padać", "oczekiwane": "weather", "zrodlo": "1.30.31"}
+{"id": "pogoda-w-zdaniu", "typ": "routing", "wiadomosc": "Wczoraj miałem fatalny dzień w pracy, a do tego zła pogoda zepsuła mi plany na wieczór", "oczekiwane": null, "zrodlo": "pogoda tylko na początku wiadomości"}
+{"id": "model-pytanie", "typ": "routing", "wiadomosc": "z jakiego modelu korzystasz?", "oczekiwane": "self_model", "zrodlo": "rozmowa 2026-10-23: 'trenowany przez NVIDIA', 'jestem LFM'"}
+{"id": "tworca-pytanie", "typ": "routing", "wiadomosc": "Dziekuje, czym jestes i kto cie napisal", "oczekiwane": "self_model", "zrodlo": "rozmowa 2026-10-23"}
+{"id": "krypto-rynek", "typ": "routing", "wiadomosc": "Co się dzieje na rynku Krypto?", "oczekiwane": null, "zrodlo": "nie notowanie jednego symbolu - rozmowa/Namysł"}
+{"id": "internet-pretensja", "typ": "routing", "wiadomosc": "Jak to nie masz dostepu do internetu", "oczekiwane": "net_diagnose", "zrodlo": "rozmowa 2026-10-23: trafiało w network_status i zostało wyuczone"}
+{"id": "internet-czemu", "typ": "routing", "wiadomosc": "czemu nie masz internetu?", "oczekiwane": "net_diagnose", "zrodlo": "1.32.0"}
+{"id": "siec-domowa", "typ": "routing", "wiadomosc": "pokaż stan sieci domowej", "oczekiwane": "network_status", "zrodlo": "diagnoza internetu nie przejmuje sieci domowej"}
+{"id": "plan-dnia", "typ": "routing", "wiadomosc": "Zaplanuj mi dzień na dziś", "oczekiwane": "plan_day", "zrodlo": "regresja szybkiej ścieżki"}
+{"id": "kup-mleko", "typ": "routing", "wiadomosc": "kupiłem wczoraj mleko", "oczekiwane": null, "zrodlo": "1.30.29: 'kup' nie jest krytyczną akcją"}
+{"id": "panic", "typ": "routing", "wiadomosc": "gregaipanicmode", "oczekiwane": "gregaipanicmode", "zrodlo": "wyłącznik awaryjny"}
+{"id": "komenda-plan", "typ": "komenda", "wiadomosc": "/plan otworzyć sklep z iPhone'ami", "oczekiwane": "plan", "zrodlo": "1.32.0"}
+{"id": "komenda-sprawdz-ogonek", "typ": "komenda", "wiadomosc": "/sprawdź", "oczekiwane": "sprawdz", "zrodlo": "1.32.0: polskie litery w komendzie"}
+{"id": "komenda-nieznana", "typ": "komenda", "wiadomosc": "/abrakadabra", "oczekiwane": "?abrakadabra", "zrodlo": "1.32.0"}
+{"id": "sciezka-nie-komenda", "typ": "komenda", "wiadomosc": "/home/greg/Dokumenty/plik.txt", "oczekiwane": null, "zrodlo": "ścieżka pliku to nie komenda"}
+{"id": "bramka-brak-internetu", "typ": "bramka", "tekst": "Nie mam dostępu do internetu, więc nie mogę pobrać aktualnych danych z sieci.", "internet": true, "oczekiwane": ["brak_internetu"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-brak-internetu-prawda", "typ": "bramka", "tekst": "Nie mam dostępu do internetu.", "internet": false, "oczekiwane": [], "zrodlo": "gdy WARP naprawdę leży, to zdanie jest prawdą"}
+{"id": "bramka-lfm", "typ": "bramka", "tekst": "Jestem LFM (Liquid Foundation Model), modelem językowym stworzonym przez Liquid AI.", "internet": true, "oczekiwane": ["tozsamosc"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-nvidia", "typ": "bramka", "tekst": "Jestem trenowany przez badaczy z NVIDIA jako model językowy.", "internet": true, "oczekiwane": ["tozsamosc"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-wiedza-o-gpt", "typ": "bramka", "tekst": "GPT-4 został stworzony przez OpenAI, a Llama to model firmy Meta.", "internet": true, "oczekiwane": [], "zrodlo": "wiedza o modelach to nie cudza tożsamość"}
+{"id": "bramka-each", "typ": "bramka", "tekst": "Dzień i noc trają po 12 godzin each, ale to tylko w przybliżeniu i zależy od pory roku.", "internet": true, "oczekiwane": ["obcy_jezyk"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-pytania-pomocnicze", "typ": "bramka", "tekst": "Prognoza na dziś.\n\nOdpowiedzi na pytania pomocnicze\n\nCzy mamy klucz API? Nie.", "internet": true, "oczekiwane": ["pytania_pomocnicze"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-gwiazdki", "typ": "bramka", "tekst": "Zmieniony plik: sudoers.d. **Ryzy", "internet": true, "oczekiwane": ["markdown"], "zrodlo": "alert straży 2026-10-23"}
+{"id": "bramka-czysta", "typ": "bramka", "tekst": "Bitcoin spada dziś o 3% (bankier.pl). **Uwaga:** to nie jest porada inwestycyjna.", "internet": true, "oczekiwane": [], "zrodlo": "poprawny tekst przechodzi bez zmian"}
+{"id": "namysl-dziekuje", "typ": "spoleczne", "wiadomosc": "Wystarczy, dziekuje ze jeste", "oczekiwane": true, "zrodlo": "rozmowa 2026-10-23: Namysł 'zawsze' powtarzał poprzednią odpowiedź"}
+{"id": "namysl-luz", "typ": "spoleczne", "wiadomosc": "Na luzieeee", "oczekiwane": true, "zrodlo": "rozmowa 2026-10-23"}
+{"id": "namysl-prosba-po-dziekuje", "typ": "spoleczne", "wiadomosc": "Dziękuję, a teraz zrób mi plan na jutro", "oczekiwane": false, "zrodlo": "podziękowanie z prośbą to prośba"}
+{"id": "slonce-doba", "typ": "slonce", "data": "2026-10-23", "oczekiwane": 1440, "zrodlo": "rozmowa 2026-10-23: dzień 10 h 14 + noc 10 h 02"}
+{"id": "straz-urwane", "typ": "straz", "tekst": "Ryzyko: średnie. Sprawdź, który proces otwiera port po", "oczekiwane": "Ryzyko: średnie.", "zrodlo": "alert straży 2026-10-23"}
+{"id": "nauka-pretensja", "typ": "nauka", "wiadomosc": "Jak to nie masz dostepu do internetu", "oczekiwane": true, "zrodlo": "pretensja nie jest komendą do nauki"}
+{"id": "zywo-model", "typ": "rozmowa", "wiadomosc": "z jakiego modelu korzystasz i kto cię stworzył?", "oceniacze": ["nie_puste", "po_polsku", "bez_cudzej_tozsamosci", "zawiera:administrator tej instalacji"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "zywo-internet", "typ": "rozmowa", "wiadomosc": "Ile trwa dziś dzień, a ile noc w Warszawie?", "oceniacze": ["nie_puste", "po_polsku", "bez_falszywego_braku_internetu", "pelne_zakonczenie"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "zywo-podziekowanie", "typ": "rozmowa", "wiadomosc": "Dzięki, to wszystko na dziś", "oceniacze": ["nie_puste", "po_polsku", "krotko:400"], "zrodlo": "rozmowa 2026-10-23: na podziękowanie dostał esej"}
+{"id": "zywo-decyzja", "typ": "rozmowa", "wiadomosc": "Czy 10 tysięcy wyświetleń shortsów w tydzień to dobry wynik dla małego kanału?", "oceniacze": ["nie_puste", "po_polsku", "bez_cudzej_tozsamosci", "bez_falszywego_braku_internetu", "bez_planu_namyslu", "pelne_zakonczenie"], "zrodlo": "rozmowa 2026-10-23"}
+{"id": "bramka-architektura-domu", "typ": "bramka", "tekst": "Moja architektura domu to dwa piętra. Dach jest spadzisty.", "internet": true, "oczekiwane": [], "zrodlo": "przegląd 1.32.0 (H3): fałszywa tożsamość"}
+{"id": "bramka-profil-gemini", "typ": "bramka", "tekst": "Napisz tak na profilu: Jestem Gemini z urodzenia i kocham góry.", "internet": true, "oczekiwane": [], "zrodlo": "przegląd 1.32.0 (H3)"}
+{"id": "bramka-cytat-w-recenzji", "typ": "bramka", "tekst": "Zdanie „Jestem Qwen, model stworzony przez Alibaba” to błędna tożsamość.", "internet": true, "oczekiwane": [], "zrodlo": "przegląd 1.32.0 (H3): /sprawdz cytuje błąd"}
+{"id": "bramka-kod-potega", "typ": "bramka", "tekst": "Policz to tak:\n```python\nwynik = 2 ** 10  # nie mam dostępu do internetu\n```\nWynik to 1024.", "internet": true, "oczekiwane": [], "zrodlo": "przegląd 1.32.0 (H3): kod nietykalny"}
+{"id": "bramka-sms-uzytkownika", "typ": "bramka", "tekst": "Hej, dziś nie mam dostępu do internetu, więc pracuję offline.", "internet": true, "pisanie": true, "oczekiwane": [], "zrodlo": "przegląd 1.32.0 (H3): tekst pisany dla Grzegorza"}
+{"id": "bramka-claude-asystent", "typ": "bramka", "tekst": "Jestem Claude, asystentem AI od Anthropic.", "internet": true, "oczekiwane": ["tozsamosc"], "zrodlo": "przegląd 1.32.0: tożsamość z kontekstem nadal łapana"}
+{"id": "komenda-ok-dzieki", "typ": "komenda", "wiadomosc": "/ok dzięki", "oczekiwane": null, "zrodlo": "przegląd 1.32.0 (L3): nie połykamy wiadomości"}
+{"id": "komenda-katalog-sys", "typ": "komenda", "wiadomosc": "/sys", "oczekiwane": null, "zrodlo": "przegląd 1.32.0 (L3): katalog systemowy"}
+{"id": "pretensja-jak-to-zrobic", "typ": "pretensja", "wiadomosc": "Jak to zrobić w Pythonie?", "oczekiwane": false, "zrodlo": "przegląd 1.32.0 (L1): zwykłe pytanie to nie pretensja"}
+{"id": "pretensja-jak-to-nie-masz", "typ": "pretensja", "wiadomosc": "jak to nie masz internetu", "oczekiwane": true, "zrodlo": "rozmowa 2026-10-23"}
+{"id": "audyt-sledze", "typ": "routing", "wiadomosc": "Ciągle śledzę wiadomości o wojnie i mnie to dobija, co robić?", "oczekiwane": null, "zrodlo": "audyt 1.32.1: zakładało trwałe zadanie w tle"}
+{"id": "audyt-sledz-prosba", "typ": "routing", "wiadomosc": "śledź cały czas kurs bitcoina i daj znać przy spadku", "oczekiwane": "standing_task_new", "zrodlo": "audyt 1.32.1: prawdziwa prośba nadal działa"}
+{"id": "audyt-pogodzilem", "typ": "routing", "wiadomosc": "Pogodziłem się wczoraj z bratem, jak to utrzymać?", "oczekiwane": null, "zrodlo": "audyt 1.32.1: pogod\\w* łapało pogodzić"}
+{"id": "audyt-pogodny", "typ": "routing", "wiadomosc": "Jestem pogodny, ale ostatnio mniej śpię", "oczekiwane": null, "zrodlo": "audyt 1.32.1"}
+{"id": "audyt-model-iphone", "typ": "routing", "wiadomosc": "Jaki model iPhone'a najlepiej kupić do flipa?", "oczekiwane": null, "zrodlo": "audyt 1.32.1: odpowiadało 'Jestem GREGAI'"}
+{"id": "audyt-model-samsung", "typ": "routing", "wiadomosc": "Jakiego modelu Samsunga szukać na OLX?", "oczekiwane": null, "zrodlo": "audyt 1.32.1"}
+{"id": "audyt-obiad", "typ": "routing", "wiadomosc": "Co mogę dziś zrobić na obiad?", "oczekiwane": null, "zrodlo": "audyt 1.32.1: trafiało w plan dnia"}
+{"id": "audyt-plan-muszę", "typ": "routing", "wiadomosc": "co muszę dziś zrobić?", "oczekiwane": "plan_day", "zrodlo": "audyt 1.32.1: plan dnia nadal działa"}
+{"id": "pogoda-szyk-bedzie-dzis", "typ": "routing", "wiadomosc": "będzie dziś padać?", "oczekiwane": "weather", "zrodlo": "audyt tura 7 (1.32.2)"}
+{"id": "pogoda-szyk-czy-bedzie-dzis", "typ": "routing", "wiadomosc": "czy bedzie dzis padac", "oczekiwane": "weather", "zrodlo": "audyt tura 7 (1.32.2)"}
+{"id": "pada-bateria", "typ": "routing", "wiadomosc": "pada mi bateria w telefonie", "oczekiwane": null, "zrodlo": "audyt tura 7 (1.32.2)"}
+{"id": "padam-z-nog", "typ": "routing", "wiadomosc": "dzis padam z nog po dowozach, ledwo zyje", "oczekiwane": null, "zrodlo": "audyt tura 7: wyuczony wzorzec dzis+pada"}
+{"id": "bramka-lte-diagnoza", "typ": "bramka", "tekst": "Modem łapie zasięg, ale gdy NetworkManager pokazuje brak dostępu do internetu, zwykle winny jest APN.", "internet": true, "oczekiwane": [], "zrodlo": "audyt tura 7 (1.32.2)"}

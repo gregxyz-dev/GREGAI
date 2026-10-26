@@ -1,0 +1,32 @@
+# Sekrety i dane lokalne
+.env
+.env.*
+.env-*
+!.env.example
+.gregai-*.tmp
+data/
+memory/
+backups/
+# Notatnik dla Claude Code (ja), nie część programu GREGAI: ma w sobie prywatne
+# dane właściciela tej konkretnej instalacji (imię, sytuacja finansowa, cele) -
+# 1.32.19, przygotowanie pod open source. Jeśli chcesz zachować swoją kopię
+# lokalnie, zostaje na dysku; po prostu nie trafia do publicznego repo.
+CLAUDE.md
+# Własne notatki zostają prywatne; w repozytorium tylko wiedza i szkoła z paczki.
+notatki/*
+!notatki/wiedza/
+!notatki/szkola/
+__pycache__/
+*.pyc
+*.pyo
+
+# Edytory i systemy, nie część projektu (każdy współtwórca ma swoje).
+.vscode/
+.idea/
+.DS_Store
+.pytest_cache/
+
+# Samo-trening routera (training/README.md): venv, model bazowy, llama.cpp,
+# scalony model i GGUF - gigabajty, odtwarzalne przez `bash training/run.sh`.
+training/.work/
+*.gguf

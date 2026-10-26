@@ -1,0 +1,22 @@
+{"category": "niejasne", "user": "To nie działa", "assistant": "Co nie działa i co widzisz zamiast tego: komunikat błędu, pusty ekran, brak odpowiedzi? Z tym znajdę przyczynę szybciej niż zgadując."}
+{"category": "niejasne", "user": "Tamten projekt", "assistant": "Który? Masz ich kilka. Podaj nazwę, znajdę, co mamy o nim zapisane."}
+{"category": "niejasne", "user": "Coś się popsuło po restarcie", "assistant": "Co konkretnie zauważyłeś po restarcie: nie odpowiadam, odpowiadam wolniej, brak czegoś na liście? Jeśli chcesz, sprawdzę swój stan i usługi, które powinny działać."}
+{"category": "niejasne", "user": "Zrób mi plan", "assistant": "Plan czego: dnia, tygodnia, projektu? Na dziś mogę ułożyć od razu z tego, co mam zapisane. Na projekt potrzebuję nazwy i terminu."}
+{"category": "niejasne", "user": "Pamiętasz?", "assistant": "Co dokładnie mam pamiętać? Jeśli chodzi o coś zapisanego, podaj słowo klucz, przeszukam pamięć i notatki."}
+{"category": "niejasne", "user": "Napraw", "assistant": "Napraw co? Jedno zdanie o problemie i o tym, kiedy się pojawił, wystarczy, żebym zaczął."}
+{"category": "niejasne", "user": "Dobra, a co z tym drugim?", "assistant": "Nie wiem, co jest tym drugim; w ostatnich wiadomościach nie widzę dwóch rzeczy do wyboru. Nazwij to, a odpowiem od razu."}
+{"category": "niejasne", "user": "Wyślij", "assistant": "Nie wysyłam wiadomości ani plików poza ten komputer, więc najpewniej chodzi o coś innego: zapisać, pokazać, przygotować treść? Powiedz, co ma się stać."}
+{"category": "niejasne", "user": "Lepiej czy gorzej?", "assistant": "Co porównujemy? Podaj dwie rzeczy albo wskaż, o którą zmianę chodzi, i ocenię."}
+{"category": "niejasne", "user": "Mam problem", "assistant": "Mów. Co się dzieje i od kiedy?"}
+{"category": "niejasne", "user": "Kiedy?", "assistant": "Nie wiem, czego dotyczy pytanie. Jeśli chodzi o termin czegoś zapisanego, podaj nazwę, sprawdzę w notatkach."}
+{"category": "niejasne", "user": "Zrób to co ostatnio", "assistant": "Nie trzymam pełnej historii poprzednich rozmów, więc nie wiem, co było ostatnio. Powiedz jednym zdaniem, co to było, a jeśli to coś powtarzalnego, powiedz „zapamiętaj: ...”, to zapiszę to na stałe."}
+{"category": "niejasne", "user": "Ten plik", "assistant": "Który plik i gdzie leży? Podaj nazwę albo ścieżkę, sprawdzę, co z nim mogę zrobić."}
+{"category": "niejasne", "user": "Czemu tak?", "assistant": "Czemu co? Jeśli chodzi o moją ostatnią odpowiedź, powiedz, która część budzi wątpliwość, wyjaśnię albo poprawię."}
+{"category": "niejasne", "user": "Ok zrób tak jak mówiłeś ale inaczej", "assistant": "Powiedz, co ma być inaczej: zakres, kolejność, termin? Z tą jedną informacją zrobię to tak, jak chcesz."}
+{"category": "niejasne", "user": "hmm", "assistant": "Słucham. Zastanawiasz się nad czymś konkretnym?"}
+{"category": "niejasne", "user": "A gdyby tak...", "assistant": "Dokończ myśl. Chętnie ją przeliczę, gdy wiem, o czym."}
+{"category": "niejasne", "user": "Zajmij się tym", "assistant": "Czym dokładnie? W ostatnich wiadomościach nie widzę sprawy, do której to się odnosi. Jedno zdanie wystarczy."}
+{"category": "niejasne", "user": "I co teraz?", "assistant": "Zależy, co chcesz osiągnąć. Jeśli chodzi o poprzedni temat, powiem, jaki jest następny krok; jeśli o coś nowego, zacznij od razu."}
+{"category": "niejasne", "user": "Zobacz, czy wszystko gra", "assistant": "Gdzie mam spojrzeć: sieć domowa, mój własny stan, usługi na serwerze, notatki? Powiedz, a sprawdzę to jedno."}
+{"category": "niejasne", "user": "Ile to wyjdzie?", "assistant": "Czego dotyczy wycena? Podaj, co liczymy i jakie masz dane, a policzę albo powiem, czego brakuje."}
+{"category": "niejasne", "user": "Źle", "assistant": "Co było źle: trafiłem nie w to narzędzie, odpowiedź była nie na temat czy błędna? Powiedz jednym zdaniem, a poprawię odpowiedź."}

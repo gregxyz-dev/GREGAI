@@ -1,0 +1,35 @@
+# GREGAI: zależności spoza standardowej biblioteki Pythona.
+#
+# Rozmowa (router.py/tools.py) gada z Ollamą przez zwykłe żądania HTTP
+# (stdlib, bez SDK), zero dodatkowych pakietów.
+#
+# Jedyny prawdziwy wyjątek: most do routera (agent/router_bridge.py):
+# obsługa sesji/CSRF dla API routerów Huawei HiLink jest na tyle
+# nietrywialna, że pisanie tego od zera byłoby bardziej ryzykowne niż
+# użycie sprawdzonej, utrzymywanej biblioteki. Ten moduł woła z niej
+# WYŁĄCZNIE gettery (odczyt), nigdy ustawień.
+#
+# 1.32.20 (przygotowanie pod open source): wersje przypięte (dolna granica =
+# przetestowana, górna = następny major), żeby klon repo za rok nie dostał
+# niekompatybilnej wersji bez ostrzeżenia.
+huawei-lte-api>=1.10,<3.0
+
+# Drugi, świadomy wyjątek (1.8.0, agent/juggler.py: _groq_http2_chat; od 1.30.6
+# także netguard.fetch_http2 - wyszukiwarki po HTTP/2 jako zapas za curl - i
+# diagnoza.py, która sprawdza, czy biblioteka jest). Pierwotny powód: Zgłoszenie
+# Grzegorza: Cloudflare przed api.groq.com blokował (403 "error code: 1010")
+# każde żądanie z GREGAI, a ten sam klucz przez `curl` (który negocjuje
+# HTTP/2) przechodził normalnie. stdlib (`urllib`/`http.client`) nie umie
+# HTTP/2 wcale - potrzeba do tego prawdziwego klienta HTTP/2, a w Pythonie
+# to oznacza bibliotekę spoza stdlib. Reszta GREGAI (w tym Gemini,
+# OpenRouter i chmura Anthropic) nadal idzie przez netguard._OPENER
+# (urllib) bez zmian - to NIE jest ogólna zmiana klienta HTTP, tylko
+# dokładnie te potwierdzone przypadki (zawsze przez bramkę WARP, trust_env=False).
+httpx[http2]>=0.27,<0.29
+
+# Uruchomienie: python3 agent/main.py
+
+# Samo-trening routera (training/): torch, transformers, peft itd. żyją w
+# OSOBNYM venv (training/.work/venv, tworzy go `bash training/run.sh`) i
+# nigdy nie są importowane przez serwer. Celowo NIE ma ich tutaj - patrz
+# training/README.md, sekcja "Wyjątek od reguły tylko stdlib".

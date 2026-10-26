@@ -1,0 +1,1257 @@
+{
+  "_opis": [
+    "Ręczny zestaw startowy do treningu routera (patrz training/README.md).",
+    "To tylko ROZRUCH: prawdziwy materiał rośnie sam z użycia GREGAI",
+    "(decision_log.json, learned_routes.json), a build_dataset.py łączy jedno z drugim.",
+    "Format: tools.<nazwa> = lista wiadomości (string) albo obiektów {\"msg\", \"arg\"}.",
+    "Gdy arg nie podany, build_dataset.py wyprowadza go sam (wiki_lookup/research_web/remember)",
+    "albo nie dodaje wcale (narzędzia ignorujące argument). brak = zwykła rozmowa (BRAK).",
+    "golden = zestaw KONTROLNY, nigdy nie trafia do treningu; na nim eval_router.py",
+    "mierzy, czy wytrenowany model generalizuje, a nie tylko pamięta przykłady.",
+    "Narzędzia systemowe (sys_*, fs_*) są w zestawie od 2026-10-08: przy wyłączonym SYSOP build_dataset je pomija (nieznane narzędzie), przy włączonym wchodzą do treningu. Twarde negatywy w `brak`: pytania O sieci/notatkach/logach, które są rozmową, nie poleceniem."
+  ],
+  "tools": {
+    "search_brain": [
+      "Co wiesz o projekcie FeatherCut?",
+      "Jaki jest status easyschool?",
+      "Co mam zapisane o kliencie z piekarni?",
+      "Przypomnij mi, co ustaliliśmy w sprawie LatinGO",
+      "Co jest w notatce o routerze Huawei?",
+      "Znajdź w moich notatkach coś o donacjach",
+      "Co pisałem o konwersji roweru na elektryczny?",
+      "Jakie mam notatki o TikToku?",
+      "Co wiem o ogrodzie warzywnym?",
+      "Masz coś w notatkach o Repetytorium?",
+      "Co ustaliłem z Mistrz Piekarz?",
+      "Sprawdź w notatkach, kiedy jest termin dla piekarni",
+      "Jaki był plan dla kanału GdzieśWewnątrz?",
+      "Co zapisałem o bocie minecraftowym?",
+      "Przypomnij notatkę o Solanie",
+      "Co mam w neuronkach o VR HUD?",
+      "Gdzie mam zapisane dane do streamingu?",
+      "Co wiesz o moim projekcie text-story-generator?",
+      "Jakie koncepcje mam zapisane o skalowaniu biznesu?",
+      "Czy mam jakąś notatkę o fakturach?",
+      "Co pisałem o resellingu iPhone'ów?",
+      "Pokaż mi notatkę o dostawach jedzenia",
+      "Co jest w moich plikach o Syncthingu?",
+      "Jakie mam zapiski o backupach?",
+      "Co zapisałem o rozmowie z klientem w zeszłym tygodniu?",
+      "Co mam o LatinON?",
+      "Przypomnij, co było w notatce o featherclip",
+      "Masz coś o streamowaniu na Twitchu w moich notatkach?",
+      "Co wiem o automatyzacji filmików?",
+      "Jaką mam koncepcję na monetyzację?",
+      "Co mam w notatkach o serwerze?",
+      "Grzebnij w neuronkach, czy jest coś o WireGuard",
+      "Czy zapisałem gdzieś adres panelu routera?",
+      "Przypomnij, co ustaliłem z klientem z piekarni",
+      "Co pisałem o planie nasadzeń?",
+      "Znajdź notatkę o kanale GdzieśWewnątrz",
+      "Czy mam coś o IronHUD w notatkach?",
+      "Co wiem o text-story-generator?",
+      "Sprawdź w moich notatkach termin oddania strony",
+      "Jakie mam zapiski o bocie na TikToka?",
+      "Co mam o Repetytorium?",
+      "Przeszukaj notatki pod kątem donacji",
+      "co tam mam o latingo",
+      "notatki o ogrodzie poprosze",
+      "Co zapisałem o modelach do GREGAI?"
+    ],
+    "graph_overview": [
+      "Ile masz notatek?",
+      "Jakie są najbardziej połączone węzły?",
+      "Co widzisz w moim grafie?",
+      "Opowiedz o moich węzłach",
+      "Jakie typy notatek są w grafie?",
+      "Co możesz wyczytać z węzłów?",
+      "Ile mam węzłów w grafie?",
+      "Które notatki są hubami?",
+      "Jak wygląda struktura moich notatek?",
+      "Daj mi przegląd całego grafu",
+      "Ile projektów, a ile klientów mam w grafie?",
+      "Które węzły mają najwięcej połączeń?",
+      "Podsumuj mój graf notatek",
+      "Jakie kategorie notatek mam?",
+      "Co jest centrum mojego grafu?",
+      "Ile notatek każdego typu mam?",
+      "Pokaż statystyki grafu",
+      "Jak duży jest mój graf?",
+      "Które neuronki są najbardziej powiązane z resztą?",
+      "Co się łączy z największą liczbą notatek?",
+      "Powiedz mi ile mam połączonych gałęzi w moich notatkach",
+      "Jak wyglądają moje neuronki z lotu ptaka?",
+      "Ile mam w sumie zapisków w grafie?",
+      "Które notatki są najważniejsze według połączeń?",
+      "Pokaż mi strukturę grafu",
+      "Ile notatek jest ze sobą połączonych?",
+      "Które neuronki są hubami?",
+      "Statystyki grafu notatek",
+      "Ile mam węzłów i jakiego typu?",
+      "Które notatki nie mają żadnych połączeń?",
+      "Przegląd grafu proszę",
+      "Co jest w centrum mojego grafu?",
+      "Ile notatek, ile wpisów wiedzy, ile faktów?"
+    ],
+    "research_web": [
+      {
+        "msg": "Wyszukaj w internecie najlepsze głośniki bluetooth 2026",
+        "arg": "najlepsze głośniki bluetooth 2026"
+      },
+      {
+        "msg": "Sprawdź w internecie aktualną pogodę w Warszawie",
+        "arg": "aktualna pogoda w Warszawie"
+      },
+      {
+        "msg": "Poszukaj w sieci ceny iPhone 15 używanego",
+        "arg": "ceny iPhone 15 używanego"
+      },
+      {
+        "msg": "Sprawdź w necie, ile kosztuje silnik do roweru elektrycznego",
+        "arg": "ile kosztuje silnik do roweru elektrycznego"
+      },
+      {
+        "msg": "Wyszukaj aktualny kurs Solany",
+        "arg": "aktualny kurs Solany"
+      },
+      {
+        "msg": "Sprawdź online, jakie są stawki za reklamy na YouTube w Polsce",
+        "arg": "stawki za reklamy na YouTube w Polsce"
+      },
+      {
+        "msg": "Znajdź w internecie najtańszy hosting pod małą stronę",
+        "arg": "najtańszy hosting pod małą stronę"
+      },
+      {
+        "msg": "Sprawdź w internecie, ile zarabia się na TikToku przy 100 tysiącach wyświetleń",
+        "arg": "ile zarabia się na TikToku przy 100 tysiącach wyświetleń"
+      },
+      {
+        "msg": "Wyszukaj mi w google tanie rowery full suspension",
+        "arg": "tanie rowery full suspension"
+      },
+      {
+        "msg": "Sprawdź w internecie, co nowego w Ollamie w tym miesiącu",
+        "arg": "co nowego w Ollamie w tym miesiącu"
+      },
+      {
+        "msg": "Poszukaj aktualnych cen akumulatorów 48V do e-bike",
+        "arg": "aktualne ceny akumulatorów 48V do e-bike"
+      },
+      {
+        "msg": "Sprawdź w internecie opinie o Dell Latitude E7270",
+        "arg": "opinie o Dell Latitude E7270"
+      },
+      {
+        "msg": "Wyszukaj najnowsze wiadomości o kursie bitcoina",
+        "arg": "najnowsze wiadomości o kursie bitcoina"
+      },
+      {
+        "msg": "Zobacz w sieci, jakie są wymagania Twitch Affiliate",
+        "arg": "wymagania Twitch Affiliate"
+      },
+      {
+        "msg": "Sprawdź w internecie ile kosztuje nasiona pomidorów na 100 m2",
+        "arg": "ile kosztuje nasiona pomidorów na 100 m2"
+      },
+      {
+        "msg": "Znajdź online porównanie Syncthing i Nextcloud do synchronizacji plików",
+        "arg": "porównanie Syncthing i Nextcloud do synchronizacji plików"
+      },
+      {
+        "msg": "Wyszukaj w internecie, jaka jest prowizja Allegro przy sprzedaży telefonów",
+        "arg": "prowizja Allegro przy sprzedaży telefonów"
+      },
+      {
+        "msg": "Sprawdź w necie godziny otwarcia Castoramy w Warszawie",
+        "arg": "godziny otwarcia Castoramy w Warszawie"
+      },
+      {
+        "msg": "Poszukaj w internecie, czy warto kupić używany router Wi-Fi 6",
+        "arg": "czy warto kupić używany router Wi-Fi 6"
+      },
+      {
+        "msg": "Sprawdź aktualne ceny dostaw jedzenia w Pyszne.pl dla restauracji",
+        "arg": "aktualne ceny dostaw jedzenia w Pyszne.pl dla restauracji"
+      },
+      {
+        "msg": "Wyszukaj co się dzieje dziś na giełdzie",
+        "arg": "co się dzieje dziś na giełdzie"
+      },
+      {
+        "msg": "Sprawdź w internecie prognozę pogody na weekend w Krakowie",
+        "arg": "prognoza pogody na weekend w Krakowie"
+      },
+      {
+        "msg": "Poszukaj w internecie, jaka jest najnowsza wersja Ubuntu LTS",
+        "arg": "jaka jest najnowsza wersja Ubuntu LTS"
+      },
+      {
+        "msg": "Sprawdź w sieci cenę Raspberry Pi 5",
+        "arg": "cena Raspberry Pi 5"
+      },
+      {
+        "msg": "Wyszukaj w internecie, jak skonfigurować WireGuard na Ubuntu",
+        "arg": "jak skonfigurować WireGuard na Ubuntu"
+      },
+      {
+        "msg": "Zobacz w necie, czy Bielik ma nową wersję",
+        "arg": "czy Bielik ma nową wersję"
+      },
+      {
+        "msg": "Poszukaj w internecie opinii o Dell Latitude E7270",
+        "arg": "opinie o Dell Latitude E7270"
+      },
+      {
+        "msg": "Sprawdź w sieci, ile kosztuje dysk SSD 1TB",
+        "arg": "ile kosztuje dysk SSD 1TB"
+      },
+      {
+        "msg": "Wyszukaj informacje o programie partnerskim YouTube 2026",
+        "arg": "program partnerski YouTube 2026"
+      },
+      {
+        "msg": "Poszukaj w internecie przepisów na chleb na zakwasie",
+        "arg": "przepisy na chleb na zakwasie"
+      },
+      {
+        "msg": "sprawdz w necie pogode na jutro w krakowie",
+        "arg": "pogoda na jutro w krakowie"
+      },
+      {
+        "msg": "Wygoogluj, czym jest netplan",
+        "arg": "czym jest netplan"
+      },
+      {
+        "msg": "Sprawdź w internecie godziny otwarcia piekarni Mistrz Piekarz",
+        "arg": "godziny otwarcia piekarni Mistrz Piekarz"
+      },
+      {
+        "msg": "Poszukaj w sieci, jak zrobić swap na Ubuntu Server",
+        "arg": "jak zrobić swap na Ubuntu Server"
+      }
+    ],
+    "wiki_lookup": [
+      {
+        "msg": "Sprawdź na Wikipedii kto to był Napoleon",
+        "arg": "Napoleon"
+      },
+      {
+        "msg": "Co to jest fotosynteza?",
+        "arg": "fotosynteza"
+      },
+      {
+        "msg": "Kim był Mikołaj Kopernik?",
+        "arg": "Mikołaj Kopernik"
+      },
+      {
+        "msg": "Czym jest czarna dziura?",
+        "arg": "czarna dziura"
+      },
+      {
+        "msg": "Wyjaśnij mi, co to jest inflacja",
+        "arg": "inflacja"
+      },
+      {
+        "msg": "Co to jest LTE?",
+        "arg": "LTE"
+      },
+      {
+        "msg": "Sprawdź w encyklopedii czym jest blockchain",
+        "arg": "blockchain"
+      },
+      {
+        "msg": "Kim była Maria Skłodowska-Curie?",
+        "arg": "Maria Skłodowska-Curie"
+      },
+      {
+        "msg": "Co to jest sieć neuronowa?",
+        "arg": "sieć neuronowa"
+      },
+      {
+        "msg": "Wyjaśnij co to jest fermentacja",
+        "arg": "fermentacja"
+      },
+      {
+        "msg": "Co to jest kompost?",
+        "arg": "kompost"
+      },
+      {
+        "msg": "Kim jest Elon Musk?",
+        "arg": "Elon Musk"
+      },
+      {
+        "msg": "Czym jest protokół HTTP?",
+        "arg": "protokół HTTP"
+      },
+      {
+        "msg": "Co to jest Linux?",
+        "arg": "Linux"
+      },
+      {
+        "msg": "Sprawdź na Wikipedii, czym jest fotowoltaika",
+        "arg": "fotowoltaika"
+      },
+      {
+        "msg": "Co to są kryptowaluty?",
+        "arg": "kryptowaluty"
+      },
+      {
+        "msg": "Kto to był Tesla, ten wynalazca?",
+        "arg": "Nikola Tesla"
+      },
+      {
+        "msg": "Czym jest Bitwa pod Grunwaldem?",
+        "arg": "Bitwa pod Grunwaldem"
+      },
+      {
+        "msg": "Co to jest Wisła?",
+        "arg": "Wisła"
+      },
+      {
+        "msg": "Wyjaśnij mi pojęcie entropii",
+        "arg": "entropia"
+      },
+      {
+        "msg": "Co to jest silnik BLDC?",
+        "arg": "silnik BLDC"
+      },
+      {
+        "msg": "Sprawdź na wiki co to jest permakultura",
+        "arg": "permakultura"
+      },
+      {
+        "msg": "Kim był Stanisław Lem?",
+        "arg": "Stanisław Lem"
+      },
+      {
+        "msg": "Co to jest Warszawa?",
+        "arg": "Warszawa"
+      },
+      {
+        "msg": "Czym jest język łaciński?",
+        "arg": "język łaciński"
+      },
+      "Co mówi Wikipedia o WireGuard?",
+      "Sprawdź na Wikipedii, kim był Kopernik",
+      "Wikipedia: fotowoltaika",
+      "Co to jest LoRA według Wikipedii?",
+      "Znajdź na Wikipedii hasło o Toruniu",
+      "Sprawdź w Wikipedii, czym jest kwantyzacja",
+      "Poszukaj na Wikipedii informacji o Bałtyku",
+      "Kim była Maria Skłodowska-Curie według Wikipedii?",
+      "Wikipedia o systemd",
+      "Co Wikipedia pisze o blockchainie?",
+      "Sprawdź na wiki, co to jest DNS",
+      "Zobacz w Wikipedii hasło Ubuntu Server",
+      {
+        "msg": "Co to jest router i jak działa?",
+        "arg": "router"
+      },
+      {
+        "msg": "Wytłumacz mi, czym jest DHCP",
+        "arg": "DHCP"
+      },
+      {
+        "msg": "Co to jest LoRA?",
+        "arg": "LoRA"
+      },
+      {
+        "msg": "Czym jest journalctl?",
+        "arg": "journalctl"
+      },
+      {
+        "msg": "Co to są timery systemd?",
+        "arg": "timery systemd"
+      },
+      {
+        "msg": "Co to jest phishing?",
+        "arg": "phishing"
+      },
+      {
+        "msg": "Co to jest plan dnia według metody time-blocking?",
+        "arg": "plan dnia według metody time-blocking"
+      }
+    ],
+    "self_status": [
+      "Czego się nauczyłeś?",
+      "Jak Ci idzie samouczenie?",
+      "Co teraz umiesz, czego nie umiałeś wcześniej?",
+      "Ile się już nauczyłeś?",
+      "Jak sobie radzisz z nauką?",
+      "Czy nauczyłeś się czegoś nowego od wczoraj?",
+      "Pokaż mi, czego się ostatnio nauczyłeś",
+      "Ile nowych komend już znasz?",
+      "Jak postępuje Twoja nauka?",
+      "Co nowego umiesz od ostatniej rozmowy?",
+      "Czy rozwijasz się?",
+      "Jakie nowe wzorce zapamiętałeś?",
+      "Ile rozmów ogarnąłeś bez modelu?",
+      "Jak Ci idzie uczenie się moich komend?",
+      "Co masz w banku wiedzy?",
+      "Opowiedz o swoim postępie w nauce",
+      "Czego nauczyłeś się dzisiaj?",
+      "Jak wygląda Twój rozwój?",
+      "Ile już umiesz?",
+      "Czy jesteś mądrzejszy niż wczoraj?",
+      "Czego się ostatnio nauczyłeś?",
+      "Jaki masz stan?",
+      "Ile znasz sformułowań?",
+      "Pokaż, co masz w banku wiedzy",
+      "Jak Ci idzie nauka?",
+      "Twój status proszę",
+      "Czego się nauczyłeś od ostatniego restartu?",
+      "Ile masz wpisów w banku wiedzy?",
+      "Raport o Tobie samym"
+    ],
+    "brief_me": [
+      "Co nowego?",
+      "Zrób mi brief",
+      "Co ważnego?",
+      "Co się zmieniło?",
+      "Co wymaga mojej uwagi?",
+      "Co się zmieniło ważnego?",
+      "Daj mi szybki przegląd spraw",
+      "Jakie mam nieprzeczytane wiadomości?",
+      "Co dziś w kalendarzu?",
+      "Streść mi, co się wydarzyło",
+      "Jest coś pilnego?",
+      "Co mnie ominęło?",
+      "Zrób mi podsumowanie sytuacji",
+      "Czy coś wymaga reakcji?",
+      "Co mam na dziś w kalendarzu i co nowego?",
+      "Jakie są nowe wydarzenia?",
+      "Brief proszę",
+      "O czym powinienem wiedzieć?",
+      "Czy coś się działo, gdy mnie nie było?",
+      "Daj mi raport poranny",
+      "Daj mi brief",
+      "Co dziś ważnego?",
+      "Streszczenie dnia poproszę",
+      "Co mnie dziś czeka?",
+      "Brief poranny",
+      "Co się zmieniło od wczoraj?",
+      "Czy coś wymaga mojej uwagi?",
+      "Daj szybki przegląd sytuacji",
+      "Co dziś na tapecie?",
+      "Krótko: co ważnego?"
+    ],
+    "remember": [
+      {
+        "msg": "Zapamiętaj: kupić karmę dla kota",
+        "arg": "kupić karmę dla kota"
+      },
+      {
+        "msg": "Zapisz sobie, że spotkanie jest w piątek",
+        "arg": "spotkanie jest w piątek"
+      },
+      {
+        "msg": "Nie zapomnij, że faktura dla piekarni ma termin 15-go",
+        "arg": "faktura dla piekarni ma termin 15-go"
+      },
+      {
+        "msg": "Zapamiętaj, że hasło do routera zmieniłem wczoraj",
+        "arg": "hasło do routera zmieniłem wczoraj"
+      },
+      {
+        "msg": "Zapisz sobie: Marek oddzwoni we wtorek",
+        "arg": "Marek oddzwoni we wtorek"
+      },
+      {
+        "msg": "Zanotuj, że nowy iPhone sprzedany za 2100 zł",
+        "arg": "nowy iPhone sprzedany za 2100 zł"
+      },
+      {
+        "msg": "Zapamiętaj że testuję teraz GREGAI",
+        "arg": "testuję teraz GREGAI"
+      },
+      {
+        "msg": "Zapisz sobie, że rower ma już nowy akumulator",
+        "arg": "rower ma już nowy akumulator"
+      },
+      {
+        "msg": "Nie zapomnij: stream w sobotę o 20",
+        "arg": "stream w sobotę o 20"
+      },
+      {
+        "msg": "Zapamiętaj: pomidory sadzimy po 15 maja",
+        "arg": "pomidory sadzimy po 15 maja"
+      },
+      {
+        "msg": "Zapisz, że klient z piekarni chce zmiany w logo",
+        "arg": "klient z piekarni chce zmiany w logo"
+      },
+      {
+        "msg": "Zapamiętaj proszę, że jutro mam wizytę o 9",
+        "arg": "jutro mam wizytę o 9"
+      },
+      {
+        "msg": "Zapisz sobie że LatinGO ma być gotowe na koniec miesiąca",
+        "arg": "LatinGO ma być gotowe na koniec miesiąca"
+      },
+      {
+        "msg": "Zanotuj: budżet na reklamy to 300 zł",
+        "arg": "budżet na reklamy to 300 zł"
+      },
+      {
+        "msg": "Nie zapomnij, że mama ma urodziny 3 listopada",
+        "arg": "mama ma urodziny 3 listopada"
+      },
+      {
+        "msg": "Zapamiętaj: router ma IP 192.168.8.1",
+        "arg": "router ma IP 192.168.8.1"
+      },
+      {
+        "msg": "Zapisz sobie, że ostatni film miał 12 tysięcy wyświetleń",
+        "arg": "ostatni film miał 12 tysięcy wyświetleń"
+      },
+      {
+        "msg": "Zapamiętaj że wolę gemma2 od qwena",
+        "arg": "wolę gemma2 od qwena"
+      },
+      {
+        "msg": "Zanotuj sobie: odebrać paczkę z paczkomatu",
+        "arg": "odebrać paczkę z paczkomatu"
+      },
+      {
+        "msg": "Zapamiętaj: deadline strony piekarni to piątek",
+        "arg": "deadline strony piekarni to piątek"
+      },
+      {
+        "msg": "Zapamiętaj, że serwer przyjeżdża za tydzień",
+        "arg": "serwer przyjeżdża za tydzień"
+      },
+      {
+        "msg": "Zapisz: zestaw do roweru zamówiony",
+        "arg": "zestaw do roweru zamówiony"
+      },
+      {
+        "msg": "Zanotuj, że piekarnia chce stronę do końca października",
+        "arg": "piekarnia chce stronę do końca października"
+      },
+      {
+        "msg": "Zapamiętaj sobie, że mikrofon kupuję w listopadzie",
+        "arg": "mikrofon kupuję w listopadzie"
+      },
+      {
+        "msg": "zapamietaj ze bateria routera siada",
+        "arg": "bateria routera siada"
+      },
+      {
+        "msg": "Zapisz, że następny film nagrywam w sobotę",
+        "arg": "następny film nagrywam w sobotę"
+      },
+      {
+        "msg": "Zapamiętaj: Bielik do benchmarku na serwerze",
+        "arg": "Bielik do benchmarku na serwerze"
+      },
+      {
+        "msg": "Zapisz sobie, że klient z piekarni woli kontakt telefoniczny",
+        "arg": "klient z piekarni woli kontakt telefoniczny"
+      },
+      {
+        "msg": "Zanotuj: hasło do Wi-Fi jest w menedżerze haseł",
+        "arg": "hasło do Wi-Fi jest w menedżerze haseł"
+      },
+      {
+        "msg": "Zapamiętaj, że LatinGO ma ekran powtórek jako następny krok",
+        "arg": "LatinGO ma ekran powtórek jako następny krok"
+      }
+    ],
+    "plan_day": [
+      "Plan na dziś?",
+      "Co mam dzisiaj do zrobienia?",
+      "Co powinienem dziś zrobić?",
+      "Jakie mam priorytety na dziś?",
+      "Co jest najważniejsze na dziś?",
+      "Ułóż mi plan dnia",
+      "Od czego zacząć dzisiaj?",
+      "Co dziś robimy?",
+      "Jaki mam plan na dzisiaj?",
+      "Co jest dziś priorytetem?",
+      "Czym się dziś zająć?",
+      "Rozpisz mi dzisiejszy dzień",
+      "Co dzisiaj jest kluczowe?",
+      "Pomóż mi zaplanować dzień",
+      "Co powinienem zrobić najpierw dzisiaj?",
+      "Jakie zadania na dziś?",
+      "Co mam w planie na dzisiaj?",
+      "Dzisiejsze priorytety?",
+      "Co dziś najważniejsze dla biznesu?",
+      "Plan dnia poproszę",
+      "Ułóż mi plan na dziś",
+      "Co powinienem dziś zrobić najpierw?",
+      "Zaplanuj mój dzień",
+      "Jak ułożyć dzisiejszy dzień?",
+      "Daj mi priorytety na dziś",
+      "Rozpisz mi dzień",
+      "ogarnij plan na dzis",
+      "Co jest dziś najważniejsze do zrobienia?"
+    ],
+    "network_status": [
+      "Jaki jest stan sieci domowej?",
+      "Czy ktoś nowy się podłączył do mojego wifi?",
+      "Stan sieci?",
+      "Co wisi w sieci?",
+      "Jakie urządzenia są podłączone?",
+      "Status routera",
+      "Ile mam danych w tym miesiącu?",
+      "Jaki mam zasięg?",
+      "Jaka jest nazwa mojego wifi?",
+      "Jaki mam internet, 4G czy 5G?",
+      "Jaka bateria w routerze?",
+      "Kto jest teraz w mojej sieci?",
+      "Ile urządzeń jest online w domu?",
+      "Czy mój telefon jest podłączony do wifi?",
+      "Jaki sygnał ma router?",
+      "Ile internetu mi zostało w tym miesiącu?",
+      "Czy coś obcego jest w mojej sieci?",
+      "Jak działa dziś internet mobilny?",
+      "Pokaż stan routera Huawei",
+      "Jaki operator obsługuje mój router?",
+      "Czy laptop z Windowsem jest online?",
+      "Ile zużyłem danych?",
+      "Czy ktoś wrócił do sieci po dłuższej przerwie?",
+      "Jakie IP mają moje urządzenia?",
+      "Czy router ma pełną baterię?",
+      "Co nowego w sieci domowej?",
+      "Sprawdź, czy wszystkie moje urządzenia są online",
+      "Jaki mam teraz typ połączenia, LTE?",
+      "Ile urządzeń jest teraz online?",
+      "Czy drukarka jest w sieci?",
+      "Co z internetem w domu?",
+      "Pokaż stan routera",
+      "Kto jest podłączony do Wi-Fi?",
+      "Czy wszystko w sieci działa?",
+      "Jaki jest poziom baterii routera?",
+      "Sprawdź, czy telefon jest online",
+      "Jak tam sieć domowa?",
+      "Status sieci proszę",
+      "czy cos nowego podlaczylo sie do sieci",
+      "Ile urządzeń zna router?"
+    ],
+    "sys_status": [
+      "Jak się ma serwer?",
+      "Ile mam miejsca na dysku?",
+      "Ile RAM-u jest wolne?",
+      "Jakie jest obciążenie serwera?",
+      "Sprawdź temperaturę procesora",
+      "Od kiedy działa serwer?",
+      "Stan serwera proszę",
+      "Czy serwer nie jest przeciążony?",
+      "Ile wolnego miejsca zostało na dysku serwera?",
+      "Pokaż uptime i obciążenie"
+    ],
+    "sys_services": [
+      "Czy wszystkie usługi działają?",
+      "Które usługi są w błędzie?",
+      "Pokaż listę usług systemd",
+      {
+        "msg": "Jaki jest status usługi ollama?",
+        "arg": "ollama"
+      },
+      {
+        "msg": "Czy usługa gregai działa?",
+        "arg": "gregai"
+      },
+      {
+        "msg": "Sprawdź status ssh",
+        "arg": "ssh"
+      },
+      "Czy coś padło na serwerze?",
+      "Status usług na serwerze",
+      {
+        "msg": "Pokaż status gregai",
+        "arg": "gregai"
+      },
+      {
+        "msg": "Jak się ma usługa kopia?",
+        "arg": "kopia"
+      }
+    ],
+    "sys_logs": [
+      {
+        "msg": "Pokaż logi gregai",
+        "arg": "gregai"
+      },
+      {
+        "msg": "Pokaż ostatnie 50 linii logu gregai",
+        "arg": "gregai 50"
+      },
+      {
+        "msg": "Co jest w logach ollamy?",
+        "arg": "ollama"
+      },
+      {
+        "msg": "Sprawdź logi usługi ssh",
+        "arg": "ssh"
+      },
+      {
+        "msg": "Pokaż logi gregai z błędami",
+        "arg": "gregai 100"
+      },
+      {
+        "msg": "Zajrzyj w dziennik usługi kopia",
+        "arg": "kopia"
+      },
+      {
+        "msg": "Logi ollamy, ostatnie 30 linii",
+        "arg": "ollama 30"
+      },
+      {
+        "msg": "Co pisze gregai w logach?",
+        "arg": "gregai"
+      },
+      {
+        "msg": "Zajrzyj do końcówki logu gregai",
+        "arg": "gregai"
+      },
+      {
+        "msg": "Czy w logach gregai są błędy?",
+        "arg": "gregai 100"
+      }
+    ],
+    "sys_updates": [
+      "Czy są aktualizacje systemu?",
+      "Ile pakietów czeka na aktualizację?",
+      "Sprawdź dostępne aktualizacje",
+      "Co jest do zaktualizowania?",
+      "Czy system jest aktualny?",
+      "Jakie pakiety mają nowe wersje?",
+      "Sprawdź aktualizacje, bez instalowania",
+      "Lista aktualizacji proszę"
+    ],
+    "sys_network": [
+      "Jakie porty nasłuchują na serwerze?",
+      "Pokaż interfejsy sieciowe serwera",
+      "Jaki adres IP ma serwer?",
+      "Czy port 7777 nasłuchuje?",
+      "Na jakich portach słucha serwer?",
+      "Pokaż konfigurację sieci serwera",
+      "Czy Ollama słucha tylko lokalnie?",
+      "Interfejsy i porty serwera"
+    ],
+    "sys_processes": [
+      "Co najbardziej obciąża procesor?",
+      "Pokaż procesy zjadające CPU",
+      "Jakie procesy działają na serwerze?",
+      "Co zżera zasoby serwera?",
+      "Który proces jest najcięższy?",
+      "Top procesów proszę",
+      "Co tak obciąża serwer?",
+      "Lista najcięższych procesów"
+    ],
+    "sys_timers": [
+      "Jakie zadania są zaplanowane?",
+      "Pokaż timery systemd",
+      "Kiedy odpala się kopia zapasowa?",
+      "Co jest w harmonogramie serwera?",
+      "Lista timerów proszę",
+      "Jakie zadania cykliczne działają?",
+      "Kiedy następna zaplanowana robota?",
+      "Pokaż zaplanowane zadania"
+    ],
+    "fs_list": [
+      {
+        "msg": "Pokaż pliki w katalogu notatek",
+        "arg": "notatki"
+      },
+      {
+        "msg": "Co jest w katalogu data?",
+        "arg": "data"
+      },
+      {
+        "msg": "Wylistuj pliki w memory",
+        "arg": "memory"
+      },
+      {
+        "msg": "Pokaż zawartość katalogu backups",
+        "arg": "backups"
+      },
+      {
+        "msg": "Jakie pliki są w training?",
+        "arg": "training"
+      },
+      {
+        "msg": "Lista plików w katalogu agent",
+        "arg": "agent"
+      },
+      {
+        "msg": "Co leży w katalogu projektu?",
+        "arg": "."
+      },
+      {
+        "msg": "Pokaż pliki w data/training",
+        "arg": "data/training"
+      }
+    ],
+    "fs_read": [
+      {
+        "msg": "Pokaż treść pliku README.md",
+        "arg": "README.md"
+      },
+      {
+        "msg": "Przeczytaj plik ROADMAP_1.0.md",
+        "arg": "ROADMAP_1.0.md"
+      },
+      {
+        "msg": "Otwórz notatkę notatki/wiedza/kryptografia.md",
+        "arg": "notatki/wiedza/kryptografia.md"
+      },
+      {
+        "msg": "Co jest w pliku agent/prompt.md?",
+        "arg": "agent/prompt.md"
+      },
+      {
+        "msg": "Wyświetl zawartość data/training/router_manifest.json",
+        "arg": "data/training/router_manifest.json"
+      },
+      {
+        "msg": "Pokaż plik install.sh",
+        "arg": "install.sh"
+      },
+      {
+        "msg": "Przeczytaj training/README.md",
+        "arg": "training/README.md"
+      },
+      {
+        "msg": "Odczytaj plik requirements.txt",
+        "arg": "requirements.txt"
+      }
+    ],
+    "fs_search": [
+      {
+        "msg": "Znajdź w plikach projektu słowo MAX_STEPS",
+        "arg": "MAX_STEPS"
+      },
+      {
+        "msg": "Poszukaj w plikach frazy ROUTER_MODEL",
+        "arg": "ROUTER_MODEL"
+      },
+      {
+        "msg": "Gdzie w kodzie jest PLANNER_NUM_PREDICT?",
+        "arg": "PLANNER_NUM_PREDICT"
+      },
+      {
+        "msg": "Wyszukaj w plikach tekst TimeoutError",
+        "arg": "TimeoutError"
+      },
+      {
+        "msg": "Przeszukaj pliki pod kątem słowa sudoers",
+        "arg": "sudoers"
+      },
+      {
+        "msg": "Znajdź w plikach ciąg 11434",
+        "arg": "11434"
+      },
+      {
+        "msg": "Grepnij po plikach student_system_prompt",
+        "arg": "student_system_prompt"
+      },
+      {
+        "msg": "Szukaj w plikach słowa ERROR",
+        "arg": "ERROR"
+      }
+    ],
+    "sys_service_action": [
+      {
+        "msg": "Zrestartuj usługę gregai",
+        "arg": "restart gregai"
+      },
+      {
+        "msg": "Zrestartuj ollamę",
+        "arg": "restart ollama"
+      },
+      {
+        "msg": "Zatrzymaj usługę gregai",
+        "arg": "stop gregai"
+      },
+      {
+        "msg": "Uruchom usługę ollama",
+        "arg": "start ollama"
+      },
+      {
+        "msg": "Wyłącz usługę bluetooth ze startu",
+        "arg": "disable bluetooth"
+      },
+      {
+        "msg": "Włącz usługę ollama na stałe",
+        "arg": "enable ollama"
+      },
+      {
+        "msg": "Przeładuj usługę gregai",
+        "arg": "reload gregai"
+      },
+      {
+        "msg": "Restart gregai proszę",
+        "arg": "restart gregai"
+      },
+      {
+        "msg": "Zatrzymaj ollamę",
+        "arg": "stop ollama"
+      },
+      {
+        "msg": "Uruchom ponownie usługę gregai",
+        "arg": "restart gregai"
+      }
+    ],
+    "sys_update_apply": [
+      "Zainstaluj aktualizacje",
+      "Zaktualizuj system",
+      "Zrób apt upgrade",
+      "Wgraj dostępne aktualizacje",
+      "Zaktualizuj pakiety na serwerze",
+      "Zainstaluj poprawki bezpieczeństwa",
+      "Przeprowadź aktualizację systemu",
+      "Zaktualizuj serwer"
+    ],
+    "sys_backup": [
+      "Zrób kopię zapasową",
+      "Zrób backup GREGAI",
+      "Zabezpiecz notatki kopią zapasową",
+      "Wykonaj kopię danych",
+      "Backup proszę",
+      "Zrób kopię notatek i pamięci",
+      "Zarchiwizuj dane GREGAI",
+      "Potrzebuję kopii zapasowej"
+    ],
+    "sys_shell": [
+      {
+        "msg": "Wykonaj polecenie df -h",
+        "arg": "df -h"
+      },
+      {
+        "msg": "Uruchom uptime",
+        "arg": "uptime"
+      },
+      {
+        "msg": "Odpal ollama ps",
+        "arg": "ollama ps"
+      },
+      {
+        "msg": "Wykonaj cat /etc/hostname",
+        "arg": "cat /etc/hostname"
+      },
+      {
+        "msg": "Uruchom polecenie who",
+        "arg": "who"
+      },
+      {
+        "msg": "Wykonaj sudo apt-get clean",
+        "arg": "sudo apt-get clean"
+      },
+      {
+        "msg": "Odpal komendę free -h",
+        "arg": "free -h"
+      },
+      {
+        "msg": "Wykonaj ping -c 3 1.1.1.1",
+        "arg": "ping -c 3 1.1.1.1"
+      },
+      {
+        "msg": "Uruchom lscpu",
+        "arg": "lscpu"
+      },
+      {
+        "msg": "Wykonaj polecenie uname -r",
+        "arg": "uname -r"
+      }
+    ]
+  },
+  "brak": [
+    "Co myślisz o piciu kawy wieczorem?",
+    "Cześć, jak się masz?",
+    "Opowiedz mi coś ciekawego",
+    "Dobranoc",
+    "Hej",
+    "Dzień dobry!",
+    "Dziękuję",
+    "Dzięki, super",
+    "Ok",
+    "Jasne, rozumiem",
+    "Co tam u Ciebie?",
+    "Jak się masz?",
+    "Kim jesteś?",
+    "Jak masz na imię?",
+    "Co potrafisz robić?",
+    "Opowiedz mi dowcip",
+    "Jestem dziś zmęczony",
+    "Mam ciężki dzień",
+    "Co sądzisz o pracy w nocy?",
+    "Czy warto się uczyć łaciny?",
+    "Jak lepiej spać?",
+    "Dlaczego niebo jest niebieskie?",
+    "Co byś zrobił na moim miejscu?",
+    "Doradź mi, czy brać ten projekt",
+    "Jak ocenisz pomysł z kanałem o zwierzakach?",
+    "A dlaczego tak uważasz?",
+    "Rozwiń tę myśl",
+    "Powiedz to prościej",
+    "Nie rozumiem, wytłumacz jeszcze raz",
+    "Masz rację",
+    "Nie zgadzam się",
+    "Co o tym myślisz?",
+    "Jak Ci minął dzień?",
+    "Lubisz muzykę?",
+    "Jaki jest sens życia?",
+    "Napisz mi krótki wiersz o jesieni",
+    "Pomóż mi sformułować maila do klienta",
+    "Jak grzecznie odmówić znajomemu?",
+    "Przetłumacz na angielski: dzień dobry",
+    "Policz 15% z 2400",
+    "Ile to jest 12 razy 13?",
+    "Jaki dziś dzień tygodnia?",
+    "Która godzina?",
+    "Zmotywuj mnie",
+    "Boję się, że nie zdążę z projektem",
+    "Co sądzisz o modelu gemma2?",
+    "Czy jesteś lepszy od ChatGPT?",
+    "Jak działasz od środka?",
+    "Czemu odpowiadasz tak wolno?",
+    "Czy możesz mówić po angielsku?",
+    "Opowiedz historię o smoku",
+    "Jaką książkę polecasz?",
+    "Co jest lepsze, kawa czy herbata?",
+    "Jak mam się nazywać na streamie?",
+    "Daj mi trzy pomysły na tytuł filmu",
+    "Co to znaczy być dobrym człowiekiem?",
+    "Jak nie zatracić się w rutynie?",
+    "Porozmawiajmy chwilę",
+    "Nudzi mi się",
+    "Śmieszne",
+    "Haha dobre",
+    "Powtórz",
+    "Jeszcze raz",
+    "Mów dalej",
+    "Słyszysz mnie?",
+    "Test",
+    "Działa?",
+    "Halo",
+    "Wracam za chwilę",
+    "Do zobaczenia",
+    "Miłego dnia",
+    "Co dziś zjeść na obiad?",
+    "Jak ugotować ryż?",
+    "Czy warto kupić elektryka?",
+    "Jak myślisz, czy ten biznes się uda?",
+    "Co jest ważniejsze, pieniądze czy czas?",
+    "Jak Ci się podoba mój pomysł?",
+    "Powiedz coś po łacinie",
+    "Jak się mówi 'dziękuję' po japońsku?",
+    "Czy roboty zabiorą nam pracę?",
+    "Jak dbać o pomidory?",
+    "Co sądzisz o sieciach neuronowych?",
+    "Jak działa internet?",
+    "Czy warto robić notatki ręcznie?",
+    "Ile pamięci potrzebuje model 7B?",
+    "Czym różni się Wi-Fi 2,4 GHz od 5 GHz?",
+    "Jak napisać dobre hasło?",
+    "Czy Ubuntu Server jest trudny?",
+    "Jak działa pamięć w modelach językowych?",
+    "Czy pamiętasz, jak masz na imię?",
+    "Co myślisz o planowaniu dnia z samego rana?",
+    "Jak zapamiętać więcej z czytanych książek?",
+    "Czy warto zrobić backup do chmury?",
+    "Opowiedz o historii komputerów",
+    "Co to znaczy, że serwer jest headless?",
+    "Jak myślisz, czy mój plan na kanał ma sens?",
+    "Jak działa wyszukiwarka internetowa?",
+    "Czy sieci publiczne są bezpieczne?",
+    "Jakie są rodzaje notatek w Zettelkasten?",
+    "Dlaczego modele halucynują?",
+    "Czy procesor i7-6600U nadaje się do AI?",
+    "Co sądzisz o Bieliku?",
+    "Jak działa kopia zapasowa 3-2-1?",
+    "Jak przeliczyć km/h na m/s?",
+    "Ile to jest 15% z 240?",
+    "Napisz mi krótki mail do klienta o opóźnieniu",
+    "Popraw to zdanie: wziąść udział",
+    "Przetłumacz na angielski: strona jest gotowa",
+    "Jak się dziś czujesz?",
+    "Masz jakieś hobby?",
+    "Czy maszyny mogą myśleć?",
+    "Co byś zrobił na moim miejscu z tymi projektami?",
+    "Jestem zmęczony, nie chce mi się nic robić",
+    "Dzięki za pomoc dzisiaj",
+    "Haha, dobre",
+    "Jak działa systemd?",
+    "Czy warto mieć serwer w domu?",
+    "Jak wymyślić nazwę projektu?",
+    "Czemu laptop się grzeje?",
+    "Ile kosztuje prąd dla serwera miesięcznie?",
+    "Czy mogę ufać rozszerzeniom przeglądarki?",
+    "Jaka jest różnica między procesem a wątkiem?",
+    "Jak działa ollama od środka?",
+    "Nie chcę już żyć",
+    "Mam myśli samobójcze",
+    "Czuję, że nie dam rady dłużej"
+  ],
+  "golden": {
+    "tools": {
+      "search_brain": [
+        "Co mam zanotowane o piekarni?",
+        "Przypomnij mi ustalenia dotyczące FeatherClip",
+        "Czy pisałem coś o kanale na YouTube?",
+        "Co jest w mojej notatce o routerze?"
+      ],
+      "graph_overview": [
+        "Jak wygląda mój graf w liczbach?",
+        "Które notatki mają najwięcej linków?",
+        "Ile typów notatek masz w grafie?",
+        "Opisz strukturę moich neuronek"
+      ],
+      "research_web": [
+        {
+          "msg": "Sprawdź w internecie, ile kosztuje dziś paliwo",
+          "arg": "ile kosztuje dziś paliwo"
+        },
+        {
+          "msg": "Wyszukaj najtańsze mikrofony do streamingu",
+          "arg": "najtańsze mikrofony do streamingu"
+        },
+        {
+          "msg": "Poszukaj w sieci aktualnych cen używanych iPhone 13",
+          "arg": "aktualne ceny używanych iPhone 13"
+        },
+        {
+          "msg": "Sprawdź online jaka będzie pogoda jutro w Gdańsku",
+          "arg": "pogoda jutro w Gdańsku"
+        }
+      ],
+      "wiki_lookup": [
+        {
+          "msg": "Co to jest grawitacja?",
+          "arg": "grawitacja"
+        },
+        {
+          "msg": "Kim był Fryderyk Chopin?",
+          "arg": "Fryderyk Chopin"
+        },
+        {
+          "msg": "Sprawdź na Wikipedii czym jest fotosynteza",
+          "arg": "fotosynteza"
+        },
+        {
+          "msg": "Wyjaśnij mi, czym jest sztuczna inteligencja",
+          "arg": "sztuczna inteligencja"
+        },
+        {
+          "msg": "Co to jest aktualizacja bezpieczeństwa?",
+          "arg": "aktualizacja bezpieczeństwa"
+        }
+      ],
+      "self_status": [
+        "Czy nauczyłeś się dziś czegoś?",
+        "Jak idzie Twoje samouczenie?",
+        "Ile komend już rozpoznajesz sam?",
+        "Co nowego umiesz?"
+      ],
+      "brief_me": [
+        "Co słychać ważnego?",
+        "Daj mi brief na dziś",
+        "Czy coś nowego się pojawiło?",
+        "Co wymaga uwagi?"
+      ],
+      "remember": [
+        {
+          "msg": "Zapamiętaj: odebrać laptop z serwisu w środę",
+          "arg": "odebrać laptop z serwisu w środę"
+        },
+        {
+          "msg": "Zapisz sobie, że Ania woli kontakt mailowy",
+          "arg": "Ania woli kontakt mailowy"
+        },
+        {
+          "msg": "Nie zapomnij, że przelew za stronę przychodzi 20-go",
+          "arg": "przelew za stronę przychodzi 20-go"
+        },
+        {
+          "msg": "Zanotuj: kolejny stream w czwartek",
+          "arg": "kolejny stream w czwartek"
+        }
+      ],
+      "plan_day": [
+        "Czym powinienem się dziś zająć w pierwszej kolejności?",
+        "Jakie są dzisiejsze priorytety?",
+        "Co dzisiaj trzeba zrobić?",
+        "Zaplanuj mi dzisiejszy dzień"
+      ],
+      "network_status": [
+        "Ile urządzeń mam teraz w sieci?",
+        "Czy ktoś nieznany korzysta z mojego wifi?",
+        "Jaki mam dziś sygnał na routerze?",
+        "Ile GB zostało mi w pakiecie?"
+      ],
+      "sys_status": [
+        "Sprawdź, ile zostało miejsca na dysku i ile wolnej pamięci",
+        "Jak bardzo obciążony jest serwer?"
+      ],
+      "sys_logs": [
+        {
+          "msg": "Pokaż ostatnie logi gregai",
+          "arg": "gregai"
+        }
+      ],
+      "sys_service_action": [
+        {
+          "msg": "Zrestartuj usługę ollama",
+          "arg": "restart ollama"
+        }
+      ],
+      "sys_updates": [
+        "Czy są jakieś aktualizacje do zainstalowania?"
+      ],
+      "sys_backup": [
+        "Zrób mi kopię zapasową GREGAI"
+      ],
+      "sys_services": [
+        "Czy któraś usługa jest w stanie błędu?"
+      ],
+      "sys_network": [
+        "Jaki adres IP ma mój komputer?"
+      ],
+      "sys_processes": [
+        "Co zjada najwięcej pamięci?"
+      ],
+      "sys_timers": [
+        "Jakie zadania cykliczne są zaplanowane?"
+      ],
+      "sys_update_apply": [
+        "Wgraj najnowsze poprawki systemu"
+      ],
+      "fs_search": [
+        {
+          "msg": "Poszukaj w plikach frazy CLOUD_DAILY_LIMIT",
+          "arg": "CLOUD_DAILY_LIMIT"
+        }
+      ],
+      "fs_list": [
+        {
+          "msg": "Wyświetl zawartość katalogu agent",
+          "arg": "agent"
+        }
+      ],
+      "fs_read": [
+        {
+          "msg": "Pokaż mi plik install.sh",
+          "arg": "install.sh"
+        }
+      ]
+    },
+    "brak": [
+      "Hej, co słychać?",
+      "Dziękuję za pomoc",
+      "Jak myślisz, czy warto inwestować w krypto?",
+      "Opowiedz mi coś o sobie",
+      "Jestem dziś w świetnym humorze",
+      "Co sądzisz o pracy zdalnej?",
+      "Wyjaśnij mi to jeszcze raz, prościej",
+      "Napisz krótką rymowankę o kocie",
+      "Policz w pamięci: siedem razy osiem",
+      "Dobranoc, do jutra",
+      "Jak działa router Wi-Fi?",
+      "Czy warto trzymać logi długo?",
+      "Nie rozumiem tej odpowiedzi, powiedz prościej"
+    ]
+  }
+}

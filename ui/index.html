@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>GREGAI</title>
+<link rel="icon" type="image/svg+xml" href="ikona.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="ikona-32.png" />
+<link rel="apple-touch-icon" href="ikona-180.png" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="debug.css" />
+<link rel="stylesheet" href="sistem.css" />
+<link rel="stylesheet" href="kadr.css" />
+</head>
+<body class="segment-chat">
+
+<div class="bg-decor" aria-hidden="true"></div>
+<canvas id="graph-canvas"></canvas>
+<div id="graph-labels" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div id="status-banner" role="status" aria-live="polite"></div>
+
+<!-- ============================================================
+     SEGMENT 1: ROZMOWA (domyślny, główny widok aplikacji).
+     Szyna (#chat-rail) + kolumna wątku (#chat-panel). "Węzły" to
+     jedyne wejście do drugiego segmentu - podkategoria rozmowy,
+     nie równorzędna zakładka. ============================================================ -->
+<div id="chat-segment" class="segment">
+
+  <aside id="chat-rail" class="panel chat-rail">
+    <div class="rail-top">
+      <span class="header-dot" id="header-dot" aria-hidden="true"></span>
+      <div class="rail-brand">
+        <span class="rail-name">GREGAI</span>
+      </div>
+      <!-- Przełącznik segmentów: Rozmowa / Węzły / Nadzorca - trzy ikony w
+           rogu panelu, nie karty w treści szyny. Od 1.11.0 jedna aplikacja:
+           Nadzorca (dawny /debug) jest trzecim segmentem (ten sam
+           przełącznik lustrzanie w #nodes-topbar i w #debug-segment). -->
+      <div class="segment-switch" role="group" aria-label="Przełącz widok">
+        <button type="button" id="rail-switch-chat" class="segment-switch-btn active" title="Rozmowa" aria-label="Rozmowa (aktualny widok)" aria-current="true">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.2h10a1.3 1.3 0 0 1 1.3 1.3v5.4A1.3 1.3 0 0 1 13 11.2H6.8L4 13.4v-2.2H3A1.3 1.3 0 0 1 1.7 9.9V4.5A1.3 1.3 0 0 1 3 3.2z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>
+        <span class="seg-label">Rozmowa</span>
+        </button>
+        <button type="button" id="rail-switch-nodes" class="segment-switch-btn" title="Węzły" aria-label="Przejdź do Węzłów">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="11.6" r="1.6" fill="currentColor"/><path d="M5.3 4.9L7 9.8M10.7 4.9L9 9.8M5.7 4L10.3 4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <span class="seg-label">Węzły</span>
+        </button>
+        <button type="button" id="rail-switch-debug" class="segment-switch-btn" title="Nadzorca" aria-label="Przejdź do Nadzorcy">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="seg-label">Nadzorca</span>
+        </button>
+      </div>
+    </div>
+
+    <nav class="rail-section rail-projects" aria-label="Projekty">
+      <p class="panel-label">Twoje rozmowy</p>
+      <p class="rail-hint">Każda rozmowa ma własne pliki i własną pamięć. Wybierz jedną albo załóż nowy projekt.</p>
+      <ul class="project-list" id="project-list"></ul>
+      <!-- 1.19.0: na telefonie zamiast przewijanej w bok listy - zwykły wybór rozmowy. -->
+      <label class="project-picker-wrap"><span class="visually-hidden">Wybierz rozmowę</span>
+        <select id="project-picker" class="project-picker"></select></label>
+      <button type="button" id="btn-new-project" class="rail-add-link">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        Nowy projekt
+      </button>
+    </nav>
+
+    <div class="rail-footer">
+      <span id="chat-model-badge" class="chat-model-badge">sprawdzam…</span>
+    </div>
+  </aside>
+
+  <div id="chat-panel" class="panel chat-panel visible">
+    <div class="chat-header">
+      <div class="lt chat-lt">
+        <span class="lt-chip">Rozmowa</span>
+        <span class="lt-title" id="chat-title">Ogólna rozmowa</span>
+      </div>
+      <span id="chat-project-badge" class="chat-project-badge hidden"></span>
+      <!-- Pigułka "Postęp" (1.16.2): jedyny WIDOCZNY BEZ KLIKANIA ślad tego,
+           że GREGAI właśnie wieloetapowo myśli (Namysł) - pełny przebieg
+           faz leci niżej, w dymku odpowiedzi, i w szufladzie "Postęp"
+           (panel "Ta rozmowa"), ten pasek to tylko skrót, który nie znika
+           razem z dymkiem, gdy odpowiedź jest już gotowa. Kliknięcie
+           otwiera panel wprost na szufladzie "Postęp". -->
+      <button type="button" id="progress-pill" class="progress-pill hidden" title="Zobacz pełny przebieg w panelu „Ta rozmowa”">
+        <span class="progress-pill-dot" aria-hidden="true"></span>
+        <span class="progress-pill-label" id="progress-pill-label">Namysł w toku</span>
+        <span class="progress-pill-timer" id="progress-pill-timer"></span>
+      </button>
+      <!-- Menu rozmowy (1.12.0): trzy paski w prawym górnym rogu otwierają
+           panel z tym, co jest podczepione do TEJ rozmowy - Źródła (foldery),
+           wgrane pliki, pamięć rozmowy, kosz. -->
+      <!-- 1.24.0: jedna pigułka "czy pilnuje i ile kosztuje"; dotknięcie otwiera Nadzorcę. -->
+      <button type="button" id="chat-guard-pill" class="chat-guard-pill hidden" title="Straż i budżet: szczegóły w Nadzorcy"></button>
+      <button type="button" id="chat-menu-btn" class="chat-menu-btn" aria-haspopup="true" aria-expanded="false" aria-controls="chat-drawer" title="Podczepione do tej rozmowy: postęp, źródła, pliki, pamięć">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
+      <div class="chat-empty" id="chat-welcome"></div>
+    </div>
+    <!-- Załączniki (1.9.0): pliki wgrane spinaczem trafiają do data/wgrane
+         (POST /api/upload) i idą razem z NASTĘPNĄ wiadomością jako materiał
+         Namysłu (czytane ze zrozumieniem, agent/analiza.py). -->
+    <div id="chat-attachments" class="chat-attachments" aria-live="polite"></div>
+    <!-- 1.32.0: podpowiedzi komend po wpisaniu "/" (lista z serwera: /api/komendy) -->
+    <div id="cmd-popover" class="cmd-popover hidden" role="listbox" aria-label="Komendy"></div>
+    <form id="chat-form" class="chat-input-row">
+      <input type="file" id="chat-file-input" class="hidden" multiple accept=".txt,.md,.markdown,.rst,.csv,.tsv,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.log,.py,.js,.ts,.html,.htm,.css,.sh,.sql,.xml,.tex,.srt,.vtt,.pdf,.docx,.xlsx" aria-hidden="true" tabindex="-1" />
+      <button type="button" id="chat-attach" class="inspector-btn chat-attach-btn" title="Dołącz plik (pdf, docx, xlsx, csv, tekst) - GREGAI przeczyta go ze zrozumieniem" aria-label="Dołącz plik">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.6 5.2L6 9.8a1.3 1.3 0 0 0 1.8 1.8l5-5a2.6 2.6 0 0 0-3.7-3.7l-5.3 5.3a3.9 3.9 0 0 0 5.5 5.5l4.2-4.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <textarea id="chat-input" class="chat-input" placeholder="Napisz wiadomość…" rows="1" maxlength="20000" autocomplete="off" aria-label="Wiadomość do GREGAI"></textarea>
+      <button type="submit" id="chat-send" class="inspector-btn chat-send-btn" aria-label="Wyślij"><svg class="send-ico" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 8h9.5M8.5 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="send-label">Wyślij</span></button>
+      <button type="button" id="chat-stop" class="inspector-btn chat-stop-btn hidden" title="Zatrzymaj odpowiedź" aria-label="Zatrzymaj odpowiedź">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.6" fill="currentColor"/></svg>
+        Zatrzymaj
+      </button>
+    </form>
+    <!-- Pod polem wpisywania, po prawej: tryb rozumowania (Namysł). Wysuwany
+         panel otwiera się w górę, żeby nie wychodził poza okno. -->
+    <div class="chat-under">
+      <!-- 1.31.0: prowadzenie za rękę - jedno zdanie, co zrobić teraz (app.js: paintGuide);
+           kolor mówi, czyj jest ruch: turkus = Twój następny krok, bursztyn = GREGAI czeka
+           na Twoją decyzję, błękit = GREGAI pracuje albo informacja. -->
+      <p id="chat-guide" class="chat-guide" data-ton="sygnal" aria-live="polite">Zacznij tutaj: napisz pytanie albo wybierz kafelek powyżej.</p>
+      <!-- Namysł (1.9.0, agent/namysl.py): tryb kilkufazowego myślenia i
+           zgoda na wysyłkę fragmentów notatek/plików do sieciowych AI.
+           Ustawienia żyją na serwerze (data/namysl.json), nie w przeglądarce. -->
+      <div class="namysl-control">
+        <button type="button" id="namysl-btn" class="namysl-btn" aria-haspopup="true" aria-expanded="false" title="Dokładne myślenie: GREGAI zawsze myśli krok po kroku">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8a4.2 4.2 0 0 1 2.6 7.5c-.5.4-.8.9-.8 1.5v.4H6.2v-.4c0-.6-.3-1.1-.8-1.5A4.2 4.2 0 0 1 8 1.8z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M6.4 13.2h3.2M7 14.6h2" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg>
+          <span id="namysl-btn-label">Dokładne myślenie</span>
+        </button>
+        <div class="namysl-popover hidden" id="namysl-popover" role="dialog" aria-label="Ustawienia Namysłu">
+          <p class="namysl-popover-title">Dokładne myślenie</p>
+          <p class="namysl-popover-help">To jedyny sposób działania GREGAI: najpierw ustala, co masz na myśli, zbiera fakty, pisze szkic, sam go krytykuje i poprawia, a na końcu sprawdza. Każdy krok widzisz na żywo. Podziękowania i powitania dostają zwykłą, krótką odpowiedź.</p>
+          <label class="namysl-check">
+            <input type="checkbox" id="namysl-consent" />
+            <span>Pozwól wysłać fragmenty moich notatek i plików do AI w internecie (hasła i klucze są ukrywane). Bez tego prywatne pliki czyta tylko model na laptopie.</span>
+          </label>
+          <p class="namysl-popover-status" id="namysl-status" aria-live="polite"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel rozmowy (1.12.0): wszystko, co jest podczepione do TEJ rozmowy.
+         Źródła i wgrane pliki są indywidualne dla rozmowy (agent/sources.py),
+         pamięć rozmowy to streszczenie z agent/rozmowa.py. Kosz usuwa
+         rozmowę razem z jej plikami (POST /api/rozmowa/usun). -->
+    <aside id="chat-drawer" class="chat-drawer hidden" role="dialog" aria-label="Podczepione do tej rozmowy">
+      <div class="drawer-head">
+        <div class="lt">
+          <span class="lt-chip">Ta rozmowa</span>
+          <p class="lt-title drawer-title">Co jest podczepione</p>
+        </div>
+        <button type="button" id="chat-drawer-close" class="drawer-close" aria-label="Zamknij panel">×</button>
+      </div>
+      <p class="drawer-intro">Tu widzisz wszystko, co jest podczepione do tej jednej rozmowy. Otwieraj szufladki po kolei.</p>
+      <div class="drawer-body">
+        <!-- Postęp (1.16.2): co GREGAI robi TERAZ, krok po kroku - ten sam
+             przebieg Namysłu, który leci na żywo pod dymkiem "pisze...",
+             tylko tutaj zostaje widoczny i PO tym, jak odpowiedź jest już
+             gotowa (renderNamyslLive() w app.js rysuje do obu miejsc na
+             raz). Pusta/niewidoczna, dopóki w tej rozmowie nic jeszcze się
+             nie działo wieloetapowo - pojawia się sama, bez otwierania
+             całego panelu (pigułka w nagłówku wyżej). -->
+        <details class="drawer-section d-prog hidden" id="drawer-progress" open>
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">⏳</span>
+            <span class="drawer-sum"><span class="drawer-name">Postęp</span><span class="drawer-hint">Co GREGAI robi teraz, krok po kroku</span></span>
+            <span class="drawer-count" id="drawer-count-prog">0</span>
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <div id="drawer-progress-live"></div>
+            <p class="drawer-progress-empty" id="drawer-progress-empty">Namysł jeszcze się nie odezwał w tej rozmowie - pojawi się tu na żywo przy pierwszym pytaniu (GREGAI zawsze myśli dokładnie, krok po kroku).</p>
+          </div>
+        </details>
+        <details class="drawer-section d-src">
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">📁</span>
+            <span class="drawer-sum"><span class="drawer-name">Foldery</span><span class="drawer-hint">Co GREGAI może czytać</span></span>
+            <span class="drawer-count" id="drawer-count-src">0</span>
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <ul class="sources-list" id="sources-list"></ul>
+            <form id="sources-form" class="sources-form">
+              <input type="text" id="sources-input" class="sources-input" placeholder="~/Dokumenty/Faktury" autocomplete="off" aria-label="Ścieżka folderu do dodania" />
+              <button type="submit" class="rail-add-link sources-add" title="Dodaj folder jako źródło">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                Dodaj
+              </button>
+            </form>
+            <p class="sources-status" id="sources-status" aria-live="polite"></p>
+          </div>
+        </details>
+        <details class="drawer-section d-up">
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">📎</span>
+            <span class="drawer-sum"><span class="drawer-name">Wgrane pliki</span><span class="drawer-hint">Dołączone spinaczem, tylko tu</span></span>
+            <span class="drawer-count" id="drawer-count-up">0</span>
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <ul class="drawer-list" id="drawer-uploads"></ul>
+          </div>
+        </details>
+        <details class="drawer-section d-mem">
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">🧠</span>
+            <span class="drawer-sum"><span class="drawer-name">Pamięć rozmowy</span><span class="drawer-hint">O czym tu rozmawiacie</span></span>
+            <span class="drawer-count" id="drawer-count-mem">0</span>
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <p class="drawer-memory" id="drawer-memory"></p>
+          </div>
+        </details>
+        <details class="drawer-section d-del">
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">🗑️</span>
+            <span class="drawer-sum"><span class="drawer-name">Sprzątanie</span><span class="drawer-hint">Usuń rozmowę razem z plikami</span></span>
+            
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <button type="button" id="drawer-delete" class="drawer-delete-btn">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.2M7 7v4M9 7v4" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Usuń tę rozmowę i jej pliki
+            </button>
+          </div>
+        </details>
+      </div>
+    </aside>
+  </div>
+
+</div>
+
+<!-- ============================================================
+     SEGMENT 2: WĘZŁY (podkategoria Rozmowy - graf notatek na pełnym
+     ekranie, osiągalny tylko z szyny po lewej w Rozmowie). ============================================================ -->
+<div id="nodes-segment" class="segment">
+
+  <!-- Układ Węzłów (1.15.0): u góry pasek z nazwą, wyszukiwarką i przyciskiem
+       "Nowa notatka"; po lewej PRZEGLĄDANIE (najbardziej połączone, rodzaje
+       notatek), na środku mapa, po prawej SZCZEGÓŁY wybranej notatki
+       (treść, powiązania, działania); u dołu dymek "Jak to działa". -->
+  <header id="nodes-topbar" class="panel">
+    <div class="segment-switch" role="group" aria-label="Przełącz widok">
+      <button type="button" id="nodes-switch-chat" class="segment-switch-btn" title="Rozmowa" aria-label="Wróć do Rozmowy">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.2h10a1.3 1.3 0 0 1 1.3 1.3v5.4A1.3 1.3 0 0 1 13 11.2H6.8L4 13.4v-2.2H3A1.3 1.3 0 0 1 1.7 9.9V4.5A1.3 1.3 0 0 1 3 3.2z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Rozmowa</span>
+        </button>
+      <button type="button" id="nodes-switch-nodes" class="segment-switch-btn active" title="Węzły" aria-label="Węzły (aktualny widok)" aria-current="true">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="11.6" r="1.6" fill="currentColor"/><path d="M5.3 4.9L7 9.8M10.7 4.9L9 9.8M5.7 4L10.3 4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="seg-label">Węzły</span>
+        </button>
+      <button type="button" id="nodes-switch-debug" class="segment-switch-btn" title="Nadzorca" aria-label="Przejdź do Nadzorcy">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Nadzorca</span>
+        </button>
+    </div>
+    <div class="nodes-title lt">
+      <span class="lt-chip">Węzły</span>
+      <h2 class="lt-title">Mapa notatek</h2>
+      <p>Wszystko, co GREGAI wie, jako sieć powiązań.</p>
+    </div>
+    <label id="bottom-bar" class="nodes-search">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.3" stroke="currentColor" stroke-width="1.4"/><path d="M10.3 10.3L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input id="search-input" type="text" placeholder="Szukaj notatki…" autocomplete="off" aria-label="Znajdź notatkę po nazwie" />
+    </label>
+    <button id="btn-new-node" class="inspector-btn nodes-new" title="Nowa notatka" aria-label="Nowa notatka">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      Nowa notatka
+    </button>
+    <button id="nodes-help-btn" class="nodes-help-btn" type="button" title="Jak korzystać z mapy" aria-label="Pokaż podpowiedzi do mapy">?</button>
+  </header>
+
+  <!-- Lewa kolumna: znajdź i przefiltruj -->
+  <aside id="browse-panel" class="panel">
+    <section class="insp-card browse-card" aria-label="Najbardziej połączone">
+      <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">⭐</span>Najbardziej połączone</h4>
+      <p class="browse-hint">Notatki z największą liczbą powiązań. Kliknij, żeby je pokazać na mapie.</p>
+      <ul class="hub-list" id="hub-list"></ul>
+    </section>
+    <section class="insp-card browse-card browse-filters" aria-label="Rodzaje notatek">
+      <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">🎨</span>Rodzaje notatek</h4>
+      <p class="browse-hint">Kliknij rodzaj, żeby ukryć go albo pokazać na mapie.</p>
+      <ul class="filter-list" id="filter-list"></ul>
+    </section>
+  </aside>
+
+  <!-- Prawa kolumna: szczegóły wybranej notatki -->
+  <aside id="inspector-panel" class="panel" aria-label="Wybrana notatka">
+    <div id="inspector-body">
+      <div class="insp-empty"><span class="insp-empty-ico" aria-hidden="true">👆</span><p>Dotknij kuli na mapie albo wpisz nazwę w wyszukiwarce u góry.</p><p class="insp-empty-sub">Zobaczysz tu jej treść, powiązania i przyciski edycji.</p></div>
+    </div>
+  </aside>
+
+  <!-- Dymek "Jak to działa" (zamykany; zapamiętuje to w przeglądarce, wraca przyciskiem ?) -->
+  <div id="nodes-guide" class="panel nodes-guide" role="note">
+    <button type="button" id="nodes-guide-close" class="nodes-guide-close" aria-label="Zamknij podpowiedzi">×</button>
+    <p class="nodes-guide-title">Jak korzystać z mapy</p>
+    <ol class="nodes-guide-steps">
+      <li><span><b>Przeciągnij</b> mapę, żeby ją obrócić; <b>kółko myszy</b> przybliża.</span></li>
+      <li><span><b>Kliknij kulę</b> - po prawej zobaczysz treść i powiązania.</span></li>
+      <li><span><b>Shift + klik</b> drugiej kuli pokaże ścieżkę między nimi.</span></li>
+      <li><span><b>Nowa notatka</b> (u góry) dodaje węzeł; powiązania wybierasz z listy.</span></li>
+    </ol>
+    <p class="nodes-guide-keys"><b>Skróty:</b> <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> Rozmowa, Węzły, Nadzorca · <kbd>/</kbd> pole rozmowy</p>
+  </div>
+
+</div>
+
+<!-- ============================================================
+     SEGMENT 3: NADZORCA (od 1.11.0 w tej samej aplikacji; dawniej osobna
+     strona /debug, która zostaje jako wersja zapasowa - ui/debug.html).
+     Stan maszyny i silnika, proces myślowy routera, dziennik SYSOP, blok
+     „Teraz”, LAN. Obsługa: ui/debug.js (odświeża tylko, gdy ten segment
+     jest widoczny), style: ui/debug.css (zawężone do #debug-segment).
+     ============================================================ -->
+<div id="debug-segment" class="segment">
+  <div class="debug-inner">
+    <div class="debug-head">
+      <div class="segment-switch" role="group" aria-label="Przełącz widok">
+        <button type="button" id="debug-switch-chat" class="segment-switch-btn" title="Rozmowa" aria-label="Wróć do Rozmowy">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.2h10a1.3 1.3 0 0 1 1.3 1.3v5.4A1.3 1.3 0 0 1 13 11.2H6.8L4 13.4v-2.2H3A1.3 1.3 0 0 1 1.7 9.9V4.5A1.3 1.3 0 0 1 3 3.2z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>
+        <span class="seg-label">Rozmowa</span>
+        </button>
+        <button type="button" id="debug-switch-nodes" class="segment-switch-btn" title="Węzły" aria-label="Przejdź do Węzłów">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="11.6" r="1.6" fill="currentColor"/><path d="M5.3 4.9L7 9.8M10.7 4.9L9 9.8M5.7 4L10.3 4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <span class="seg-label">Węzły</span>
+        </button>
+        <button type="button" id="debug-switch-debug" class="segment-switch-btn active" title="Nadzorca" aria-label="Nadzorca (aktualny widok)" aria-current="true">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="seg-label">Nadzorca</span>
+        </button>
+      </div>
+      <div class="lt">
+        <span class="lt-chip">Nadzorca</span>
+        <h1 class="lt-title">Stan GREGAI</h1>
+      </div>
+    </div>
+    <p class="subtitle">Tu sprawdzisz, czy GREGAI jest zdrowy, czy straż pilnuje i ile kosztuje.</p>
+
+
+    <div class="dbg-hero" id="dbgHero" role="status" aria-live="polite">
+      <span class="dbg-hero-ico" id="dbgHeroIco" aria-hidden="true">⏳</span>
+      <div class="dbg-hero-text"><div class="dbg-hero-title" id="dbgHeroTitle">Sprawdzam stan systemu…</div><div class="dbg-hero-sub" id="dbgHeroSub"></div></div>
+    </div>
+    <div class="status-row">
+    <span class="dot" id="statusDot"></span>
+    <span class="chip" id="lastRefresh">łączenie…</span>
+    <span class="chip" id="statTotal"></span>
+    <span class="chip" id="statFast"></span>
+    <span class="chip" id="statLearned"></span>
+    <span class="chip" id="statModel"></span>
+  </div>
+    <nav class="dbg-tabs" role="tablist" aria-label="Sekcje Nadzorcy">
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="przeglad" aria-selected="true">Przegląd <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false">Co myśli</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false">Czego się nauczył</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false">System i dostęp</button>
+    </nav>
+
+  <section data-tab="przeglad">
+    <h2>Stan systemu</h2>
+    <p class="dbg-intro">Sprzęt, silnik i połączenia GREGAI w jednym miejscu.</p>
+    <div class="sysinfo-grid" id="sysinfoGrid"></div>
+    <div class="empty hidden" id="sysinfoEmpty">Nie udało się odczytać parametrów systemu.</div>
+    <div class="restart-row">
+      <button id="restartBtn" class="restart-btn" type="button">Zrestartuj GREGAI</button>
+      <span id="restartStatus"></span>
+    </div>
+  </section>
+
+  <!-- 1.32.0: diagnoza internetu warstwa po warstwie (agent/diagnoza.py, /api/diagnoza) -->
+  <section data-tab="przeglad" class="diag-section">
+    <h2>Internet krok po kroku</h2>
+    <p class="dbg-intro">Sprawdzam każdą warstwę po kolei: klient WARP, tunel, ruch przez Cloudflare, DNS, wyszukiwarki, Wikipedię, pogodę i dostawców AI. Pierwsza niedziałająca warstwa to przyczyna, a obok jest polecenie naprawy. To samo w czacie: /diagnoza, w terminalu: gregai diagnoza.</p>
+    <div class="restart-row">
+      <button id="diagBtn" class="restart-btn" type="button">Zdiagnozuj internet</button>
+      <span id="diagStatus" aria-live="polite"></span>
+    </div>
+    <p class="diag-verdict hidden" id="diagVerdict"></p>
+    <ol class="diag-list" id="diagList"></ol>
+  </section>
+
+  <section data-tab="system">
+    <h2>Dostęp z sieci lokalnej (LAN)</h2>
+    <p class="lan-info">
+      Domyślnie GREGAI odpowiada tylko na tym komputerze. Włączenie udostępnia go
+      innym urządzeniom w tej samej sieci (np. telefonowi w domowym wifi) pod
+      adresem IP tego komputera, portem 7777, z wymaganym tokenem dostępu
+      (niżej). Zmiana wymaga restartu. Jeśli masz aktywną zaporę (ufw), samo to
+      NIE wystarczy - GREGAI nigdy sam nie dotyka zapory - potrzebny jest
+      jeszcze: <code>sudo ufw allow from 192.168.0.0/16 to any port 7777 proto
+      tcp</code> (i analogicznie dla <code>10.0.0.0/8</code>,
+      <code>172.16.0.0/12</code>), albo po prostu ponowne <code>bash
+      install.sh</code>.
+    </p>
+    <div class="lan-row">
+      <label class="lan-toggle">
+        <input type="checkbox" id="lanCheckbox" />
+        <span>Udostępnij w sieci lokalnej (LAN)</span>
+      </label>
+      <button id="lanApplyBtn" class="restart-btn" type="button">Zastosuj i zrestartuj</button>
+      <span id="lanStatus"></span>
+    </div>
+    <div class="lan-token-row hidden" id="lanTokenRow">
+      <span class="lan-token-label">Token dostępu (nagłówek <code>X-Gregai-Token</code>):</span>
+      <input type="password" id="lanTokenInput" class="lan-token-input" readonly aria-label="Token dostępu z sieci lokalnej" />
+      <button id="lanTokenShowBtn" class="lan-small-btn" type="button">Pokaż</button>
+      <button id="lanTokenCopyBtn" class="lan-small-btn" type="button">Kopiuj</button>
+    </div>
+  </section>
+
+  <section data-tab="system">
+    <h2>Co GREGAI robił w systemie (SYSOP)</h2>
+    <p class="dbg-intro">Każda operacja systemowa, którą GREGAI wykonał albo odmówił - żebyś zawsze mógł to sprawdzić.</p>
+    <table id="sysopTable">
+      <thead>
+        <tr><th>Czas</th><th>Narzędzie</th><th>Argument</th><th>Poziom</th><th>Wynik</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="sysopEmpty">Dziennik pusty: GREGAI nie wykonał jeszcze żadnej operacji systemowej (ani nie odmówił żadnej).</div>
+  </section>
+
+  <section data-tab="mysli">
+    <h2>Co GREGAI wie w tej chwili</h2>
+    <p class="lan-info">
+      Blok dokładany do promptu przy każdej wiadomości (agent/awareness.py): zegar, fakty
+      z <code>memory/</code>, zadania w tle, poprzednia rozmowa. Model lokalny dostaje
+      całość; sieciowe etapy koryta (Claude, darmowa pula) dokładną godzinę i liczby, bez treści notatek.
+    </p>
+    <div class="teraz-grid">
+      <div>
+        <div class="teraz-label" id="terazLocalLabel">Model lokalny (Ollama)</div>
+        <pre class="teraz-pre" id="terazLocal"></pre>
+      </div>
+      <div>
+        <div class="teraz-label">Sieć: Claude i darmowa pula</div>
+        <pre class="teraz-pre" id="terazCloud"></pre>
+      </div>
+    </div>
+    <div class="empty hidden" id="terazEmpty">Nie udało się policzyć bloku „Teraz”.</div>
+  </section>
+
+  <section data-tab="mysli">
+    <h2>Ostatnie decyzje: którą drogą odpowiedział</h2>
+    <p class="dbg-intro">Dla każdej wiadomości widać, która ścieżka odpowiedziała (szybki wzorzec, model lokalny, Claude, darmowa pula…) i ile to trwało.</p>
+    <div class="log-filter-row"><label for="logFilter">Pokaż</label> <select id="logFilter"><option value="">Wszystkie ścieżki</option></select></div>
+    <table id="logTable">
+      <thead>
+        <tr><th>Czas</th><th>Ścieżka</th><th>Wiadomość</th><th>Narzędzie</th><th>Czas odpowiedzi</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="logEmpty">Jeszcze żadnych decyzji, odezwij się do GREGAI.</div>
+  </section>
+
+  <section data-tab="nauka">
+    <h2>Czego GREGAI się nauczył</h2>
+    <p class="dbg-intro">Wzorce, które GREGAI sam zapamiętał z waszych rozmów, żeby następnym razem odpowiadać szybciej.</p>
+    <table id="learnedTable">
+      <thead>
+        <tr><th>Narzędzie</th><th>Słowa-wyzwalacze</th><th>Trafień</th><th>Przykład</th><th>Ostatnio użyty</th><th></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="learnedEmpty">Jeszcze niczego sam nie wyuczył, czeka na pierwszą frazę, której nie złapie żaden ręczny wzorzec.</div>
+  </section>
+
+  <!-- 1.32.0: lekcje z rozmów (agent/lekcje.py) - zatwierdzone przez Ciebie zasady -->
+  <section data-tab="nauka">
+    <h2>Lekcje z rozmów</h2>
+    <p class="dbg-intro">Zasady, które zatwierdziłeś po /lekcja. GREGAI stosuje je w każdej rozmowie. Usuwasz w czacie: /lekcje usuń NUMER.</p>
+    <ol class="lesson-list" id="lessonList"></ol>
+    <div class="empty hidden" id="lessonEmpty">Jeszcze żadnej lekcji. Gdy GREGAI się pomyli albo zrobi coś wyjątkowo dobrze, napisz w czacie /lekcja.</div>
+  </section>
+
+  <section data-tab="nauka">
+    <h2>Słowa do dopytań</h2>
+    <p class="dbg-intro">Słowa, po których GREGAI rozpoznaje krótką odpowiedź na swoje pytanie doprecyzowujące.</p>
+    <table id="topicTable">
+      <thead>
+        <tr><th>Narzędzie</th><th>Wyuczone słowa-tematy</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="topicEmpty">Jeszcze żadnego nowego słowa do dopytań, czeka na pierwszą nierozpoznaną odpowiedź na pytanie doprecyzowujące.</div>
+  </section>
+  </div>
+</div>
+
+<!-- Modal: tworzenie nowego węzła -->
+<div id="create-modal-overlay" class="modal-overlay">
+  <div class="modal-panel panel" role="dialog" aria-modal="true" aria-labelledby="create-modal-title">
+    <p class="panel-label" id="create-modal-title">Nowa notatka</p>
+
+    <div id="create-form-fields">
+      <label class="modal-label">Tytuł
+        <input id="create-title" type="text" class="modal-input" placeholder="np. Nowy klient" />
+      </label>
+      <label class="modal-label create-type-label">Typ
+        <select id="create-type" class="modal-input"></select>
+      </label>
+      <label class="modal-label"><span id="create-text-label">Treść (opcjonalnie, obsługuje [[wikilinki]])</span>
+        <textarea id="create-text" class="note-edit-area" placeholder="Krótki opis, powiązania…"></textarea>
+      </label>
+      <div class="link-picker-row">
+        <select id="create-link-picker" class="modal-input" aria-label="Notatka do powiązania"></select>
+        <button type="button" class="inspector-btn secondary" id="btn-insert-create-link">Wstaw powiązanie</button>
+      </div>
+    </div>
+
+    <div id="create-raw-field" class="hidden">
+      <label class="modal-label">Wklej pełną treść pliku (tytuł i typ zostaną wyciągnięte automatycznie)
+        <textarea id="create-raw" class="note-edit-area" placeholder="# Tytuł&#10;type: Project&#10;&#10;Treść z [[wikilinkami]]…"></textarea>
+      </label>
+    </div>
+
+    <button id="btn-toggle-raw" class="inspector-btn secondary" type="button">Wklej surowy Markdown</button>
+
+    <div class="inspector-btn-row">
+      <button id="btn-create-save" class="inspector-btn">Utwórz</button>
+      <button id="btn-create-cancel" class="inspector-btn secondary">Anuluj</button>
+    </div>
+    <p id="create-status" class="note-edit-status"></p>
+  </div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="vendor/OrbitControls.js"></script>
+<script src="graph.js"></script>
+<script src="debug.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

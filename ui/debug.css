@@ -1,0 +1,288 @@
+/* Style Nadzorcy (ui/debug.js). Osobny plik: CSP nie dopuszcza <style> w stronie.
+   Od 1.11.0 Nadzorca jest trzecim segmentem JEDNEJ aplikacji (index.html,
+   #debug-segment) - każdy selektor jest zawężony do #debug-segment, a zmienne
+   kolorów żyją na tym elemencie, nie na :root, żeby nic nie wyciekło do
+   styles.css ani z niego. debug.html zostaje jako wersja zapasowa (ten sam
+   znacznik w tym samym opakowaniu), działająca nawet gdy app.js się sypie. */
+
+#debug-segment .hidden {
+  display: none;
+}
+
+#debug-segment {
+  --bg: #07070a;
+  --card: #0d0d10;
+  --card-2: #131318;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f4f2ec;
+  --text-dim: #837f89;
+  --orange: #ff7a33;
+  --pink: #ff4d6d;
+  --purple: #8b5cf6;
+  --blue: #5b9bd5;
+  --ok: #34d399;
+  --danger: #ef6361;
+  --teal: #6bc9c2;
+  --font-sans: -apple-system, "Segoe UI", "Inter", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+}
+#debug-segment * { box-sizing: border-box; }
+#debug-segment {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  padding: 28px;
+  /* W aplikacji (.segment: position fixed, inset 0, pointer-events none)
+     Nadzorca jest jedynym segmentem, który się przewija - długie tabele. */
+  overflow-y: auto;
+  pointer-events: auto;
+}
+#debug-segment .debug-inner { max-width: 1180px; }
+#debug-segment .debug-head { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
+#debug-segment .debug-head .segment-switch { margin-left: 0; }
+#debug-segment .debug-back { color: var(--text-dim); font-size: 12px; text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; }
+#debug-segment .debug-back:hover { color: var(--text); }
+#debug-segment h1 {
+  font-size: 19px;
+  letter-spacing: 0.01em;
+  margin: 0 0 4px;
+  background: linear-gradient(100deg, var(--orange) 8%, var(--pink) 48%, var(--purple) 94%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: inline-block;
+}
+#debug-segment .subtitle { color: var(--text-dim); font-size: 13px; margin: 0 0 22px; }
+#debug-segment .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
+#debug-segment .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; box-shadow: 0 0 6px var(--ok); }
+#debug-segment .dot.stale { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+#debug-segment .chip {
+  font-size: 12px; color: var(--text-dim); background: var(--card-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px;
+}
+#debug-segment .chip b { color: var(--text); font-weight: 600; }
+#debug-segment section {
+  background: linear-gradient(165deg, rgba(20, 20, 24, 0.9), var(--card));
+  border: 1px solid var(--border); border-radius: 13px;
+  padding: 18px; margin-bottom: 18px;
+}
+#debug-segment section h2 { font-size: 12px; margin: 0 0 14px; color: var(--text-dim); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; }
+#debug-segment table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+#debug-segment th {
+  text-align: left; color: var(--text-dim); font-weight: 500; padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#debug-segment td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow: hidden; }
+#debug-segment tr:last-child td { border-bottom: none; }
+#debug-segment .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#debug-segment #logTable th:nth-child(1), #debug-segment #logTable td:nth-child(1) { width: 75px; }
+#debug-segment #logTable th:nth-child(2), #debug-segment #logTable td:nth-child(2) { width: 168px; }
+/* 1.19.0: "Koryto: darmowa pula" nie mieściło się w kolumnie i było ucięte w pół słowa. */
+#debug-segment #logTable td:nth-child(2) .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+#debug-segment #logTable th:nth-child(4), #debug-segment #logTable td:nth-child(4) { width: 110px; }
+/* 100px ucinało nagłówek "Czas odpowiedzi" do "Czas odpo...". */
+#debug-segment #logTable th:nth-child(5), #debug-segment #logTable td:nth-child(5) { width: 128px; }
+#debug-segment #sysopTable th:nth-child(1), #debug-segment #sysopTable td:nth-child(1) { width: 75px; }
+#debug-segment #sysopTable th:nth-child(2), #debug-segment #sysopTable td:nth-child(2) { width: 150px; }
+#debug-segment #sysopTable th:nth-child(4), #debug-segment #sysopTable td:nth-child(4) { width: 90px; }
+/* 80px ucinało "odmowa/błąd" (jedyną wartość w tej kolumnie ważniejszą od
+   "wykonane") do "odmowa/bł" - w dzienniku audytu to właśnie odmowy/błędy
+   mają być czytelne bez naciągania. */
+#debug-segment #sysopTable th:nth-child(5), #debug-segment #sysopTable td:nth-child(5) { width: 112px; }
+#debug-segment #learnedTable th:nth-child(1), #debug-segment #learnedTable td:nth-child(1) { width: 110px; }
+/* jw.: nagłówki "Trafień" i "Ostatnio użyty" nie mieściły się w 60px/90px. */
+#debug-segment #learnedTable th:nth-child(3), #debug-segment #learnedTable td:nth-child(3) { width: 82px; }
+#debug-segment #learnedTable th:nth-child(5), #debug-segment #learnedTable td:nth-child(5) { width: 132px; }
+#debug-segment .mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+/* 1.19.0 (audyt interfejsu): odznaka bez własnego koloru jest neutralna i
+   czytelna (dawniej prawie czarny tekst na przezroczystym tle: "Koryto:
+   darmowa pula" i "Namysł" były nieczytelne). Kolorowe odznaki mają ciemny
+   tekst - jasny na liliowym miał kontrast ok. 2:1. */
+#debug-segment .badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; white-space: nowrap; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border);
+}
+/* Ciemny tekst tylko tam, gdzie poniżej ustawiono kolorowe tło (klasa .tone,
+   nadawana w debug.js według STAGE_TONES) - nieznany etap zostaje neutralny i czytelny. */
+#debug-segment .badge.tone { color: #0a0a0a; border-color: transparent; }
+/* To samo bez klasy .tone (np. odznaka zbudowana gdzie indziej): każda odznaka z kolorowym tłem. */
+#debug-segment .badge-szybka_sciezka,
+#debug-segment .badge-wyuczona_sciezka,
+#debug-segment .badge-doprecyzowanie_rozwiazane,
+#debug-segment .badge-dwuznacznosc,
+#debug-segment .badge-ollama_narzedzie,
+#debug-segment .badge-ollama_niedostepna,
+#debug-segment .badge-ollama_blad,
+#debug-segment .badge-korekta_wyuczonego,
+#debug-segment .badge-serce_kontrola_ollama,
+#debug-segment .badge-serce_blad,
+#debug-segment .badge-zadanie,
+#debug-segment .badge-zadanie_potwierdzone,
+#debug-segment .badge-chmura_rozmowa,
+#debug-segment .badge-uczen_rozmowa,
+#debug-segment .badge-zongler_rozmowa,
+#debug-segment .badge-zongler_senior_juniorzy,
+#debug-segment .badge-namysl,
+#debug-segment .badge-namysl_blad,
+#debug-segment .badge-teraz_blad,
+#debug-segment .badge-pamiec_rozmowy_blad,
+#debug-segment .badge-zadania_stale_blad,
+#debug-segment .badge-zadania_stale_blad_petli,
+#debug-segment .badge-zadanie_stale_alert { color: #0a0a0a; border-color: transparent; }
+#debug-segment #logFilter {
+  color-scheme: dark; background: var(--card-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 13px;
+}
+#debug-segment #logFilter option { background: var(--card-2); color: var(--text); }
+#debug-segment .badge-szybka_sciezka { background: var(--ok); }
+#debug-segment .badge-wyuczona_sciezka { background: var(--blue); }
+#debug-segment .badge-doprecyzowanie_rozwiazane { background: var(--teal); }
+#debug-segment .badge-dwuznacznosc { background: var(--purple); }
+#debug-segment .badge-ollama_narzedzie { background: var(--orange); }
+#debug-segment .badge-ollama_rozmowa { background: var(--card-2); color: var(--text-dim); border: 1px solid var(--border); }
+#debug-segment .badge-ollama_niedostepna, #debug-segment .badge-ollama_blad { background: var(--danger); }
+#debug-segment .badge-korekta_wyuczonego { background: var(--danger); color: #0a0a0a; }
+#debug-segment .badge-serce_kontrola_ollama { background: var(--teal); color: #0a0a0a; }
+#debug-segment .badge-serce_blad { background: var(--danger); color: #0a0a0a; }
+#debug-segment .badge-zadanie, #debug-segment .badge-zadanie_potwierdzone { background: var(--blue); }
+#debug-segment .badge-zadanie_anulowane { background: var(--card-2); color: var(--text-dim); border: 1px solid var(--border); }
+#debug-segment .badge-chmura_rozmowa { background: var(--purple); }
+#debug-segment .badge-uczen_rozmowa { background: var(--teal); color: #0a0a0a; }
+#debug-segment .badge-zongler_rozmowa, #debug-segment .badge-zongler_senior_juniorzy { background: var(--pink); }
+#debug-segment .badge-namysl { background: var(--orange); }
+#debug-segment .badge-namysl_blad, #debug-segment .badge-teraz_blad, #debug-segment .badge-pamiec_rozmowy_blad,
+#debug-segment .badge-zadania_stale_blad, #debug-segment .badge-zadania_stale_blad_petli { background: var(--danger); }
+#debug-segment .badge-zadanie_stale_alert { background: var(--ok); }
+#debug-segment .badge-pamiec_rozmowy, #debug-segment .badge-rozmowa_usunieta, #debug-segment .badge-zadanie_stale_bez_oceny {
+  background: var(--card-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+/* Tabele przewijane w poziomie na wąskim ekranie (1.19.0, debug.js owija je). */
+#debug-segment .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+@media (max-width: 640px) {
+  #debug-segment .table-scroll table { min-width: 600px; }
+}
+#debug-segment .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; color: var(--text-dim); }
+#debug-segment .log-filter-row select { max-width: 100%; }
+#debug-segment .new-pattern { color: var(--blue); font-size: 12px; margin-left: 6px; }
+#debug-segment .new-pattern.topic { color: var(--teal); }
+#debug-segment .new-pattern.forgotten { color: var(--danger); }
+#debug-segment .empty { color: var(--text-dim); font-size: 13px; padding: 10px 0; }
+#debug-segment .words { font-family: var(--font-mono); font-size: 12px; }
+#debug-segment #topicTable th:nth-child(1), #debug-segment #topicTable td:nth-child(1) { width: 140px; }
+
+#debug-segment .sysinfo-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px; margin-bottom: 14px;
+}
+#debug-segment .sysinfo-item {
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px;
+}
+#debug-segment .sysinfo-item .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.02em; }
+#debug-segment .sysinfo-item .value { font-size: 13px; margin-top: 3px; font-family: var(--font-mono); overflow-wrap: break-word; }
+#debug-segment .sysinfo-item .warn { color: var(--danger); }
+#debug-segment .sysinfo-item .ok, #debug-segment #sysopTable .ok { color: var(--ok); }
+#debug-segment #sysopTable .warn { color: var(--danger); }
+#debug-segment .restart-row { display: flex; align-items: center; gap: 12px; }
+#debug-segment .restart-btn {
+  background: linear-gradient(100deg, var(--orange) 10%, var(--pink) 90%);
+  color: #0a0a0a; border: none; border-radius: 8px; font-weight: 600;
+  font-size: 13px; padding: 9px 16px; cursor: pointer;
+}
+#debug-segment .restart-btn:disabled { opacity: 0.5; cursor: default; }
+#debug-segment #restartStatus { color: var(--text-dim); font-size: 13px; }
+
+#debug-segment .lan-info { color: var(--text-dim); font-size: 13px; line-height: 1.5; margin: 0 0 14px; }
+#debug-segment .lan-info code {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+}
+/* Sekcja „Teraz” (blok z agent/awareness.py): dwie kolumny - lokalnie i do
+   chmury - obok siebie, żeby różnica (treść notatek tylko po lewej) była
+   widoczna na pierwszy rzut oka, nie do wyczytania z opisu. */
+#debug-segment .teraz-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; }
+@media (max-width: 860px) { #debug-segment .teraz-grid { grid-template-columns: minmax(0, 1fr); } }
+#debug-segment .teraz-label { font-size: 12px; color: var(--text-dim); margin: 0 0 6px; letter-spacing: 0.04em; }
+#debug-segment .teraz-pre {
+  margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; min-height: 56px;
+}
+#debug-segment .lan-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+#debug-segment .lan-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+#debug-segment .lan-toggle input { width: 16px; height: 16px; accent-color: var(--orange); cursor: pointer; }
+#debug-segment #lanStatus { color: var(--text-dim); font-size: 13px; }
+#debug-segment .lan-token-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+#debug-segment .lan-token-label { font-size: 12px; color: var(--text-dim); }
+#debug-segment .lan-token-label code {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+}
+#debug-segment .lan-token-input {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 9px; min-width: 280px;
+}
+#debug-segment .lan-small-btn {
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-size: 12px; padding: 5px 10px; cursor: pointer;
+}
+#debug-segment .lan-small-btn:hover { background: var(--border); }
+
+/* 1.15.0: Nadzorca w zakładkach */
+#debug-segment .dbg-hero { display: flex; align-items: center; gap: 14px; padding: 16px 18px; margin-bottom: 16px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); }
+#debug-segment .dbg-hero[data-state="ok"] { border-color: var(--ok); }
+#debug-segment .dbg-hero[data-state="warn"] { border-color: var(--orange); }
+#debug-segment .dbg-hero[data-state="bad"] { border-color: var(--danger); }
+#debug-segment .dbg-hero-ico { font-size: 26px; line-height: 1; }
+#debug-segment .dbg-hero-title { font-size: 16px; font-weight: 600; color: var(--text); }
+#debug-segment .dbg-hero-sub { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+#debug-segment .dbg-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+#debug-segment .dbg-tab { position: relative; background: var(--card-2); color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; font-size: 13px; cursor: pointer; font-family: inherit; }
+#debug-segment .dbg-tab:hover { color: var(--text); }
+#debug-segment .dbg-tab:focus-visible { outline: 2px solid var(--sygnal); outline-offset: 2px; }
+#debug-segment .dbg-tab[aria-selected="true"] { color: var(--text); border-color: var(--purple); background: var(--card); font-weight: 600; }
+#debug-segment .dbg-tab-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--orange); margin-left: 4px; }
+#debug-segment .dbg-tab-dot.hidden { display: none; }
+#debug-segment .dbg-intro { color: var(--text-dim); font-size: 13px; margin: -6px 0 14px; }
+#debug-segment [data-tab].tab-hidden { display: none; }
+
+/* 1.18.0 (zgłoszenie z Brave): rozwijane listy w ciemnym motywie - bez tego
+   przeglądarka rysowała opcje biało na białym. Zawężone do Nadzorcy jak
+   reszta pliku; debug.html nie ładuje sistem.css, więc reguła musi być tu. */
+#debug-segment select {
+  color-scheme: dark;
+  background: var(--card-2);
+  color: var(--text);
+}
+#debug-segment select option {
+  background: var(--card-2);
+  color: var(--text);
+}
+
+/* 1.19.0: samodzielne /debug bez domyślnej ramki 8 px przeglądarki. */
+body.segment-debug { margin: 0; }
+
+/* 1.24.0: linia straży i budżetu w nagłówku Nadzorcy */
+#debug-segment .dbg-guard-line { flex-basis: 100%; margin-top: 8px; font-size: 13px; opacity: 0.85; line-height: 1.5; overflow-wrap: anywhere; }
+#debug-segment #dbgHero { flex-wrap: wrap; }
+#debug-segment .dbg-hero-text { flex: 1 1 180px; min-width: 0; }
+
+/* 1.24.0: szczegóły techniczne schowane */
+#debug-segment .sysinfo-more { grid-column: 1 / -1; margin-top: 4px; }
+#debug-segment .sysinfo-more summary { cursor: pointer; min-height: 40px; display: flex; align-items: center; font-size: 13px; opacity: .85; }
+#debug-segment .sysinfo-more-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 8px; }
+
+/* 1.26.0: telefon - zakładki Nadzorcy jako 2x2 zamiast uciętego paska */
+@media (max-width: 640px) {
+  #debug-segment nav.dbg-tabs.dbg-tabs { display: grid !important; grid-template-columns: 1fr 1fr; overflow: visible; }
+  #debug-segment nav.dbg-tabs .dbg-tab { white-space: normal; min-height: 44px; justify-content: center; text-align: center; }
+  #debug-segment .status-row { margin-bottom: 12px; }
+}
+@media (max-width: 640px) {
+  #debug-segment nav.dbg-tabs.dbg-tabs { width: 100%; border-radius: 16px; gap: 4px; padding: 4px; }
+  #debug-segment nav.dbg-tabs .dbg-tab { height: auto; border-radius: 12px; padding: 8px; }
+}

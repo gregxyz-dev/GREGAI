@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Nadzorca GREGAI (strona zapasowa)</title>
+<!--
+  debug.html
+
+  Strona-nadzorca: pokazuje stan maszyny i silnika oraz PROCES MYŚLOWY
+  routera (agent/router.py), nie tylko odpowiedzi. Sprzęt, silnik i
+  dziennik SYSOP (/api/system_info, dziennik z agent/sysop.py) oraz trzy
+  tabele, odświeżane co 15 s:
+
+  1. Ślad decyzji (/api/debug/log, dane z agent/trace.py): dla każdej
+     wiadomości, która ścieżka odpowiedziała (dopytanie, szybki wzorzec
+     ręczny, szybki wzorzec wyuczony, Ollama jako narzędzie, Ollama jako
+     rozmowa, fallback bez modelu) i ile to zajęło.
+  2. Czego się nauczył (/api/debug/learned, dane z agent/learning.py):
+     wzorce, które GREGAI sam zapisał z wcześniejszych rozmów.
+  3. Nauczone słowa do dopytań (/api/debug/topic_words, też z
+     agent/learning.py, ale OSOBNY mechanizm): słowa, którymi GREGAI sam
+     nauczył się rozpoznawać krótkie odpowiedzi na pytania doprecyzowujące
+     (patrz capabilities.py:check_ambiguity), bez czekania na Ollamę.
+
+  Od 1.11.0 Nadzorca jest segmentem JEDNEJ aplikacji (index.html,
+  #debug-segment, przełącznik Rozmowa / Węzły / Nadzorca, skrót: /#nadzorca).
+  Ta strona (/debug) zostaje jako WERSJA ZAPASOWA z tym samym znacznikiem
+  w tym samym opakowaniu (#debug-segment) - celowo bez styles.css/app.js,
+  żeby działała, nawet jeśli coś w głównym interfejsie się akurat sypie.
+-->
+<link rel="icon" type="image/svg+xml" href="ikona.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="ikona-32.png" />
+<link rel="apple-touch-icon" href="ikona-180.png" />
+<link rel="stylesheet" href="debug.css" />
+</head>
+<body class="segment-debug">
+<div id="debug-segment">
+  <div class="debug-inner">
+    <div class="debug-head">
+      <h1>Nadzorca GREGAI</h1>
+      <a class="debug-back" href="/#nadzorca">pełna aplikacja →</a>
+    </div>
+    <p class="subtitle">Strona zapasowa. Proces myślowy routera: która ścieżka odpowiedziała, ile to zajęło, czego się GREGAI nauczył.</p>
+
+  <div class="status-row">
+    <span class="dot" id="statusDot"></span>
+    <span class="chip" id="lastRefresh">łączenie…</span>
+    <span class="chip" id="statTotal"></span>
+    <span class="chip" id="statFast"></span>
+    <span class="chip" id="statLearned"></span>
+    <span class="chip" id="statModel"></span>
+  </div>
+
+    <div class="dbg-hero" id="dbgHero" role="status" aria-live="polite">
+      <span class="dbg-hero-ico" id="dbgHeroIco" aria-hidden="true">⏳</span>
+      <div class="dbg-hero-text"><div class="dbg-hero-title" id="dbgHeroTitle">Sprawdzam stan systemu…</div><div class="dbg-hero-sub" id="dbgHeroSub"></div></div>
+    </div>
+    <nav class="dbg-tabs" role="tablist" aria-label="Sekcje Nadzorcy">
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="przeglad" aria-selected="true"><span aria-hidden="true">🩺</span> Przegląd <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false"><span aria-hidden="true">🧠</span> Co myśli</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false"><span aria-hidden="true">📚</span> Czego się nauczył</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false"><span aria-hidden="true">🔐</span> System i dostęp</button>
+    </nav>
+
+  <section data-tab="przeglad">
+    <h2>Stan systemu</h2>
+    <p class="dbg-intro">Sprzęt, silnik i połączenia GREGAI w jednym miejscu.</p>
+    <div class="sysinfo-grid" id="sysinfoGrid"></div>
+    <div class="empty hidden" id="sysinfoEmpty">Nie udało się odczytać parametrów systemu.</div>
+    <div class="restart-row">
+      <button id="restartBtn" class="restart-btn" type="button">Zrestartuj GREGAI</button>
+      <span id="restartStatus"></span>
+    </div>
+  </section>
+
+  <section data-tab="system">
+    <h2>Dostęp z sieci lokalnej (LAN)</h2>
+    <p class="lan-info">
+      Domyślnie GREGAI odpowiada tylko na tym komputerze. Włączenie udostępnia go
+      innym urządzeniom w tej samej sieci (np. telefonowi w domowym wifi) pod
+      adresem IP tego komputera, portem 7777, z wymaganym tokenem dostępu
+      (niżej). Zmiana wymaga restartu. Jeśli masz aktywną zaporę (ufw), samo to
+      NIE wystarczy - GREGAI nigdy sam nie dotyka zapory - potrzebny jest
+      jeszcze: <code>sudo ufw allow from 192.168.0.0/16 to any port 7777 proto
+      tcp</code> (i analogicznie dla <code>10.0.0.0/8</code>,
+      <code>172.16.0.0/12</code>), albo po prostu ponowne <code>bash
+      install.sh</code>.
+    </p>
+    <div class="lan-row">
+      <label class="lan-toggle">
+        <input type="checkbox" id="lanCheckbox" />
+        <span>Udostępnij w sieci lokalnej (LAN)</span>
+      </label>
+      <button id="lanApplyBtn" class="restart-btn" type="button">Zastosuj i zrestartuj</button>
+      <span id="lanStatus"></span>
+    </div>
+    <div class="lan-token-row hidden" id="lanTokenRow">
+      <span class="lan-token-label">Token dostępu (nagłówek <code>X-Gregai-Token</code>):</span>
+      <input type="password" id="lanTokenInput" class="lan-token-input" readonly aria-label="Token dostępu z sieci lokalnej" />
+      <button id="lanTokenShowBtn" class="lan-small-btn" type="button">pokaż</button>
+      <button id="lanTokenCopyBtn" class="lan-small-btn" type="button">kopiuj</button>
+    </div>
+  </section>
+
+  <section data-tab="system">
+    <h2>Co GREGAI robił w systemie (SYSOP)</h2>
+    <p class="dbg-intro">Każda operacja systemowa, którą GREGAI wykonał albo odmówił - żebyś zawsze mógł to sprawdzić.</p>
+    <table id="sysopTable">
+      <thead>
+        <tr><th>Czas</th><th>Narzędzie</th><th>Argument</th><th>Poziom</th><th>Wynik</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="sysopEmpty">Dziennik pusty: GREGAI nie wykonał jeszcze żadnej operacji systemowej (ani nie odmówił żadnej).</div>
+  </section>
+
+  <section data-tab="mysli">
+    <h2>Co GREGAI wie w tej chwili</h2>
+    <p class="lan-info">
+      Blok dokładany do promptu przy każdej wiadomości (agent/awareness.py): zegar, fakty
+      z <code>memory/</code>, zadania w tle, poprzednia rozmowa. Model lokalny dostaje
+      całość; sieciowe etapy koryta (Claude, darmowa pula) dokładną godzinę i liczby, bez treści notatek.
+    </p>
+    <div class="teraz-grid">
+      <div>
+        <div class="teraz-label" id="terazLocalLabel">Model lokalny (Ollama)</div>
+        <pre class="teraz-pre" id="terazLocal"></pre>
+      </div>
+      <div>
+        <div class="teraz-label">Sieć: Claude i darmowa pula</div>
+        <pre class="teraz-pre" id="terazCloud"></pre>
+      </div>
+    </div>
+    <div class="empty hidden" id="terazEmpty">Nie udało się policzyć bloku „Teraz”.</div>
+  </section>
+
+  <section data-tab="mysli">
+    <h2>Ostatnie decyzje: którą drogą odpowiedział</h2>
+    <p class="dbg-intro">Dla każdej wiadomości widać, która ścieżka odpowiedziała (szybki wzorzec, model lokalny, Claude, darmowa pula…) i ile to trwało.</p>
+    <div class="log-filter-row"><label for="logFilter">Pokaż</label> <select id="logFilter"><option value="">Wszystkie ścieżki</option></select></div>
+    <table id="logTable">
+      <thead>
+        <tr><th>Czas</th><th>Ścieżka</th><th>Wiadomość</th><th>Narzędzie</th><th>Czas odpowiedzi</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="logEmpty">Jeszcze żadnych decyzji, odezwij się do GREGAI.</div>
+  </section>
+
+  <section data-tab="nauka">
+    <h2>Czego GREGAI się nauczył</h2>
+    <p class="dbg-intro">Wzorce, które GREGAI sam zapamiętał z waszych rozmów, żeby następnym razem odpowiadać szybciej.</p>
+    <table id="learnedTable">
+      <thead>
+        <tr><th>Narzędzie</th><th>Słowa-wyzwalacze</th><th>Trafień</th><th>Przykład</th><th>Ostatnio użyty</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="learnedEmpty">Jeszcze niczego sam nie wyuczył, czeka na pierwszą frazę, której nie złapie żaden ręczny wzorzec.</div>
+  </section>
+
+  <section data-tab="nauka">
+    <h2>Słowa do dopytań</h2>
+    <p class="dbg-intro">Słowa, po których GREGAI rozpoznaje krótką odpowiedź na swoje pytanie doprecyzowujące.</p>
+    <table id="topicTable">
+      <thead>
+        <tr><th>Narzędzie</th><th>Wyuczone słowa-tematy</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty hidden" id="topicEmpty">Jeszcze żadnego nowego słowa do dopytań, czeka na pierwszą nierozpoznaną odpowiedź na pytanie doprecyzowujące.</div>
+  </section>
+  </div>
+</div>
+<script src="debug.js"></script>
+</body>
+</html>
