@@ -15,15 +15,79 @@ Tylko stdlib. Używane też przez training/export*.py (update_env).
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
+import shutil
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+
+try:  # Linux/Unix; na innych systemach zostaje sam zamek wątków
+    import fcntl
+except ImportError:  # pragma: no cover - projekt docelowo działa na Ubuntu
+    fcntl = None
 
 # Nowy plik z danymi GREGAI (rozmowy, ślady, uczenie) jest prywatny. Istniejący
 # plik zachowuje swoje prawa (np. .env = 600, notatka = 644).
 PRIVATE_MODE = 0o600
+
+# 1.32.28 (audyt #1): jeden zamek MIĘDZYPROCESOWY na data/. flock jest
+# reentrantny w obrębie wątku (licznik głębokości), więc moduł może wołać
+# data_lock() także z funkcji, która już go trzyma (np. _save wewnątrz
+# learn_from_resolution).
+_DATA_DIR = Path(__file__).parent.parent / "data"
+_DATA_LOCK_PATH = _DATA_DIR / ".gregai.lock"
+_DATA_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def data_lock():
+    """Wyłączny zamek na data/ dla TEJ instalacji (między procesami).
+
+    Chroni read-modify-write plików JSON/JSONL, których pilnuje też zwykły
+    threading.Lock w module: drugi proces (np. `gregai eval`) nie nadpisze
+    zmiany pierwszego. Zamek jest reentrantny w obrębie wątku; błąd systemu
+    plików nie może wywrócić zapisu danych - wtedy zostaje tylko zamek wątków."""
+    depth = getattr(_DATA_LOCK_STATE, "depth", 0)
+    if depth:
+        _DATA_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _DATA_LOCK_STATE.depth = depth
+        return
+    handle = None
+    try:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        handle = open(_DATA_LOCK_PATH, "a+", encoding="utf-8")
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        handle = None
+    _DATA_LOCK_STATE.depth = 1
+    try:
+        yield
+    finally:
+        _DATA_LOCK_STATE.depth = 0
+        if handle is not None:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                handle.close()
+            except OSError:
+                pass
 
 # Plik tymczasowy ma krótką, stałą nazwę (rozszerzenie .tmp: vault go pomija). Nazwa
 # docelowego pliku w nazwie tymczasowego przekraczała limit 255 bajtów dla długich,
@@ -233,18 +297,89 @@ import threading as _threading
 NOTES_LOCK = _threading.Lock()
 
 
+def trash_name_ok(name: str) -> bool:
+    """Czy nazwa wpisu w koszu jest bezpieczna: jeden segment ścieżki, bez
+    przejścia w górę i bez NUL-a, najwyżej 255 bajtów UTF-8. 1.32.29 (audyt #3)."""
+    if not isinstance(name, str) or not name or name in (".", "..") or "\x00" in name:
+        return False
+    if "/" in name or "\\" in name or ".." in name:
+        return False
+    try:
+        return len(name.encode("utf-8", "surrogatepass")) <= 255
+    except UnicodeEncodeError:
+        return False
+
+
+def _trim_filename_bytes(text: str, limit: int) -> str:
+    """Obcina napis tak, żeby po zakodowaniu w UTF-8 miał najwyżej `limit` bajtów
+    (limit dotyczy nazwy pliku na dysku, nie liczby znaków)."""
+    limit = max(0, limit)
+    if len(text.encode("utf-8", "surrogatepass")) <= limit:
+        return text
+    while text and len(text.encode("utf-8", "surrogatepass")) > limit:
+        text = text[:-1]
+    return text
+
+
 def move_to_trash(path, trash_dir, original: str) -> str:
     """Przenosi plik do kosza (zamiast kasować) i zapisuje obok, skąd przyszedł.
-    Zwraca nazwę wpisu w koszu (do przywrócenia). Nic nie jest usuwane na zawsze."""
-    import json as _json
-    import time as _time
-    from pathlib import Path as _P
-    trash = _P(trash_dir)
+    Zwraca nazwę wpisu w koszu (do przywrócenia). Nic nie jest usuwane na zawsze.
+
+    1.32.29 (audyt #4): metadane powstają najpierw w pliku tymczasowym, plik
+    idzie do kosza, a na końcu metadane są atomowo przemianowywane. Błąd
+    któregokolwiek kroku cofa przeniesienie. Na innym systemie plików
+    (EXDEV) zamiast os.replace jest shutil.move (kopiuj i usuń)."""
+    trash = Path(trash_dir)
     trash.mkdir(parents=True, exist_ok=True)
-    base = _time.strftime("%Y%m%d-%H%M%S") + "-" + _P(path).name
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = stamp + "-" + Path(path).name
+    if len((base + ".json").encode("utf-8", "surrogatepass")) > 255:
+        digest = hashlib.sha256(str(path).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+        tail = f"-{digest}"
+        base = _trim_filename_bytes(base, 255 - len((tail + ".json").encode("utf-8"))) + tail
     name, i = base, 2
     while (trash / name).exists() or (trash / (name + ".json")).exists():
-        name, i = f"{base}-{i}", i + 1
-    os.replace(path, trash / name)
-    atomic_write_text(trash / (name + ".json"), _json.dumps({"z": str(original), "kiedy": _time.time()}, ensure_ascii=False))
+        suffix = f"-{i}"
+        name = _trim_filename_bytes(base, 255 - len((suffix + ".json").encode("utf-8"))) + suffix
+        i += 1
+    dest = trash / name
+    meta = trash / (name + ".json")
+    fd, meta_tmp = tempfile.mkstemp(prefix=TMP_PREFIX, suffix=".tmp", dir=str(trash))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(json.dumps({"z": str(original), "kiedy": time.time()}, ensure_ascii=False))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(meta_tmp, PRIVATE_MODE)
+        moved = False
+        try:
+            try:
+                os.replace(path, dest)
+                moved = True
+            except OSError as e:
+                if e.errno != errno.EXDEV:
+                    raise
+                shutil.move(str(path), str(dest))
+                moved = True
+            os.replace(meta_tmp, meta)
+            meta_tmp = None
+        except BaseException:
+            if moved:
+                try:
+                    if dest.exists():
+                        try:
+                            os.replace(dest, path)
+                        except OSError as e:
+                            if e.errno != errno.EXDEV:
+                                raise
+                            shutil.move(str(dest), str(path))
+                except OSError:
+                    pass
+            raise
+    finally:
+        if meta_tmp is not None:
+            try:
+                os.unlink(meta_tmp)
+            except OSError:
+                pass
     return name

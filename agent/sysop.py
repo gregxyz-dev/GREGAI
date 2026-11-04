@@ -391,9 +391,13 @@ def _secret_values() -> list[str]:
     return [v for v in (os.environ.get(k, "") for k in names) if v and len(v) >= 4]
 
 
-def mask_secrets(text: str) -> str:
+def mask_secrets(text: str, outbound: bool = False) -> str:
     """Maskuje w wyjściu: całe sekrety z .env, KAŻDY ich fragment od 8
     znaków (np. `cut -c1-20` z pliku z kluczem) i bloki kluczy prywatnych.
+    `outbound=True` (1.32.28): przy tekście wychodzącym do internetu nie
+    stosuj szerokich wzorców (długie skróty, adresy portfeli) - one są
+    tematem zapytania, nie sekretem. Wąskie wzorce (hasła, klucze API,
+    PIN-y) nadal działają.
 
     1.32.18 (audyt tura 20/20): to maskowanie znało TYLKO sekrety z .env (nazwy
     *_KEY/*_TOKEN/.../SECRET_KEYS) i bloki PEM - sekret WPISANY wprost w
@@ -423,7 +427,7 @@ def mask_secrets(text: str) -> str:
             text = "".join("*" if h else c for c, h in zip(text, hit))
     try:
         import trace as trace_mod
-        text = trace_mod.redact_typed(text)
+        text = trace_mod.redact_typed(text, outbound=outbound)
     except ImportError:
         pass
     return text

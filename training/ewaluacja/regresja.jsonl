@@ -56,3 +56,13 @@
 {"id": "pada-bateria", "typ": "routing", "wiadomosc": "pada mi bateria w telefonie", "oczekiwane": null, "zrodlo": "audyt tura 7 (1.32.2)"}
 {"id": "padam-z-nog", "typ": "routing", "wiadomosc": "dzis padam z nog po dowozach, ledwo zyje", "oczekiwane": null, "zrodlo": "audyt tura 7: wyuczony wzorzec dzis+pada"}
 {"id": "bramka-lte-diagnoza", "typ": "bramka", "tekst": "Modem łapie zasięg, ale gdy NetworkManager pokazuje brak dostępu do internetu, zwykle winny jest APN.", "internet": true, "oczekiwane": [], "zrodlo": "audyt tura 7 (1.32.2)"}
+{"id": "narzedzia-deweloperskie", "typ": "devtools", "oczekiwane": true, "zrodlo": "1.32.26: run_eval, run_check, env_status, service_status, docs_check"}
+{"id": "lokalny-timeout", "typ": "lokalny_timeout", "oczekiwane": true, "zrodlo": "1.32.27: LOKALNY_TIMEOUT domyslnie 180 s i przekazany do Ollama"}
+{"id": "izolacja-eval", "typ": "izolacja", "oczekiwane": true, "zrodlo": "1.32.28: eval nie zmienia data/, chat_id nie zlepia / z -, maska outbound zostawia adres portfela"}
+{"id": "audyt-1329", "typ": "audyt_1329", "oczekiwane": true, "zrodlo": "1.32.29: kosz, PDF, offline, BOM, limit tytułu, .env.example, LOKALNY_TIMEOUT min 60, .env ostatni wpis"}
+{"id": "audyt-1330-koryto", "typ": "audyt_1330", "oczekiwane": true, "zrodlo": "audyt 1.32.29 (#1-#5): efektywne koryto per waga, fallback pustej polityki, awaryjny lokalny wg wagi, NetGuardBlocked w trakcie, tło przez rozdzielnicę"}
+{"id": "audyt-1331-namysl-lokalny", "typ": "audyt_1331", "oczekiwane": true, "zrodlo": "1.32.31: Namysł 'Szkic odpowiedzi' -> 'Model nie odpowiedział' w 0,3 s (groq HTTP 413 TPM 8000 przy promptach 8,4k tokenów, gemini limit dzienny); faza ma gwarancję modelu - awaryjny lokalny"}
+{"id": "audyt-1332-poprawki", "typ": "audyt_1332", "oczekiwane": true, "zrodlo": "1.33.2: akcje w powitaniach (#6), outbound maska sk-or/gsk/ssh/AKIA/xox/ghp/gho (#11), checkbox zgody w catch (#14), brak martwych trybów auto/wylaczony (#16), Godzina: HH:MM w bloku Teraz (#17)"}
+{"id": "audyt-1333-timer-plik", "typ": "audyt_1333", "oczekiwane": true, "zrodlo": "1.33.3: jeden timer w stepperze + numeracja 1-6 (#18), plik załączony w prompcie lokalnego modelu po padnięciu chmury (#19)"}
+{"id": "audyt-1334-zbieranie-plik", "typ": "audyt_1334", "oczekiwane": true, "zrodlo": "1.33.4 (#19b): Zbieranie samo sprawdza Ollamę; material_do_sieci=false + lokalny działa -> plik czytany i digest tylko w promptcie lokalnym; bez Ollamy -> pominięty"}
+{"id": "audyt-1351-usun-zadanie", "typ": "audyt_1351", "oczekiwane": true, "zrodlo": "1.35.1: usunięcie zadania stałego usuwa też powiązaną notatkę Task (type: Task, tytuł = nazwa) do kosza; brak notatki = no-op; węzły znikają z grafu"}

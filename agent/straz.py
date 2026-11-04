@@ -924,6 +924,73 @@ def recent_alerts(n: int = 3) -> list[dict]:
     return out
 
 
+# --- 1.35.0: archiwum i „wycisz" do panelu Straży -------------------------
+ACK_PATH = STRAZ_DIR / "odczytane.json"
+_ACK_LOCK = threading.Lock()
+
+
+def _load_ack() -> dict:
+    try:
+        data = json.loads(ACK_PATH.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def acknowledged() -> dict:
+    with _ACK_LOCK:
+        return dict(_load_ack())
+
+
+def acknowledge(ts: str) -> bool:
+    """Oznacz wpis dziennika jako przeczytany. Nie dotykamy dziennika ani
+    łańcucha bezpieczeństwa - stan żyje w osobnym, małym pliku."""
+    key = str(ts or "").strip()
+    if not key:
+        return False
+    with _ACK_LOCK:
+        data = _load_ack()
+        data[key] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if len(data) > 500:
+            for old in sorted(data)[:-500]:
+                data.pop(old, None)
+        try:
+            STRAZ_DIR.mkdir(parents=True, exist_ok=True)
+            fsutil.atomic_write_text(ACK_PATH, json.dumps(data, ensure_ascii=False), mode=0o600)
+        except OSError:
+            return False
+    return True
+
+
+def _level(ocena: str) -> str:
+    t = str(ocena or "").lower()
+    if "wysok" in t or "krytycz" in t or "poważn" in t or "powazn" in t:
+        return "wysokie"
+    if "średn" in t or "sredn" in t or "umiark" in t:
+        return "średnie"
+    if "nisk" in t or "niegro" in t or "niegro" in t:
+        return "niskie"
+    return "inne"
+
+
+def history(limit: int = 200) -> list[dict]:
+    """Pełniejsze archiwum obchodów Straży (panel Nadzorcy)."""
+    out = []
+    for line in reversed(_read_tail(str(LOG_PATH), 400_000)):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        co = "; ".join(map(str, e.get("anomalie") or []))[:400]
+        ocena = str(e.get("ocena") or "")[:300]
+        out.append({"ts": str(e.get("ts") or ""), "co": co, "ocena": ocena, "poziom": _level(ocena)})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def status() -> dict:
     with _LOCK:
         st = {"wlaczona": os.environ.get("STRAZ", "1") != "0", "co_s": CO_S,

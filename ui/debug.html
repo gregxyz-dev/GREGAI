@@ -34,6 +34,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="ikona-32.png" />
 <link rel="apple-touch-icon" href="ikona-180.png" />
 <link rel="stylesheet" href="debug.css" />
+<link rel="stylesheet" href="crack.css" />
 </head>
 <body class="segment-debug">
 <div id="debug-segment">
@@ -51,6 +52,7 @@
     <span class="chip" id="statFast"></span>
     <span class="chip" id="statLearned"></span>
     <span class="chip" id="statModel"></span>
+    <span class="chip chip-mono" id="dbgUptime">UPTIME 00:00:00</span>
   </div>
 
     <div class="dbg-hero" id="dbgHero" role="status" aria-live="polite">
@@ -58,13 +60,19 @@
       <div class="dbg-hero-text"><div class="dbg-hero-title" id="dbgHeroTitle">Sprawdzam stan systemu…</div><div class="dbg-hero-sub" id="dbgHeroSub"></div></div>
     </div>
     <nav class="dbg-tabs" role="tablist" aria-label="Sekcje Nadzorcy">
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="przeglad" aria-selected="true"><span aria-hidden="true">🩺</span> Przegląd <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false"><span aria-hidden="true">🧠</span> Co myśli</button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false"><span aria-hidden="true">📚</span> Czego się nauczył</button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false"><span aria-hidden="true">🔐</span> System i dostęp</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="stan" aria-selected="true"><span aria-hidden="true">🩺</span> Stan <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="koryto" aria-selected="false"><span aria-hidden="true">🛤️</span> Koryto</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="modele" aria-selected="false"><span aria-hidden="true">🧩</span> Modele</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="straz" aria-selected="false"><span aria-hidden="true">🛡️</span> Straż</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="budzet" aria-selected="false"><span aria-hidden="true">💵</span> Budżet</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="siec" aria-selected="false"><span aria-hidden="true">📶</span> Sieć</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="evaluacja" aria-selected="false"><span aria-hidden="true">🧪</span> Ewaluacja</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false"><span aria-hidden="true">🧠</span> Myśli</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false"><span aria-hidden="true">📚</span> Nauka</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false"><span aria-hidden="true">🔐</span> System</button>
     </nav>
 
-  <section data-tab="przeglad">
+  <section data-tab="stan">
     <h2>Stan systemu</h2>
     <p class="dbg-intro">Sprzęt, silnik i połączenia GREGAI w jednym miejscu.</p>
     <div class="sysinfo-grid" id="sysinfoGrid"></div>
@@ -73,6 +81,109 @@
       <button id="restartBtn" class="restart-btn" type="button">Zrestartuj GREGAI</button>
       <span id="restartStatus"></span>
     </div>
+  </section>
+
+  <section data-tab="koryto">
+    <h2>Koryto</h2>
+    <p class="dbg-intro">Efektywna trasa przy wadze 1-2 (ROZDZIELNICA): pierwszy zdrowy etap odpowiada teraz, następne są rezerwą.</p>
+    <div class="dbg-pipe" id="korytoPipe"></div>
+    <div class="empty hidden" id="korytoEmpty">Brak danych o korycie.</div>
+    <h2>Ostatnie wywołania</h2>
+    <p class="dbg-intro">Kto odpowiadał i ile to trwało. Bez treści rozmów.</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="korytoHistoria">
+        <thead><tr><th>Czas</th><th>Kto</th><th>Etap</th><th>Sekundy</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="korytoHistoriaEmpty">Brak zapisanych wywołań.</div>
+    <h2>Kto odpowiadał dziś</h2>
+    <div class="dbg-bars" id="korytoBars"></div>
+    <div class="empty hidden" id="korytoBarsEmpty">Dziś jeszcze nikt nie odpowiadał.</div>
+  </section>
+
+  <section data-tab="modele">
+    <h2>Modele</h2>
+    <p class="dbg-intro">Co jest zainstalowane, co siedzi w RAM i ile trwa typowa odpowiedź (mediana z tej przeglądarki).</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="modelTable">
+        <thead><tr><th>Model</th><th>RAM</th><th>Czas</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="modelEmpty">Ollama nie zgłosiła żadnego modelu.</div>
+    <h2>Ostatnie inferencje</h2>
+    <p class="dbg-intro">Model, czas i tempo lokalnych inferencji. Bez promptów i odpowiedzi.</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="modelLog">
+        <thead><tr><th>Czas</th><th>Model</th><th>Sekundy</th><th>Tokeny/s</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="modelLogEmpty">Brak zapisanych inferencji.</div>
+  </section>
+
+  <section data-tab="straz">
+    <h2>Straż</h2>
+    <p class="dbg-intro">Archiwum obchodów bezpieczeństwa (agent/straz.py). „Wycisz” zapisuje tylko znacznik w osobnym pliku - dziennik i łańcuch dowodowy zostają nietknięte.</p>
+    <div class="dbg-filter-row" id="strazFiltry" role="group" aria-label="Filtr poziomu">
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="" aria-pressed="true">Wszystkie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="wysokie" aria-pressed="false">Wysokie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="średnie" aria-pressed="false">Średnie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="niskie" aria-pressed="false">Niskie</button>
+    </div>
+    <ol class="dbg-timeline" id="strazTimeline"></ol>
+    <div class="empty hidden" id="strazTimelineEmpty">Straż nie zgłosiła jeszcze żadnego zdarzenia.</div>
+    <div class="dbg-more-row"><button type="button" class="inspector-btn secondary" id="strazMoreBtn">Pokaż więcej</button></div>
+  </section>
+
+  <section data-tab="budzet">
+    <h2>Budżet Claude</h2>
+    <p class="dbg-intro">Szacunek zużycia dziennego i miesięcznego limitu (KORYTO_BUDZET_* w .env).</p>
+    <div class="dbg-budget" id="budgetBars"></div>
+    <div class="empty hidden" id="budgetEmpty">Brak danych o budżecie.</div>
+    <h2>Wydatki dziś</h2>
+    <div class="dbg-suma" id="budzetSuma"></div>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="budzetTabela">
+        <thead><tr><th>Czas</th><th>Model</th><th>Wejście</th><th>Wyjście</th><th>USD</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="budzetTabelaEmpty">Dziś nie było płatnych wywołań.</div>
+  </section>
+
+  <section data-tab="siec">
+    <h2>Sieć domowa</h2>
+    <p class="dbg-intro">Urządzenia widziane w domu (cache ostatniego skanu). Skan działa w tle i nie blokuje reszty.</p>
+    <div class="dbg-siec-head">
+      <span class="dbg-meta" id="siecMeta">—</span>
+      <button type="button" class="inspector-btn" id="siecSkanBtn">Skanuj teraz</button>
+    </div>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="siecTabela">
+        <thead><tr><th>IP</th><th>Nazwa</th><th>Status</th><th>Ostatnio</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="siecEmpty">Brak urządzeń w cache. Uruchom skan.</div>
+  </section>
+
+  <section data-tab="evaluacja">
+    <h2>Ewaluacja</h2>
+    <p class="dbg-intro">Historia szybkiego eval (offline). „Uruchom” liczy w tle i nie zapisuje historii.</p>
+    <div class="dbg-siec-head">
+      <span class="dbg-meta" id="evalOstatni">—</span>
+      <button type="button" class="inspector-btn" id="evalRunBtn">Uruchom</button>
+    </div>
+    <pre class="teraz-pre hidden" id="evalWynik"></pre>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="evalHistoria">
+        <thead><tr><th>Data</th><th>Tryb</th><th>Wynik</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="evalHistoriaEmpty">Brak zapisanych ewaluacji.</div>
   </section>
 
   <section data-tab="system">

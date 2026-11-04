@@ -42,7 +42,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -62,7 +62,6 @@ import vault as vault_mod  # noqa: E402
 import data as data_mod  # noqa: E402
 import fsutil  # noqa: E402
 import router as router_mod  # noqa: E402
-import koryto as koryto_mod  # noqa: E402
 import learning as learning_mod  # noqa: E402
 import trace as trace_mod  # noqa: E402
 import heartbeat as heartbeat_mod  # noqa: E402
@@ -78,8 +77,12 @@ import sysinfo as sysinfo_mod  # noqa: E402
 import sysop as sysop_mod  # noqa: E402
 import netguard as netguard_mod  # noqa: E402
 import tryby as tryby_mod  # noqa: E402
+import siec as siec_mod  # noqa: E402
+import devtools as devtools_mod  # noqa: E402
 
 UI_DIR = Path(__file__).parent.parent / "ui"
+DATA_DIR = Path(__file__).parent.parent / "data"
+HISTORIA_EVAL_PATH = DATA_DIR / "ewaluacja" / "historia.jsonl"
 
 
 def _read_version() -> str:
@@ -264,7 +267,9 @@ def _error_text(e: Exception) -> str:
 
 
 _JSON_POST_PATHS = frozenset({"/api/chat", "/api/chat/wait", "/api/note", "/api/note/create", "/api/note/delete", "/api/note/przywroc", "/api/debug/learned/zapomnij",
-                              "/api/debug/lan", "/api/namysl/settings", "/api/sources", "/api/upload", "/api/chat/cancel", "/api/rozmowa/usun"})
+                              "/api/debug/lan", "/api/namysl/settings", "/api/sources", "/api/upload", "/api/chat/cancel", "/api/rozmowa/usun",
+                              "/api/standing/nowe", "/api/standing/pauza", "/api/standing/usun", "/api/standing/wyczysc",
+                              "/api/straz/wycisz", "/api/eval/run"})
 
 
 class ChatBusy(Exception):
@@ -404,6 +409,11 @@ def _readonly_message(note) -> str:
 
 def _readonly_reason(note) -> str:
     return "" if _is_writable(note) else ("kodowanie" if note.lossy else "pdf")
+
+
+def _strip_note_bom(raw: str) -> str:
+    """BOM z Windows/edytora przed "#" nie może ukrywać tytułu notatki (1.32.29)."""
+    return vault_mod.strip_bom(raw)
 
 
 # --- Rozmowa przypisana do projektu (ui/app.js: szyna "Projekty" w Rozmowie) ---
@@ -694,11 +704,17 @@ def graph_json():
     v = get_vault()
     nodes = []
     for note in v.notes.values():
+        try:
+            mtime = int(os.stat(note.path).st_mtime)
+        except OSError:
+            mtime = 0
         nodes.append({
             "id": note.slug,
             "title": note.title,
             "type": note.ntype,
             "excerpt": _excerpt(note.text),
+            # 1.35.0: data modyfikacji do filtra/listy w Węzłach i Notatkach.
+            "modyfikacja": mtime,
             # Wychodzące powiązania (1.14.0): inspektor pokazuje je osobno od
             # treści, w dwóch kierunkach (prowadzi do / wskazują na tę notatkę).
             "links": sorted(t for t in note.links if t != note.slug and t in v.notes),
@@ -723,6 +739,151 @@ def graph_json():
         "errors": v.errors,
         "skipped": len(v.skipped),
     }
+
+
+# --- 1.35.0: odczyt stanu dla nowych paneli (Węzły/Nadzorca) ---------------
+def _norm_task_title(text) -> str:
+    t = " ".join(str(text or "").lower().split())
+    for prefix in ("zadanie:", "zadanie "):
+        if t.startswith(prefix):
+            return t[len(prefix):].strip()
+    return t
+
+
+def delete_standing_task(plik: str) -> dict:
+    """1.35.1: usuwa zadanie stałe I jego powiązaną notatkę typu Task.
+    Zadanie (notatka w data/standing_tasks) idzie do kosza przez
+    standing.delete_task; potem szukamy w grafie notatki `type: Task`
+    o tytule równej nazwie/zleceniu zadania (z pominięciem prefiksu
+    „Zadanie:”) i też przenosimy ją do kosza. Brak notatki = no-op."""
+    plik = str(plik or "")
+    detail = None
+    try:
+        for z in standing_mod.list_tasks_detail():
+            if z.get("plik") == plik:
+                detail = z
+                break
+    except Exception:
+        detail = None
+    try:
+        removed = bool(standing_mod.delete_task(plik))
+    except Exception:
+        removed = False
+    note_removed = False
+    if removed and detail:
+        wanted = {_norm_task_title(detail.get("nazwa")), _norm_task_title(detail.get("zlecenie"))}
+        wanted.discard("")
+        try:
+            v = get_vault()
+            for note in list(v.notes.values()):
+                if note.ntype != "Task":
+                    continue
+                if _norm_task_title(note.title) not in wanted:
+                    continue
+                try:
+                    fsutil.move_to_trash(note.path, DATA_DIR / "kosz", f"notatka zadania: {note.title}")
+                    note_removed = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        invalidate_vault_cache()
+    return {"removed": removed, "note_removed": note_removed}
+
+
+def _jsonl_tail(path, limit: int) -> list[dict]:
+    """Ostatnie `limit` poprawnych linii JSONL, najnowsze pierwsze."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _straz_poziom(ocena: str) -> str:
+    t = str(ocena or "").lower()
+    if "wysok" in t or "krytycz" in t or "poważn" in t or "powazn" in t:
+        return "wysokie"
+    if "średn" in t or "sredn" in t or "umiark" in t:
+        return "średnie"
+    if "nisk" in t or "niegro" in t or "niegro" in t:
+        return "niskie"
+    return "inne"
+
+
+def _koryto_kto(stage: str, model_active) -> str:
+    s = str(stage or "")
+    if s == "chmura_rozmowa":
+        return "claude"
+    if s in ("zongler_rozmowa", "zongler_senior_juniorzy"):
+        return "darmowe"
+    if s == "uczen_rozmowa" or s.startswith("ollama") or model_active:
+        return "lokalnie"
+    return ""
+
+
+_SIEC_SCAN_LOCK = threading.Lock()
+_SIEC_SCAN_STATE = {"running": False, "started": 0.0}
+_EVAL_RUN_LOCK = threading.Lock()
+_EVAL_RUN_STATE = {"running": False, "started": "", "wynik": ""}
+
+
+def _siec_scan_worker() -> None:
+    try:
+        siec_mod.run_cycle()
+    except Exception as e:
+        print(f"UWAGA: skan sieci nie powiódł się: {type(e).__name__}: {e}")
+    finally:
+        with _SIEC_SCAN_LOCK:
+            _SIEC_SCAN_STATE["running"] = False
+
+
+def _start_siec_scan() -> bool:
+    with _SIEC_SCAN_LOCK:
+        if _SIEC_SCAN_STATE["running"]:
+            return False
+        _SIEC_SCAN_STATE["running"] = True
+        _SIEC_SCAN_STATE["started"] = time.time()
+    threading.Thread(target=_siec_scan_worker, daemon=True).start()
+    return True
+
+
+def _eval_worker() -> None:
+    wynik = ""
+    try:
+        res = devtools_mod.run_eval(False)
+        wynik = str((res or {}).get("speech") or "")[:20000]
+    except Exception as e:
+        wynik = f"Ewaluacja nie powiodła się: {type(e).__name__}: {e}"
+    finally:
+        with _EVAL_RUN_LOCK:
+            _EVAL_RUN_STATE["running"] = False
+            _EVAL_RUN_STATE["wynik"] = wynik
+
+
+def _start_eval() -> bool:
+    with _EVAL_RUN_LOCK:
+        if _EVAL_RUN_STATE["running"]:
+            return False
+        _EVAL_RUN_STATE["running"] = True
+        _EVAL_RUN_STATE["started"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        _EVAL_RUN_STATE["wynik"] = ""
+    threading.Thread(target=_eval_worker, daemon=True).start()
+    return True
 
 
 # Dłuższy tytuł (cała linia "# ..." może mieć 2 MB) nie buduje wzorca: kompilacja
@@ -1033,6 +1194,26 @@ class Handler(BaseHTTPRequestHandler):
             return False, f"żądanie z innej strony (Sec-Fetch-Site: {site})"
         return True, ""
 
+    def do_DELETE(self):
+        """1.35.1: DELETE /api/standing/<plik> - usuwa zadanie i powiązaną
+        notatkę Task. Ten sam zestaw zabezpieczeń co GET/POST."""
+        ok, why = self._browser_origin_ok()
+        if not ok:
+            self._send_json({"error": f"Odrzucone: {why}"}, status=403)
+            return
+        if not self._auth_gate():
+            return
+        parsed = urlparse(self.path)
+        prefix = "/api/standing/"
+        if not parsed.path.startswith(prefix) or parsed.path == prefix:
+            self._send_json({"error": "Nie znaleziono"}, status=404)
+            return
+        plik = unquote(parsed.path[len(prefix):])
+        try:
+            self._send_json(delete_standing_task(plik))
+        except Exception as e:
+            self._send_json({"error": _error_text(e)}, status=500)
+
     def do_GET(self):
         self._request_read_done()  # żądanie GET jest już w całości wczytane
         parsed = urlparse(self.path)
@@ -1194,9 +1375,10 @@ class Handler(BaseHTTPRequestHandler):
                     # po polsku, do panelu /debug.
                     "router": router_mod.router_status(),
                     # Koryto (1.17.0, agent/koryto.py): JEDNA kolejność etapów
-                    # dla całego myślenia (domyślnie Claude -> darmowa pula ->
-                    # lokalnie) i przełączniki routingu/zadań przez sieć.
-                    "koryto": koryto_mod.status(),
+                    # dla całego myślenia i - od 1.32.30 - efektywna kolejność
+                    # per waga uwagi (rozdzielnica), żeby UI nie mówiło "Claude
+                    # pierwszy", gdy przy wadze 1-2 pytana jest darmowa pula.
+                    "koryto": router_mod.koryto_status(),
                     # Etap "anthropic" koryta (Claude): klucz, model, ile dziś
                     # wywołań z limitu. Bez klucza, nigdy.
                     "cloud": router_mod.cloud_status(),
@@ -1233,6 +1415,186 @@ class Handler(BaseHTTPRequestHandler):
                     # jest nowy wyciek: kto go czyta, już go ma albo jest na tym laptopie.
                     "lan": {"enabled": LAN_MODE, "token_configured": bool(GREGAI_TOKEN), "token": GREGAI_TOKEN},
                 })
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/notes":
+            qs = parse_qs(parsed.query)
+            q = (qs.get("q") or [""])[0].strip()[:200]
+            typ = (qs.get("typ") or [""])[0].strip()[:60]
+            okres = (qs.get("data") or [""])[0].strip()
+            try:
+                limit = max(1, min(200, int((qs.get("limit") or ["100"])[0])))
+            except ValueError:
+                limit = 100
+            try:
+                v = get_vault()
+                notes = [hit.note for hit in v.search_hits(q, limit=400)] if q else list(v.notes.values())
+                now = time.time()
+                out = []
+                for note in notes:
+                    if typ and note.ntype != typ:
+                        continue
+                    try:
+                        mtime = Path(note.path).stat().st_mtime
+                    except OSError:
+                        mtime = 0.0
+                    if okres in ("dzis", "tydzien", "miesiac"):
+                        max_age = {"dzis": 86400, "tydzien": 7 * 86400, "miesiac": 31 * 86400}[okres]
+                        if not mtime or now - mtime > max_age:
+                            continue
+                    out.append({
+                        "id": note.slug,
+                        "tytul": note.title,
+                        "typ": note.ntype,
+                        "modyfikacja": int(mtime),
+                        "okladka": _excerpt(note.text),
+                    })
+                if not q:
+                    out.sort(key=lambda n: (-n["modyfikacja"], n["tytul"].lower()))
+                self._send_json({"notatki": out[:limit], "liczba": len(out[:limit]), "query": q})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/standing":
+            try:
+                self._send_json({"zadania": standing_mod.list_tasks_detail()})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/koryto/historia":
+            qs = parse_qs(parsed.query)
+            try:
+                limit = max(1, min(100, int((qs.get("limit") or ["20"])[0])))
+            except ValueError:
+                limit = 20
+            try:
+                wpisy = []
+                for e in trace_mod.recent(250):
+                    kto = _koryto_kto(e.get("stage"), e.get("model_active"))
+                    if not kto:
+                        continue
+                    wpisy.append({
+                        "ts": str(e.get("ts") or ""),
+                        "kto": kto,
+                        "etap": str(e.get("stage") or ""),
+                        "narzedzie": e.get("tool"),
+                        "sekund": round((float(e.get("took_ms") or 0)) / 1000, 2) if e.get("took_ms") else None,
+                    })
+                    if len(wpisy) >= limit:
+                        break
+                try:
+                    dziennik = json.loads(juggler_mod.JOURNAL_PATH.read_text(encoding="utf-8-sig"))
+                except (OSError, ValueError):
+                    dziennik = {}
+                self._send_json({"wywolania": wpisy, "wywolania_dzis": (dziennik.get("wywolania") or {})})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/straz/historia":
+            qs = parse_qs(parsed.query)
+            try:
+                limit = max(1, min(200, int((qs.get("limit") or ["50"])[0])))
+            except ValueError:
+                limit = 50
+            poziom = (qs.get("poziom") or [""])[0].strip()
+            try:
+                wpisy = []
+                for e in straz_mod.history(limit=200):
+                    if poziom and e.get("poziom") != poziom:
+                        continue
+                    wpisy.append(e)
+                    if len(wpisy) >= limit:
+                        break
+                self._send_json({"wpisy": wpisy, "wyciszone": straz_mod.acknowledged()})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/budget/daily":
+            try:
+                sp = juggler_mod.spent_usd()
+                dzis = time.strftime("%Y-%m-%d", time.gmtime())
+                wydatki = []
+                for rec in _jsonl_tail(juggler_mod.SPEND_LOG_PATH, 500):
+                    ts = str(rec.get("ts") or "")
+                    if not ts.startswith(dzis):
+                        continue
+                    wydatki.append({
+                        "ts": ts,
+                        "model": str(rec.get("model") or ""),
+                        "wejscie": int(rec.get("wejscie") or 0),
+                        "wyjscie": int(rec.get("wyjscie") or 0),
+                        "usd": round(float(rec.get("usd") or 0), 4),
+                    })
+                wydatki.reverse()
+                self._send_json({"budzet": sp, "wydatki": wydatki[:50]})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/network/devices":
+            try:
+                inv = siec_mod.current_inventory()
+                urzadzenia = []
+                for mac, d in inv.items():
+                    if not isinstance(d, dict):
+                        continue
+                    urzadzenia.append({
+                        "mac": str(d.get("mac") or mac),
+                        "ip": (d.get("ip_history") or [""])[-1] if isinstance(d.get("ip_history"), list) else "",
+                        "hostname": str(d.get("hostname") or ""),
+                        "vendor": str(d.get("vendor") or ""),
+                        "online": bool(d.get("online")),
+                        "last_seen": d.get("last_seen"),
+                    })
+                urzadzenia.sort(key=lambda u: (not u["online"], u["hostname"].lower() or u["ip"]))
+                meta = siec_mod.scan_meta()
+                with _SIEC_SCAN_LOCK:
+                    meta = dict(meta)
+                    meta["running"] = bool(_SIEC_SCAN_STATE["running"])
+                self._send_json({"urzadzenia": urzadzenia, "skan": meta})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/eval/history":
+            qs = parse_qs(parsed.query)
+            try:
+                limit = max(1, min(50, int((qs.get("limit") or ["10"])[0])))
+            except ValueError:
+                limit = 10
+            try:
+                rekordy = []
+                for rec in _jsonl_tail(HISTORIA_EVAL_PATH, limit):
+                    wyniki = rec.get("wyniki") if isinstance(rec.get("wyniki"), dict) else {}
+                    pod = rec.get("podsumowanie") if isinstance(rec.get("podsumowanie"), dict) else {}
+                    rekordy.append({
+                        "ts": str(rec.get("ts") or ""),
+                        "tryb": str(rec.get("tryb") or ""),
+                        "wersja": str(rec.get("wersja") or ""),
+                        "przypadki": int(pod.get("przypadki") or len(wyniki)),
+                        "zaliczone": int(pod.get("zaliczone") or sum(1 for v in wyniki.values() if v)),
+                    })
+                with _EVAL_RUN_LOCK:
+                    run = dict(_EVAL_RUN_STATE)
+                self._send_json({"rekordy": rekordy, "uruchomienie": run})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/models/log":
+            qs = parse_qs(parsed.query)
+            try:
+                limit = max(1, min(50, int((qs.get("limit") or ["10"])[0])))
+            except ValueError:
+                limit = 10
+            try:
+                self._send_json({"inferencje": _jsonl_tail(router_mod.OLLAMA_LOG_PATH, limit)})
             except Exception as e:
                 self._send_json({"error": _error_text(e)}, status=500)
             return
@@ -1398,6 +1760,69 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/upload":
             self._handle_upload(raw_body)
+            return
+        if parsed.path == "/api/standing/nowe":
+            try:
+                payload = _parse_body(raw_body) or {}
+                komenda = payload.get("komenda")
+                if not isinstance(komenda, str) or not komenda.strip():
+                    self._send_json({"error": "Podaj treść zadania."}, status=400)
+                    return
+                res = standing_mod.create_task(komenda.strip()[:500])
+                card = (res or {}).get("card") or {}
+                self._send_json({"ok": bool(res.get("ok")), "plik": card.get("plik"),
+                                 "interwal_minut": card.get("interwal_minut"), "speech": res.get("speech")})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/standing/pauza":
+            try:
+                payload = _parse_body(raw_body) or {}
+                plik = str(payload.get("plik") or "")
+                stan = str(payload.get("stan") or "")
+                if stan not in ("wstrzymane", "aktywne"):
+                    self._send_json({"error": "Stan musi być „wstrzymane” albo „aktywne”."}, status=400)
+                    return
+                self._send_json({"ok": standing_mod.set_task_status(plik, stan)})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/standing/usun":
+            try:
+                payload = _parse_body(raw_body) or {}
+                self._send_json(delete_standing_task(str(payload.get("plik") or "")))
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/standing/wyczysc":
+            try:
+                payload = _parse_body(raw_body) or {}
+                self._send_json({"ok": standing_mod.clear_task_history(str(payload.get("plik") or ""))})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/straz/wycisz":
+            try:
+                payload = _parse_body(raw_body) or {}
+                ts = str(payload.get("ts") or "").strip()
+                if not ts:
+                    self._send_json({"error": "Brak znacznika czasu wpisu."}, status=400)
+                    return
+                self._send_json({"ok": straz_mod.acknowledge(ts)})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/network/scan":
+            try:
+                self._send_json({"started": _start_siec_scan()})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+        if parsed.path == "/api/eval/run":
+            try:
+                self._send_json({"started": _start_eval()})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
             return
         self._send_json({"error": "Nie znaleziono"}, status=404)
 
@@ -1678,6 +2103,10 @@ class Handler(BaseHTTPRequestHandler):
                 readonly, reason = True, "kodowanie"
             else:
                 text = fresh
+        try:
+            mtime = int(os.stat(note.path).st_mtime)
+        except OSError:
+            mtime = 0
         self._send_json({
             "id": note.slug,
             "title": note.title,
@@ -1685,6 +2114,7 @@ class Handler(BaseHTTPRequestHandler):
             "text": text,
             "body": _strip_title_and_type(text),
             "version": vault_mod.text_version(text),
+            "modyfikacja": mtime,
             "readonly": readonly,
             "readonly_reason": reason,
         })
@@ -1839,6 +2269,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(raw, str) or not raw.strip():
                     self._send_json({"error": "Brak treści notatki"}, status=400)
                     return
+                # 1.32.29 (audyt #8): BOM z Windows/edytora przed "#" ukrywał
+                # tytuł i typ notatki (find_title/find_type go nie widziały).
+                raw = _strip_note_bom(raw)
+                if not raw.strip():
+                    self._send_json({"error": "Brak treści notatki"}, status=400)
+                    return
                 content = raw.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
                 title = vault_mod.find_title(content) or "Notatka"
                 ntype = vault_mod.find_type(content) or "Note"
@@ -1969,9 +2405,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": _error_text(e)}, status=500)
 
 
+def _trash_name_ok(name: str) -> bool:
+    """Nazwa wpisu w koszu: jeden segment ścieżki, bez przejścia w górę i bez
+    NUL-a, najwyżej 255 bajtów w UTF-8 (limit systemu plików). 1.32.29 (audyt
+    #3): wcześniejszy regex odrzucał poprawne nazwy z nawiasami, przecinkiem,
+    plusem czy ampersandem, więc takiej notatki nie dało się przywrócić."""
+    return fsutil.trash_name_ok(name)
+
+
 def restore_from_trash(name: str) -> dict:
     """1.32.10: przywraca notatkę z kosza na jej dawne miejsce (nie nadpisuje istniejącej)."""
-    if not isinstance(name, str) or not re.fullmatch(r"[\w.\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]{1,300}", name) or name.endswith(".json") or ".." in name:
+    if not _trash_name_ok(name):
         raise ValueError("Nieprawidłowa nazwa wpisu w koszu.")
     src, meta = TRASH_DIR / name, TRASH_DIR / (name + ".json")
     if not src.is_file() or not meta.is_file():

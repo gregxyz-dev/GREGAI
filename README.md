@@ -1,4 +1,4 @@
-# GREGAI 1.32.24
+# GREGAI 1.36.0
 
 Osobista inteligencja strategiczna jednej osoby. Rozmówca nazywa się **GREGAI**
 i mieszka na laptopie: zna Twoje notatki, pamięta to, co mu powiesz
@@ -12,7 +12,7 @@ Bez frameworków, bez procesu budowania.
 - Adres: **http://localhost:7777** (tylko na tym laptopie)
 - Instalacja: **jedna komenda, z dowolnego folderu**: `bash <folder>/install.sh`
   (niżej); system od zera: `INSTALACJA_UBUNTU_26_04.md`
-- Kontrola po instalacji: **`bash check.sh`** (69 kontroli; `install.sh` odpala ją sam)
+- Kontrola po instalacji: **`bash check.sh`** (80 kontroli; `install.sh` odpala ją sam)
 - Decyzje, zakres i bramki 1.0.0 (historia stabilizacji): **`ROADMAP_1.0.md`**
 - Licencja: **MIT** (`LICENSE`)
 
@@ -40,7 +40,14 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.32.24 - nowa sekcja "Wsparcie" (adresy
+**`CHANGELOG.md`**. Najnowsze: 1.36.0 - przygotowanie do publicznego
+repozytorium: `LICENSE` (MIT) z copyrightem "GREGAI contributors",
+`SECURITY.md` z kanałem prywatnego zgłaszania podatności (72 h na
+potwierdzenie, 30 dni na poprawkę), jawnym zakresem i uczciwymi znanymi
+ograniczeniami, uzupełniony `.gitignore` oraz szablony GitHub Issues
+(błąd, propozycja). Wcześniej 1.35.1 - zakładki ZADANIA i NOTATKI (dwa
+nowe segmenty, pięć przełączników) i poprawka martwego węzła po usunięciu
+zadania. Wcześniej 1.32.24 - nowa sekcja "Wsparcie" (adresy
 kryptowalutowe BTC/ETH/SOL, czysto dobrowolne, bez zobowiązań) - to zmiana
 poza zaplanowaną serią pięciu tur open source, na wyraźną prośbę po jej
 zamknięciu. Wcześniej 1.32.23 - przygotowanie pod open source, tura
@@ -178,6 +185,11 @@ krytycznych - żeby zużywać jak najmniej tokenów przy jak najlepszym wyniku.
 Kolejność etapów to jeden wpis `KORYTO=anthropic,darmowe,lokalnie` w `.env`
 (`agent/koryto.py`): etap pominięty nie jest używany, `KORYTO=lokalnie,...`
 odwraca kolejność. Stare `JUGGLER_MODE`/`CLOUD_FALLBACK` są ignorowane.
+
+Lokalny krok "Szkic odpowiedzi" w Namyśle ma własny limit
+`LOKALNY_TIMEOUT` (domyślnie 180 s, minimum 60 s). To osobne ustawienie od
+`CLOUD_TIMEOUT` i `JUGGLER_TIMEOUT`; zmiana lokalnego limitu nie wydłuża
+zapytań do Claude, Groq, Gemini, OpenRouter, Hugging Face ani Cloudflare.
 
 Zablokowane rozmiary (decyzja 2026-10-08, na tę maszynę 16 GB): router
 1.5B, uczeń 1.5B, planer 0.5B. Duży model 3B (decyzja 2026-10-12, zejście
@@ -434,7 +446,9 @@ gregai update ~/Pobrane/GREGAI-x.y.z.zip   # bezpiecznie z paczki: sprawdzenie, 
 gregai rollback     # powrót do kodu sprzed ostatniej aktualizacji z paczki
 gregai install      # instalacja/naprawa od zera (= bash install.sh, te same opcje)
 gregai diagnoza     # internet warstwa po warstwie: co nie działa i jakim poleceniem to naprawić
-gregai eval         # testy regresji (szybkie, bez sieci); gregai eval --zywo --k 3 = prawdziwe modele, pass@k
+gregai eval         # testy regresji (szybkie, bez sieci); gregai eval --id ID = jeden przypadek, gregai eval --zywo --k 3 = prawdziwe modele, pass@k
+gregai weryfikuj    # składnia + szybki eval na czystej kopii, bez sudo, usług i modeli
+gregai wydaj        # paczka bieżącego VERSION: dokumenty, kod, sumy, test rozpakowania (bez zmian w git)
 gregai restart | start | stop | logs [N] | open | version | help
 ```
 
@@ -453,6 +467,23 @@ Wpisz `/` na początku wiadomości, a pojawi się lista (strzałki i Enter wybie
 | `/lekcja [czego]` | szkic lekcji z rozmowy; zapis dopiero po Twoim „tak” |
 | `/lekcje` | zapisane lekcje; `/lekcje usuń 2` |
 | `/model` | kim jest GREGAI i z jakich modeli teraz korzysta |
+
+### Narzędzia deweloperskie w rozmowie (1.32.26)
+
+Te polecenia działają tylko jako bezpośrednia prośba w czacie. Nie uruchamia ich
+model samodzielnie. Wszystkie są tylko do odczytu albo uruchamiają lokalne testy.
+
+| napisz | co robi |
+|---|---|
+| `uruchom testy regresji` / `uruchom eval` | szybki eval offline, bez zapisu historii |
+| `uruchom testy regresji na żywo` | eval z prawdziwymi modelami (`--zywo --k 3`), kosztuje tokeny |
+| `uruchom check.sh` | wynik `check.sh` bez zmian w systemie; pełny audyt nadal wymaga sudo w terminalu, więc bez niego dochodzi krótka kontrola bez sudo |
+| `stan środowiska` / `wersje pakietów` | stan `.venv`, wersje `httpx` i `huawei-lte-api`, Ollama i modele |
+| `status usługi gregai` / `logi gregai` | stan usługi i ostatnie 30 linii dziennika, bez restartu |
+| `sprawdź spójność dokumentacji` | wersje, liczba kontroli i odwołania do plików w README/FUNDAMENT/CHANGELOG |
+
+Kod: `agent/devtools.py`, rejestracja: `agent/capabilities.py`. Każde polecenie
+ma mock w `check.sh` (kontrola 70) i przypadek w `gregai eval`.
 
 Lekcje, które zatwierdzisz, GREGAI stosuje w każdej rozmowie (blok „Teraz”); widać je też
 w Nadzorcy, w zakładce „Czego się nauczył”. Gdy go poprawisz („nie o to”, „jak to...”), sam
@@ -633,6 +664,7 @@ GREGAI/
 ├── agent/
 │   ├── main.py          serwer HTTP + API (graf, notatki, czat, status, debug)
 │   ├── diagnoza.py      diagnoza internetu warstwa po warstwie (/diagnoza, gregai diagnoza, Nadzorca)
+│   ├── devtools.py      narzędzia deweloperskie z rozmowy (eval, check, venv, usługa, dokumentacja; tylko odczyt)
 │   ├── bramka.py        bramka odpowiedzi: kontrola tekstu modelu w kodzie przed wysłaniem do Ciebie
 │   ├── komendy.py       komendy ukośnikowe w czacie (/pomoc, /plan, /badaj, /recenzja, /sprawdz, /lekcja...)
 │   ├── lekcje.py        lekcje z rozmów, zapisywane po Twoim „tak”, stosowane w każdej rozmowie
@@ -672,7 +704,9 @@ GREGAI/
 ├── gregai               JEDNO polecenie: status, check, update, install, start/stop/restart, logs, open
 ├── install.sh           instalacja jedną komendą z dowolnego folderu (9 kroków)
 ├── aktualizuj.sh        po wgraniu nowego kodu; wykrywa przeniesienie folderu
-├── check.sh             kontrole po instalacji (liczbę pokazuje sam skrypt)
+├── check.sh             kontrole po instalacji (liczba kontroli w bannerze skryptu)
+├── weryfikuj.sh         składnia + szybki eval bez sudo i usług (czysta kopia)
+├── wydaj.sh             paczka wydania: dokumenty, kod, strażnik, test rozpakowania
 ├── VERSION              wersja (widoczna w /debug)
 ├── ROADMAP_1.0.md       decyzje 1.0 i bramki, które potwierdza dopiero laptop
 ├── CHANGELOG.md         historia zmian, każde wydanie od 1.1.0
@@ -752,3 +786,17 @@ przydatny i chcesz postawić autorowi kawę, oto adresy kryptowalutowe
   własnymi czcionkami mogą wyjść puste).
 - Poczta i kalendarz nie są podłączone (świadoma decyzja): `brief_me` składa
   podsumowanie z notatek i alertów sieci domowej i mówi to wprost.
+
+## Open Source
+
+GREGAI jest open source (MIT). Kod możesz czytać, uruchamiać, zmieniać i
+rozdawać na warunkach z pliku `LICENSE`:
+
+- **Zgłaszanie błędów:** GitHub Issues w repozytorium
+  (`https://github.com/gregxyz-dev/GREGAI/issues`).
+- **Zgłaszanie podatności:** `SECURITY.md` - **NIE** przez publiczne issue.
+  Zgłoszenie prywatne daje czas na łatkę, zanim dowiedzą się atakujący.
+- **Wymagania:** Ubuntu 24.04+, Python 3.12+, Ollama, Cloudflare WARP.
+  Szczegóły instalacji i wersje zależności: `INSTALACJA_UBUNTU_26_04.md`
+  oraz `requirements.txt`.
+

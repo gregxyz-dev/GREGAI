@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Zgłoszenie podatności
+    url: https://github.com/gregxyz-dev/GREGAI/blob/main/SECURITY.md
+    about: Nie otwieraj publicznego issue. Przeczytaj SECURITY.md i napisz prywatnie.

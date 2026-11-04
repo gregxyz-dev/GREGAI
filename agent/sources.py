@@ -48,6 +48,7 @@ szukanie pliku po nazwie w tych miejscach (find_by_name), żeby
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -84,20 +85,37 @@ _FORBIDDEN_ABS = ("/etc", "/root", "/boot", "/proc", "/sys", "/dev", "/run", "/v
 
 _LOCK = threading.Lock()
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ._ -]+")
-_CHAT_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# % jest dozwolony, bo / i \ kodujemy jako %2F i %5C (1.32.28, audyt #2).
+_CHAT_ID_RE = re.compile(r"[^A-Za-z0-9_.%\-]+")
 GENERAL_CHAT = "ogolna"
 MAX_CHAT_ID = 80
 
 
 def chat_id(raw) -> str:
     """Id rozmowy jako bezpieczny fragment ścieżki: slug projektu (litery,
-    cyfry, kropka, -, _; slug notatki ma rozszerzenie, np. "faktury.md" - kropka
-    zostaje, żeby id po obu stronach, w przeglądarce i tu, było identyczne)
-    albo "ogolna" dla Ogólnej rozmowy / braku / śmieci. Nigdy "..", nigdy
-    kropka na początku: to ma być JEDEN segment ścieżki w data/wgrane/."""
+    cyfry, kropka, -, _, %; slug notatki ma rozszerzenie, np. "faktury.md" -
+    kropka zostaje, żeby id po obu stronach, w przeglądarce i tu, było
+    identyczne) albo "ogolna" dla Ogólnej rozmowy / braku / śmieci. Nigdy
+    "..", nigdy kropka na początku: to ma być JEDEN segment ścieżki w
+    data/wgrane/.
+
+    1.32.28 (audyt #2): "/" i "\" są kodowane, a nie zamieniane na "-".
+    Wcześniej projekty "projekty/klient.md" i "projekty-klient.md" miały
+    ten sam id, czyli wspólne Źródła, wgrane pliki i pamięć rozmowy. Przy
+    przekroczeniu 80 znaków doklejamy skrót całości, żeby dwa różne długie
+    id nie zlepiły się po przycięciu."""
     text = raw.strip() if isinstance(raw, str) else ""
+    # Idempotencja: chat_id() bywa wołany na już oczyszczonym id (main.py ->
+    # źródła -> rozmowa). Kanoniczne %2F/%5C/%25 zostawiamy, a zwykły "%"
+    # w surowej nazwie kodujemy, żeby nie udawał kodowanego "/".
+    if not re.search(r"%2F|%5C|%25", text):
+        text = text.replace("%", "%25")
+    text = text.replace("/", "%2F").replace("\\", "%5C")
     text = _CHAT_ID_RE.sub("-", text)
-    text = re.sub(r"\.{2,}", ".", text).strip("-._")[:MAX_CHAT_ID]
+    text = re.sub(r"\.{2,}", ".", text).strip("-._")
+    if len(text) > MAX_CHAT_ID:
+        digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:8]
+        text = text[: MAX_CHAT_ID - 9].rstrip("-._") + "-" + digest
     return text or GENERAL_CHAT
 
 

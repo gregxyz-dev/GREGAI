@@ -95,6 +95,26 @@
   --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 24px 48px -24px rgba(6, 2, 18, 0.7);
 }
 
+/* --- 1.33.0: tokeny "Stark" (MVP redesign) -------------------------------
+   Nowa paleta jest niezależna od skórek (kadr.css ładuje się później i nadpisuje
+   --bg/--text). Dlatego komponenty 1.33 używają --stark-* wprost, a --accent
+   dostaje :root:root (wyższa specyficzność niż :root z kadr.css), żeby cyan
+   obowiązywał także po nadpisaniach skóry. Fontów nie ruszamy - żyją w kadr.css. */
+:root,
+:root:root {
+  --stark-bg: #0a0a0f;
+  --stark-card: #12121a;
+  --stark-accent: #00d4ff;
+  --stark-ok: #00ff88;
+  --stark-bad: #ff4466;
+  --stark-warn: #ffaa00;
+  --stark-text: #e8e8f0;
+  --stark-dim: #8888a0;
+  --accent: var(--stark-accent);
+  --accent-soft: rgba(0, 212, 255, 0.14);
+  --accent-ring: rgba(0, 212, 255, 0.38);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -221,6 +241,28 @@ body.segment-debug #graph-labels {
   display: none;
 }
 
+/* 1.35.1: dwa nowe segmenty - Zadania i Notatki. Macierz jawna, jak wyżej. */
+body.segment-chat #zadania-segment,
+body.segment-chat #notatki-segment,
+body.segment-nodes #zadania-segment,
+body.segment-nodes #notatki-segment,
+body.segment-debug #zadania-segment,
+body.segment-debug #notatki-segment,
+body.segment-zadania #chat-segment,
+body.segment-zadania #nodes-segment,
+body.segment-zadania #debug-segment,
+body.segment-zadania #notatki-segment,
+body.segment-zadania #graph-canvas,
+body.segment-zadania #graph-labels,
+body.segment-notatki #chat-segment,
+body.segment-notatki #nodes-segment,
+body.segment-notatki #debug-segment,
+body.segment-notatki #zadania-segment,
+body.segment-notatki #graph-canvas,
+body.segment-notatki #graph-labels {
+  display: none;
+}
+
 /* Przejście między segmentami nie ma być cięciem na zero - segment, który
    właśnie staje się widoczny (display:none -> coś widocznego budzi
    animację od początku), dostaje jeden spokojny wjazd. Jedna krzywa, jeden
@@ -238,7 +280,9 @@ body.segment-debug #graph-labels {
 
 body.segment-chat #chat-segment,
 body.segment-nodes #nodes-segment,
-body.segment-debug #debug-segment {
+body.segment-debug #debug-segment,
+body.segment-zadania #zadania-segment,
+body.segment-notatki #notatki-segment {
   animation: segment-in var(--dur-slow) var(--ease-standard);
 }
 
@@ -1096,12 +1140,6 @@ select.modal-input {
 }
 
 .pending-status-label {
-  white-space: nowrap;
-}
-
-.pending-status-timer {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -2358,3 +2396,295 @@ a.web-title:hover {
   .sources-remove { min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
 .namysl-who, span.namysl-who, .namysl-popover-help, .namysl-popover-hint, kbd { font-size: 12px !important; }
+
+/* ============================================================================
+   1.33.0 - MVP "Stark": stepper Namysłu, oddech faz, glow, kopiowanie.
+   Zasady: tylko klasy (CSP nie dopuszcza <style>/style=""), animacje wyłącznie
+   na transform/opacity, a globalny prefers-reduced-motion (styles.css:117)
+   wyłącza je wszystkie bez wyjątków.
+   ========================================================================== */
+
+/* --- Stepper 6 faz nad composerem (index.html: #namysl-track) --- */
+.nt-track {
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  padding: 8px;
+  border: 1px solid rgba(0, 212, 255, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.05), rgba(0, 212, 255, 0.012));
+  transition: opacity 200ms ease-out;
+}
+.nt-track.hidden { display: none; }
+.nt-track.done { opacity: 0.62; }
+
+.nt-track-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--stark-dim);
+}
+.nt-track-title {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stark-accent);
+}
+.nt-track-timer {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--stark-text);
+}
+.nt-track-eta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--stark-dim);
+}
+.nt-track-eta.hidden { display: none; }
+
+.nt-track-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nt-track-step {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--stark-dim);
+  font-size: 11px;
+  line-height: 1.2;
+  transition: color 200ms ease-out;
+  transform-origin: 50% 100%;
+}
+.nt-track-dot {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(136, 136, 160, 0.28);
+  transform-origin: 50% 50%;
+  transition: background 200ms ease-out, opacity 200ms ease-out;
+}
+.nt-track-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nt-track-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.85;
+  min-height: 12px;
+}
+
+.nt-track-step.active { color: var(--stark-accent); animation: nt-breathe 3s ease-in-out infinite; }
+.nt-track-step.active .nt-track-dot { background: var(--stark-accent); animation: nt-dot-breathe 3s ease-in-out infinite; }
+.nt-track-step.active .nt-track-name::before { content: "\2022  "; color: var(--stark-accent); }
+.nt-track-step.done .nt-track-dot { background: var(--stark-ok); opacity: 0.5; }
+.nt-track-step.done .nt-track-name::before { content: "\2713  "; color: var(--stark-ok); }
+.nt-track-step.skip { opacity: 0.65; }
+.nt-track-step.skip .nt-track-dot { background: transparent; border-top: 1px dashed rgba(136, 136, 160, 0.55); }
+.nt-track-step.skip .nt-track-name::before { content: "\2014  "; }
+.nt-track-step.err { color: var(--stark-bad); }
+.nt-track-step.err .nt-track-dot { background: var(--stark-bad); }
+.nt-track-step.err .nt-track-name::before { content: "\2717  "; color: var(--stark-bad); }
+
+@keyframes nt-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+@keyframes nt-dot-breathe {
+  0%, 100% { transform: scaleY(1); opacity: 0.75; }
+  50% { transform: scaleY(1.9); opacity: 1; }
+}
+
+/* Oś faz w dymku: stan błędu (gdy fazy nie uratował nawet lokalny model). */
+.ntl-step.err .ntl-dot { background: var(--stark-bad); box-shadow: 0 0 0 3px rgba(255, 68, 102, 0.18); }
+.ntl-step.err .ntl-name { color: var(--stark-bad); }
+.ntl-step.active .ntl-dot { background: var(--stark-accent); box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.16); }
+
+/* --- Oddech tła za kartą odpowiedzi (tylko gdy GREGAI pracuje) --- */
+.chat-bubble.assistant.pending {
+  position: relative;
+  isolation: isolate;
+}
+.chat-bubble.assistant.pending::after {
+  content: "";
+  position: absolute;
+  inset: -22px;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 28px;
+  background: radial-gradient(60% 80% at 30% 50%, rgba(0, 212, 255, 0.55), transparent 70%);
+  opacity: 0.03;
+  animation: nt-glow 6s ease-in-out infinite;
+}
+@keyframes nt-glow {
+  0%, 100% { opacity: 0.03; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.06; transform: translate3d(0, -6px, 0) scale(1.02); }
+}
+
+/* --- Kopiowanie: ✓ na 1,5 s (JS dodaje .copied) --- */
+.chat-copy.copied,
+.chat-code-copy.copied {
+  color: var(--stark-ok);
+  border-color: rgba(0, 255, 136, 0.45);
+  opacity: 1;
+}
+
+/* --- Mikrointerakcje: hover 1.1, focus cyan (globalny :focus-visible
+   w sistem.css dziedziczy --accent, więc wystarczy remap tokenu). --- */
+@media (hover: hover) {
+  button:not(:disabled):hover { filter: brightness(1.1); }
+}
+button { transition: filter 150ms ease-out; }
+
+@media (max-width: 420px) {
+  .nt-track { padding: 6px 8px; }
+  .nt-track-name { font-size: 10px; }
+  .nt-track-time { font-size: 9px; }
+}
+
+/* 1.33.0: linia "…przetwarzam (Ns)" pod aktywną fazą osi w dymku. */
+.ntl-sub.ntl-hb {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+/* ============================================================================
+   1.33.1 - typografia bazowa i toasty Straży.
+   ========================================================================== */
+:root:root { --t-body: 15px; }
+html body { font-size: 15px; line-height: 1.6; }
+h1 { font-size: 22px; line-height: 1.3; }
+h2 { font-size: 20px; line-height: 1.3; }
+h3 { font-size: 18px; line-height: 1.3; }
+small { font-size: 12px; }
+@media (max-width: 760px) {
+  html body { font-size: 14px; }
+}
+
+/* --- Toasty Straży (zamiast alertu inline w #chat-messages) --- */
+.straz-toasts {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.straz-toast {
+  pointer-events: auto;
+  padding: 16px;
+  border: 1px solid rgba(0, 212, 255, 0.22);
+  border-left: 3px solid var(--stark-warn);
+  border-radius: 12px;
+  background: var(--stark-card);
+  color: var(--stark-text);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  transform: translateX(100%);
+  transition: transform 300ms ease-out, opacity 300ms ease-out;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.straz-toast[data-severity="high"] { border-left-color: var(--stark-bad); }
+.straz-toast[data-severity="medium"] { border-left-color: var(--stark-warn); }
+.straz-toast[data-severity="low"] { border-left-color: var(--stark-accent); }
+.straz-toast.in { opacity: 1; transform: translateX(0); }
+.straz-toast.out { opacity: 0; transform: translateX(100%); }
+
+.straz-toast-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.straz-toast-ico { flex: none; }
+.straz-toast-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stark-accent);
+}
+.straz-toast[data-severity="high"] .straz-toast-title { color: var(--stark-bad); }
+.straz-toast-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--stark-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.straz-toast-close:hover { color: var(--stark-text); }
+.straz-toast-body {
+  margin-bottom: 16px;
+  color: var(--stark-text);
+  word-break: break-word;
+}
+.straz-toast-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.straz-toast-actions button {
+  min-height: 32px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 212, 255, 0.28);
+  background: transparent;
+  color: var(--stark-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.straz-toast-actions .straz-toast-ignore {
+  border-color: rgba(136, 136, 160, 0.35);
+  color: var(--stark-dim);
+}
+
+.drawer-alert-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .straz-toasts { top: 8px; right: 8px; left: 8px; width: auto; }
+  .straz-toast-actions button, .straz-toast-close { min-height: 44px; }
+  .straz-toast-close { min-width: 44px; }
+}
+
+/* prefers-reduced-motion: bez slide, tylko łagodny fade. Reguła jest
+   późniejsza i bardziej szczegółowa niż globalne wyłączenie animacji. */
+@media (prefers-reduced-motion: reduce) {
+  .straz-toast {
+    transform: none;
+    transition: opacity 150ms ease-out !important;
+  }
+  .straz-toast.in { opacity: 1; }
+  .straz-toast.out { opacity: 0; }
+}
+
+/* 1.33.3 (audyt #18): stepper jest klikalny (otwiera panel Postęp), bo
+   przejął też funkcję pigułki z nagłówka; jeden timer jest tylko tutaj. */
+.nt-track.nt-track-clickable { cursor: pointer; }
+.nt-track.nt-track-clickable:hover { border-color: rgba(0, 212, 255, 0.38); }

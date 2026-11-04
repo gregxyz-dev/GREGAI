@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +40,23 @@ MESSAGE_PREVIEW_LIMIT = 300
 
 _CACHE: list[dict] | None = None
 _LOCK = threading.Lock()
+# 1.32.28 (audyt #1): eval --zywo nie może dopisywać do produkcyjnego śladu.
+# Wyłączenie jest wątkowo-lokalne, żeby nie zatrzymało serca ani innych rozmów.
+_SUPPRESS = threading.local()
+
+
+@contextmanager
+def suppress():
+    previous = getattr(_SUPPRESS, "on", False)
+    _SUPPRESS.on = True
+    try:
+        yield
+    finally:
+        _SUPPRESS.on = previous
+
+
+def suppressed() -> bool:
+    return bool(getattr(_SUPPRESS, "on", False))
 
 
 def _now_iso() -> str:
@@ -60,9 +78,9 @@ def _normalize_entry(e: dict) -> None:
         e["took_ms"] = None
 
 
-def _load() -> list[dict]:
+def _load(fresh: bool = False) -> list[dict]:
     global _CACHE
-    if _CACHE is not None:
+    if _CACHE is not None and not fresh:
         return _CACHE
     data = []
     if TRACE_PATH.exists():
@@ -84,7 +102,9 @@ def _load() -> list[dict]:
 
 def _save() -> None:
     # 1.32.10 (audyt tura 14, SSD): bez wcięć - plik przepisywany przy każdej wiadomości był ~3x większy.
-    fsutil.atomic_write_text(TRACE_PATH, json.dumps(_CACHE, ensure_ascii=False, separators=(",", ":")))
+    # 1.32.28: zamek międzyprocesowy (eval/check nie nadpisze śladu serwisu).
+    with fsutil.data_lock():
+        fsutil.atomic_write_text(TRACE_PATH, json.dumps(_CACHE, ensure_ascii=False, separators=(",", ":")))
 
 
 # Sekrety WPISANE w rozmowie (nie tylko te z .env): klucze API o znanych
@@ -123,6 +143,13 @@ _TYPED_SECRETS = (
     (re.compile(r"\b(?:sk-ant-[A-Za-z0-9_\-]{10,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
                 r"|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9\-]{10,}|AIza[0-9A-Za-z_\-]{30,}"
                 r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,})"), "***"),
+    # 1.33.2 (audyt #11): prefiksy, które MUSZĄ być maskowane także w tekście
+    # wychodzącym do internetu (outbound=True). Wcześniej `sk-or-...` (OpenRouter)
+    # i `gsk_...` (Groq) przechodziły, bo wzorzec `sk-[A-Za-z0-9]{20,}` nie zna
+    # myślników, a `ssh-rsa` nie był objęty żadnym wąskim wzorcem.
+    (re.compile(r"\b(?:sk-or-[A-Za-z0-9_\-]{16,}|gsk_[A-Za-z0-9_\-]{20,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}"
+                r"|xox[baprs]-[A-Za-z0-9\-]{10,}|AKIA[0-9A-Z]{16}"
+                r"|ssh-(?:rsa|ed25519)[ \t]+[A-Za-z0-9+/=]{16,})"), "***"),
     (re.compile(r"\b(?:sk_(?:live|test)_[A-Za-z0-9]{16,}|rk_live_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_\-]{16,}|npm_[A-Za-z0-9]{30,}"
                 r"|hf_[A-Za-z0-9]{30,}|pypi-[A-Za-z0-9_\-]{20,}|ya29\.[A-Za-z0-9_\-]{20,})"), "***"),
     (re.compile(r"(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=\-]{12,}"), r"\1***"),
@@ -181,7 +208,7 @@ def mask(text: str, outbound: bool = False) -> str:
         text = text.encode("utf-8", "replace").decode("utf-8")
         try:
             import sysop
-            text = sysop.mask_secrets(text)
+            text = sysop.mask_secrets(text, outbound=outbound)
         except ImportError:
             pass
         return redact_typed(text, outbound=outbound)
@@ -213,6 +240,8 @@ def record(stage: str, message: str, tool: str | None = None, took_ms: float | N
     jednego miejsca (_finish w route()), więc każda ścieżka przez router
     ma ten sam komplet pól; wpisy serca (agent/heartbeat.py) idą tą samą
     funkcją, z własnymi etapami (serce_*)."""
+    if suppressed():
+        return
     entry = {
         "ts": _now_iso(),
         "stage": stage,
@@ -225,18 +254,21 @@ def record(stage: str, message: str, tool: str | None = None, took_ms: float | N
     # Ślad jest dodatkiem do rozmowy: błąd zapisu (pełny dysk) nie może jej psuć.
     try:
         with _LOCK:
-            entries = _load()
-            entries.append(entry)
-            try:
-                if len(entries) > MAX_TRACE_ENTRIES:
-                    del entries[: len(entries) - MAX_TRACE_ENTRIES]
-                _save()
-            except (OSError, ValueError, TypeError):
-                # Wpis, którego nie udało się zapisać (pełny dysk, znak spoza UTF-8),
-                # nie może zostać w pamięci: zatruwałby każdy kolejny zapis.
-                if entries and entries[-1] is entry:
-                    entries.pop()
-                raise
+            with fsutil.data_lock():
+                # Świeży odczyt pod zamkiem: inny proces mógł dopisać wpis od
+                # ostatniego wczytania cache. Bez tego ostatni pisarz gubił cudze wpisy.
+                entries = _load(fresh=True)
+                entries.append(entry)
+                try:
+                    if len(entries) > MAX_TRACE_ENTRIES:
+                        del entries[: len(entries) - MAX_TRACE_ENTRIES]
+                    _save()
+                except (OSError, ValueError, TypeError):
+                    # Wpis, którego nie udało się zapisać (pełny dysk, znak spoza UTF-8),
+                    # nie może zostać w pamięci: zatruwałby każdy kolejny zapis.
+                    if entries and entries[-1] is entry:
+                        entries.pop()
+                    raise
     except (OSError, ValueError, TypeError) as e:
         print(f"UWAGA: nie zapisano śladu decyzji: {e}")
 
@@ -269,18 +301,21 @@ def mark_last_corrected() -> None:
     ostatni wpis routingu dostaje extra.skorygowane=true, żeby training/build_dataset.py
     nie uczył na decyzji, którą sam użytkownik uznał za błędną. Błąd zapisu
     nie psuje rozmowy."""
+    if suppressed():
+        return
     try:
         with _LOCK:
-            entries = _load()
-            i = _last_decision_index(entries)
-            if i is None:
-                return
-            extra = entries[i].get("extra")
-            if not isinstance(extra, dict):
-                extra = {}
-            extra["skorygowane"] = True
-            entries[i]["extra"] = extra
-            _save()
+            with fsutil.data_lock():
+                entries = _load(fresh=True)
+                i = _last_decision_index(entries)
+                if i is None:
+                    return
+                extra = entries[i].get("extra")
+                if not isinstance(extra, dict):
+                    extra = {}
+                extra["skorygowane"] = True
+                entries[i]["extra"] = extra
+                _save()
     except (OSError, ValueError) as e:
         print(f"UWAGA: nie oznaczono korekty w śladzie: {e}")
 

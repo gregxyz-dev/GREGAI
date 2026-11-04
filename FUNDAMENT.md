@@ -55,6 +55,8 @@ agent/   serwer (Python stdlib)
   persona.py      krótki prompt ucznia, reguły stylu
   pogoda.py       pogoda (Open-Meteo) i słońce liczone w kodzie (1.30.31)
   diagnoza.py     diagnoza internetu warstwa po warstwie (1.32.0)
+  devtools.py     narzędzia deweloperskie z rozmowy: eval, check, venv/pakiety,
+                  stan usługi, spójność dokumentacji (1.32.26; tylko odczyt)
   bramka.py       bramka odpowiedzi: oceniacze w kodzie na tekst modelu (1.32.0)
   komendy.py      komendy ukośnikowe; lekcje.py - lekcje po zgodzie (1.32.0)
   ewaluacja.py    testy regresji `gregai eval`, pass@k (1.32.0)
@@ -69,15 +71,17 @@ ui/      przeglądarka: index.html + app.js (rozmowa, Węzły, szufladki),
          dawny motyw.css scalony w 1.19.0, debug.css osobno dla /debug
 training/ trening trzech własnych modeli (router, uczeń, planer)
 install.sh / aktualizuj.sh / check.sh / gregai   instalacja, aktualizacja,
-         kontrola (50), polecenie zbiorcze (z `update PLIK.zip` i `rollback`)
+         kontrola (liczbę pokazuje check.sh), polecenie zbiorcze (z `update PLIK.zip` i `rollback`)
 data/    stan działania (NIGDY w paczce): ślad, pary destylacji, nauka,
          notatki pamięci, dziennik SYSOP
 ```
 
 API (`agent/main.py`, wszystko za `_authorized` + kontrolą Origin): `/api/chat`
 (+ `/api/chat/progress`, oczekiwanie na zadanie), `/api/graph`, `/api/note`,
-`/api/sources`, `/api/namysl/settings`, `/api/rozmowa/powrot`, `/api/status`,
-`/api/system_info`, `/api/debug/*`.
+`/api/notes`, `/api/standing`, `/api/koryto/historia`, `/api/straz/historia`,
+`/api/budget/daily`, `/api/network/devices`, `/api/eval/history`,
+`/api/models/log`, `/api/sources`, `/api/namysl/settings`, `/api/rozmowa/powrot`,
+`/api/status`, `/api/system_info`, `/api/debug/*`.
 
 ## 3. Droga jednej wiadomości (`router.route`)
 

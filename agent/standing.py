@@ -354,6 +354,110 @@ def active_tasks() -> list[tuple[str, int]]:
     return out
 
 
+def list_tasks_detail() -> list[dict]:
+    """1.35.0: strukturalna lista zadań stałych do panelu w przeglądarce
+    (GET /api/standing). Tylko odczyt - niczego nie zmienia."""
+    out = []
+    for p in _all_task_paths():
+        meta = _safe_parse(p)
+        if not meta:
+            continue
+        sections = meta.get("_sections", {})
+        dziennik = []
+        for line in reversed(str(sections.get("Dziennik sprawdzeń", "")).splitlines()):
+            line = line.strip()
+            if not line.startswith("- "):
+                continue
+            body = line[2:].strip()
+            ts = body.split(" ", 1)[0] if body else ""
+            wynik = "alert" if body.rsplit("| alert:", 1)[-1].strip() == "tak" else "ok"
+            dziennik.append({"ts": ts, "wynik": wynik, "opis": body[:300]})
+            if len(dziennik) >= 20:
+                break
+        out.append({
+            "plik": p.name,
+            "nazwa": str(meta.get("tytul") or p.stem),
+            "zlecenie": str(sections.get("Zlecenie", "")).strip()[:500],
+            "status": str(meta.get("status") or ""),
+            "interwal_minut": _interval_of(meta),
+            "utworzono": str(meta.get("utworzono") or ""),
+            "ostatnie": str(meta.get("ostatnie_sprawdzenie") or ""),
+            "nastepne": str(meta.get("nastepne_sprawdzenie") or ""),
+            "alertow": int(meta.get("alertow") or 0),
+            "dziennik": dziennik,
+        })
+    return out
+
+
+def _task_file(plik: str) -> Path | None:
+    """Nazwa pliku zadania z API: tylko goła nazwa .md w TASKS_DIR (bez ścieżek)."""
+    name = str(plik or "").strip()
+    if not name.endswith(".md") or Path(name).name != name:
+        return None
+    path = TASKS_DIR / name
+    return path if path.is_file() else None
+
+
+def set_task_status(plik: str, status: str) -> bool:
+    """1.35.0: pauza/wznowienie/stop zadania z panelu (bez czatu).
+    Zmienia wyłącznie `status` w nagłówku notatki; treść i dziennik zostają."""
+    if status not in ("aktywne", "wstrzymane", "zakończone"):
+        return False
+    path = _task_file(plik)
+    if not path:
+        return False
+    with _TASK_LOCK:
+        try:
+            raw = path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return False
+        meta = _parse_note(raw)
+        sections = meta.get("_sections", {})
+        if not sections.get("Zlecenie", "").strip():
+            return False
+        meta["status"] = status
+        try:
+            fsutil.atomic_write_text(path, _render_note(meta, sections), mode=0o644)
+        except OSError:
+            return False
+    return True
+
+
+def clear_task_history(plik: str) -> bool:
+    """1.35.1: czyści sekcję Dziennik sprawdzeń (panel Zadania)."""
+    path = _task_file(plik)
+    if not path:
+        return False
+    with _TASK_LOCK:
+        try:
+            raw = path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return False
+        meta = _parse_note(raw)
+        sections = meta.get("_sections", {})
+        if not sections.get("Zlecenie", "").strip():
+            return False
+        sections["Dziennik sprawdzeń"] = ""
+        try:
+            fsutil.atomic_write_text(path, _render_note(meta, sections), mode=0o644)
+        except OSError:
+            return False
+    return True
+
+
+def delete_task(plik: str) -> bool:
+    """1.35.1: przenosi notatkę zadania do kosza (panel Zadania → Usuń)."""
+    path = _task_file(plik)
+    if not path:
+        return False
+    with _TASK_LOCK:
+        try:
+            fsutil.move_to_trash(path, DATA_DIR / "kosz", f"zadanie stałe {path.name}")
+        except OSError:
+            return False
+    return True
+
+
 def list_tasks() -> dict:
     active = active_tasks()
     if not active:
@@ -610,10 +714,11 @@ def _judge_reply(message: str, last_provider: str | None, local_only: bool = Fal
         internet_ok = False
     errors = []
     if internet_ok:
-        # Pierwszy etap sieciowy KORYTA, który ma klucz (przegląd 1.18.0: dotąd
-        # "anthropic" na sztywno, więc KORYTO=darmowe,lokalnie z kluczem Claude
-        # w .env i tak płaciło Claude za ocenę).
-        etap = next((e for e in koryto_mod.network_order() if juggler_mod.providers_pool(e)), None)
+        # Pierwszy etap DOZWOLONY przez politykę, który ma klucz (1.32.30, audyt #5:
+        # ta sama kolejność co w rozmowie - samodopasowanie na wadze tła). Etykieta
+        # etapu służy tylko do komunikatu błędu; samo wywołanie i tak idzie polityką.
+        etapy = juggler_mod.samodopasowanie() or koryto_mod.network_order()
+        etap = next((e for e in etapy if juggler_mod.providers_pool(e)), None)
         if etap:
             try:
                 # 1.32.4: samodopasowanie (darmowa pula, Claude dopiero gdy ona zawiedzie).

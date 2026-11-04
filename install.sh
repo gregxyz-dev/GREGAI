@@ -65,15 +65,46 @@
 # (blokada złośliwych domen), domyślnej polityki ufw (wychodzące dozwolone),
 # pakietów (w tym cloudflare-warp z /etc/apt/sources.list.d/cloudflare-client.list)
 # i Ollamy; bez --no-host także: /etc/systemd/logind.conf.d/gregai.conf, swapu
-# (/swap.img + /etc/fstab) i ustawienia braku usypiania (gsettings). Biblioteka
-# huawei-lte-api (pip --user) tylko gdy w .env są dane routera. Starą usługę
+# (/swap.img + /etc/fstab) i ustawienia braku usypiania (gsettings). Zależności
+# huawei-lte-api i httpx[http2] instaluje do venv projektu (.venv), nie do systemu.
+# Starą usługę
 # webai i jej regułę sudo odsuwa (końcówka .stare), niczego nie kasuje.
 # Uruchamiane przez `sh install.sh` (dash) skrypt by się wysypał: wymagany bash.
-[ -n "${BASH_VERSION:-}" ] || { echo "Użyj bash, nie sh:  bash $0"; exit 1; }
+[ -n "${BASH_VERSION:-}" ] || { err "Użyj bash, nie sh:  bash $0"; exit 1; }
 set -euo pipefail
 
+# Liczniki wyjścia: zaskakująco dużo danych mija bez przemyślanego prezentowania.
+OK_N=0; WARN_N=0; ERR_N=0
+ERROR_LIST=()
+CURRENT_STEP="start"
+SUMMARY_DONE=0
+
+ok() { OK_N=$((OK_N + 1)); printf '\033[32m[OK]   \033[0m%s\n' "$*"; }
+warn() { WARN_N=$((WARN_N + 1)); printf '\033[33m[UWAGA] \033[0m%s\n' "$*"; }
+err() {
+  ERR_N=$((ERR_N + 1))
+  ERROR_LIST+=("[$CURRENT_STEP] $*")
+  printf '\033[1;31m[BŁĄD]\033[0m %s\n' "$*"
+}
+summary() {
+  [ "$SUMMARY_DONE" = "0" ] || return 0
+  SUMMARY_DONE=1
+  if [ "$ERR_N" -eq 0 ] && [ "$WARN_N" -eq 0 ]; then return 0; fi
+  printf '\n\033[1;36m== Podsumowanie: OK %d / UWAGA %d / BŁĄD %d\033[0m\n' "$OK_N" "$WARN_N" "$ERR_N"
+  if [ "$ERR_N" -gt 0 ]; then
+    printf '\033[1;31m== Błędy:\033[0m\n'
+    local i=1 e
+    for e in "${ERROR_LIST[@]:-}"; do
+      [ -n "$e" ] || continue
+      printf '\033[1;31m  %d. %s\033[0m\n' "$i" "$e"
+      i=$((i + 1))
+    done
+  fi
+}
+trap 'summary || true' EXIT
+
 if [ "$(id -u)" -eq 0 ]; then
-  echo "Uruchom jako zwykły użytkownik, BEZ sudo:  bash install.sh"
+  err "Uruchom jako zwykły użytkownik, BEZ sudo:  bash install.sh"
   echo "(o hasło do sudo skrypt zapyta sam). Powód: usługa GREGAI, jej pliki i"
   echo "rejestracja Cloudflare WARP muszą należeć do Twojego konta, nie do roota."
   exit 1
@@ -89,7 +120,7 @@ for _a in "$@"; do
     --od-zera) FROM_SCRATCH=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     -h|--help) awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "Nieznana opcja: $_a  (bash install.sh --help)"; exit 2 ;;
+    *) err "Nieznana opcja: $_a  (bash install.sh --help)"; exit 2 ;;
   esac
 done
 [ "${GREGAI_SKIP_HOST:-0}" = "1" ] && DO_HOST=0
@@ -99,9 +130,12 @@ INTERACTIVE=0; [ -t 0 ] && [ "$ASSUME_YES" = "0" ] && INTERACTIVE=1
 # kształt któregoś z nich -> podbij numer: aktualizuj.sh porówna go z plikami
 # na dysku i powie, że trzeba uruchomić install.sh (1.19.0, audyt systemu).
 GREGAI_SZABLON=5
-log()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-ok()   { printf '   \033[32mOK\033[0m %s\n' "$*"; }
-warn() { printf '   \033[33mUWAGA\033[0m %s\n' "$*"; }
+log() {
+  printf '\n\033[1;36m== %s\033[0m\n\n' "$*"
+  local step
+  step="${1%% *}"
+  if [[ "$step" =~ ^[1-9]/9$ ]]; then CURRENT_STEP="$step"; fi
+}
 need_sudo() { if [ "$(id -u)" -ne 0 ]; then sudo "$@"; else "$@"; fi; }
 # Zapis treści ze STDIN do pliku z prawami roota, BEZ `tee`. Ubuntu 26.04 ma
 # `tee` z uutils coreutils (Rust), które pod sudo nie potrafi zapisać pliku
@@ -165,11 +199,11 @@ relocate_and_continue() {
     else target="$HOME/Dokumenty/GREGAI"; fi
   fi
   if [ -n "${GREGAI_RELOCATED_FROM:-}" ]; then
-    echo "Miejsce docelowe $ROOT też nie nadaje się ($why). Ustaw GREGAI_HOME na zwykły katalog w domu."; exit 1
+    err "Miejsce docelowe $ROOT też nie nadaje się ($why). Ustaw GREGAI_HOME na zwykły katalog w domu."; exit 1
   fi
   [ "$target" != "$ROOT" ] || return 0
-  case "$target/" in "$ROOT"/*) echo "Cel $target leży wewnątrz $ROOT - wskaż inny (GREGAI_HOME)."; exit 1;; esac
-  case "$ROOT/" in "$target"/*) echo "$ROOT leży wewnątrz celu $target - wskaż inny (GREGAI_HOME)."; exit 1;; esac
+  case "$target/" in "$ROOT"/*) err "Cel $target leży wewnątrz $ROOT - wskaż inny (GREGAI_HOME)."; exit 1;; esac
+  case "$ROOT/" in "$target"/*) err "$ROOT leży wewnątrz celu $target - wskaż inny (GREGAI_HOME)."; exit 1;; esac
   log "Ten folder nie nadaje się na stałe miejsce GREGAI"
   echo "   $ROOT"
   echo "   Powód: $why."
@@ -191,7 +225,7 @@ relocate_and_continue() {
 if [ "$FORCE_HERE" != "1" ] && why="$(bad_location "$ROOT")"; then
   relocate_and_continue "$why"
 elif [ "$FORCE_HERE" = "1" ] && why="$(bad_location "$ROOT")"; then
-  echo "UWAGA (--here): $why. Instaluję mimo to, na Twoją odpowiedzialność."
+  warn "(--here): $why. Instaluję mimo to, na Twoją odpowiedzialność."
 fi
 
 ENV_FILE="$ROOT/.env"
@@ -200,7 +234,7 @@ ENV_FILE="$ROOT/.env"
 # Twoje ustawienia i dane - bez tego zatrzymania usługa przepięłaby się na pusty folder
 # (nowy token, bez klucza API, bez pamięci i notatek). Ta sama rada co w aktualizuj.sh.
 if [ -n "$PREV_ROOT" ] && [ "$PREV_ROOT" != "$ROOT" ] && [ -f "$PREV_ROOT/.env" ] && [ ! -f "$ROOT/.env" ]; then
-  echo "UWAGA: GREGAI jest zainstalowany w: $PREV_ROOT (tam są Twoje ustawienia .env i dane),"
+  warn "GREGAI jest zainstalowany w: $PREV_ROOT (tam są Twoje ustawienia .env i dane),"
   echo "       a ten folder ($ROOT) ich nie ma. Nie przepinam usług na pusty folder."
   echo "  Nowa wersja kodu na starym miejscu:  gregai update <paczka.zip>"
   echo "  Przeniesienie z danymi:              cp -a \"$PREV_ROOT\"/{.env,data,memory,notatki} \"$ROOT\"/ && bash \"$ROOT/install.sh\""
@@ -287,7 +321,7 @@ if ! command -v python3 >/dev/null; then
   need_sudo apt-get install -y -qq python3
 fi
 PYV="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-python3 - <<'EOF' || { echo "Potrzebny Python 3.10+, jest $PYV"; exit 1; }
+python3 - <<'EOF' || { err "Potrzebny Python 3.10+, jest $PYV"; exit 1; }
 import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)
 EOF
 missing=()
@@ -330,7 +364,7 @@ warp_guard() {
     if warp_on; then return 0; fi
     sleep 3
   done
-  warn "WARP rozłączył się w trakcie instalacji (zasada projektu: internet tylko przez WARP). Połącz: warp-cli connect, potem ponownie: bash \"$ROOT/install.sh\""
+  err "WARP rozłączył się w trakcie instalacji (zasada projektu: internet tylko przez WARP). Połącz: warp-cli connect, potem ponownie: bash \"$ROOT/install.sh\""
   exit 1
 }
 if ! command -v warp-cli >/dev/null; then
@@ -339,7 +373,7 @@ if ! command -v warp-cli >/dev/null; then
   # 1.19.0: przy set -e nieudane pobranie klucza kończyło instalację bez słowa.
   if ! curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
     | need_sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg; then
-    warn "Nie udało się pobrać klucza repozytorium Cloudflare WARP (pkg.cloudflareclient.com). Sprawdź internet i uruchom ponownie: bash \"$ROOT/install.sh\""
+    err "Nie udało się pobrać klucza repozytorium Cloudflare WARP (pkg.cloudflareclient.com). Sprawdź internet i uruchom ponownie: bash \"$ROOT/install.sh\""
     exit 1
   fi
   # Pakiet .deb jest ten sam dla wszystkich wydań Ubuntu; gdy repozytorium nie ma
@@ -363,7 +397,7 @@ if ! command -v warp-cli >/dev/null; then
   fi
 fi
 if ! command -v warp-cli >/dev/null; then
-  warn "Instalacja Cloudflare WARP (pakiet cloudflare-warp) nie powiodła się. Bez WARP instalacja nie pójdzie dalej."
+  err "Instalacja Cloudflare WARP (pakiet cloudflare-warp) nie powiodła się. Bez WARP instalacja nie pójdzie dalej."
   warn "Sprawdź połączenie z internetem i: sudo apt-get update && sudo apt-get install cloudflare-warp"
   exit 1
 fi
@@ -411,7 +445,7 @@ if [ "$WARP_STATUS_OK" -ne 1 ]; then
   # usługa i tak jest "active" w systemd, to zwykle oznacza zawieszony/
   # zrestartowany od środka proces kontrolny demona (nie crash procesu) -
   # restart usługi zwykle to leczy.
-  warn "warp-cli nie zwrócił statusu w 60 s. Ostatnia odpowiedź: ${WARP_STATUS_OUT:-brak}"
+  err "warp-cli nie zwrócił statusu w 60 s. Ostatnia odpowiedź: ${WARP_STATUS_OUT:-brak}"
   warn "systemctl status warp-svc pokazuje usługę jako aktywną? To zwykle oznacza, że demon"
   warn "sam się zawiesił (proces żyje, ale nie odpowiada) - pomaga: sudo systemctl restart warp-svc,"
   warn "potem ponownie: bash install.sh. Jeśli systemctl też pokazuje usługę jako nieaktywną:"
@@ -424,7 +458,7 @@ if ! warp-cli registration show </dev/null >/dev/null 2>&1; then
     warp-cli registration new || true
   fi
   if ! warp-cli registration show </dev/null >/dev/null 2>&1; then
-    warn "WARP nie jest zarejestrowany. Bez niego instalacja nie pójdzie dalej (zasada projektu)."
+    err "WARP nie jest zarejestrowany. Bez niego instalacja nie pójdzie dalej (zasada projektu)."
     warn "W terminalu: warp-cli registration new && warp-cli connect, potem ponownie: bash install.sh"
     exit 1
   fi
@@ -436,7 +470,7 @@ warp-cli dns families malware </dev/null >/dev/null 2>&1 || true
 warp-cli connect </dev/null >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do warp_on && break; sleep 1; done
 if ! warp_on; then
-  warn "WARP nie łączy się (warp-cli status: $(warp-cli status </dev/null 2>&1 | head -1))."
+  err "WARP nie łączy się (warp-cli status: $(warp-cli status </dev/null 2>&1 | head -1))."
   warn "Bez niego instalacja nie pójdzie dalej (zasada projektu). Sprawdź sieć i: warp-cli mode warp && warp-cli connect"
   exit 1
 fi
@@ -451,7 +485,7 @@ if ! command -v ollama >/dev/null || ! systemctl cat ollama.service >/dev/null 2
   # Oficjalny instalator Ollamy (zakłada usługę systemd ollama.service).
   warp_guard
   if ! curl -fsSL https://ollama.com/install.sh | sh; then
-    warn "Instalator Ollamy (ollama.com/install.sh) się nie powiódł - wyżej jego komunikat. Uruchom ponownie: bash \"$ROOT/install.sh\""
+    err "Instalator Ollamy (ollama.com/install.sh) się nie powiódł - wyżej jego komunikat. Uruchom ponownie: bash \"$ROOT/install.sh\""
     exit 1
   fi
 fi
@@ -495,7 +529,7 @@ need_sudo systemctl enable --now ollama >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break; sleep 1; done
 OLLAMA_VER="$(curl -fsS http://127.0.0.1:11434/api/version 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("version","?"))' 2>/dev/null || true)"
 if [ -z "$OLLAMA_VER" ]; then
-  warn "Ollama nie odpowiada na 127.0.0.1:11434. Sprawdź: systemctl status ollama; journalctl -u ollama -n 30"
+  err "Ollama nie odpowiada na 127.0.0.1:11434. Sprawdź: systemctl status ollama; journalctl -u ollama -n 30"
   warn "Jeśli jej instalator został przerwany, uruchom ten skrypt ponownie: bash \"$ROOT/install.sh\""
   exit 1
 fi
@@ -714,22 +748,39 @@ if [ -n "$(envval CLOUDFLARE_API_KEY)" ] && [ -z "$(envval CLOUDFLARE_ACCOUNT_ID
   fi
   unset _ACCOUNT_ID
 fi
+# Zależności spoza stdlib mają własne venv w projekcie (.venv, w .gitignore), a nie
+# pip --user: instalowane są tylko z przypiętego requirements.txt i nie mieszają się
+# ani z systemowym Pythonem, ani z pakietami innych projektów. Serwer i usługi startują
+# z tego samego interpretera, więc starcia wersji nie są możliwe.
+VENV="$ROOT/.venv"
+if ! as_user test -x "$VENV/bin/python"; then
+  if ! as_user python3 -m venv "$VENV"; then
+    need_sudo apt-get install -y -qq python3-venv
+    as_user python3 -m venv "$VENV" || warn "nie udało się utworzyć $VENV - usługa zostanie na /usr/bin/python3"
+  fi
+fi
+if as_user test -x "$VENV/bin/python"; then
+  warp_guard
+  if as_user "$VENV/bin/python" -m pip install --quiet -r "$ROOT/requirements.txt"; then
+    ok "zależności Pythona w $VENV (requirements.txt, wersje przypięte)"
+  else
+    warn "nie udało się zainstalować requirements.txt do $VENV - sprawdź połączenie i uruchom ponownie: bash install.sh"
+  fi
+  PY="$VENV/bin/python"
+else
+  PY=/usr/bin/python3
+fi
 # httpx[http2] - teraz POTRZEBNE ZAWSZE, nie tylko dla Groqa. Dwa serwisy, które
 # GREGAI odpytuje, odrzucają żądania stdlib (HTTP/1.1) jako ruch bota i przepuszczają
 # tylko HTTP/2: api.groq.com (Cloudflare, 1.8.0) ORAZ DuckDuckGo (1.30.6 - zgłoszenie
 # Grzegorza: wyszukiwarka oddawała 202 + stronę-wyzwanie "anomaly" na HTTP/1.1, a na
 # HTTP/2 normalne wyniki; potwierdzone na żywym WARP curlem --http1.1 vs HTTP/2).
 # Bez tej biblioteki wyszukiwanie w sieci wraca na HTTP/1.1 i bywa blokowane, a Groq
-# w puli nie odpowiada; reszta działa. Instalacja tylko dla użytkownika usługi
-# (~/.local), system Pythona nietknięty.
-if ! as_user python3 -c 'import httpx, h2' 2>/dev/null; then
-  warp_guard
-  dpkg -s python3-pip >/dev/null 2>&1 || need_sudo apt-get install -y -qq python3-pip
-  as_user python3 -m pip install --user --break-system-packages --quiet 'httpx[http2]' 2>/dev/null \
-    || as_user python3 -m pip install --user --quiet 'httpx[http2]' \
-    || warn "nie udało się zainstalować httpx[http2] (wyszukiwarka spadnie na HTTP/1.1 i bywa blokowana; Groq w puli nie zadziała; reszta tak)"
+# w puli nie odpowiada; reszta działa. Instalacja wyżej idzie do $VENV.
+if ! as_user "$PY" -c 'import httpx, h2' 2>/dev/null; then
+  warn "brak httpx[http2] w $VENV (wyszukiwarka spadnie na HTTP/1.1 i bywa blokowana; Groq w puli nie zadziała; reszta tak)"
 fi
-as_user python3 -c 'import httpx, h2' 2>/dev/null && ok "HTTP/2 gotowy (httpx[http2]) - wyszukiwarka i Groq"
+as_user "$PY" -c 'import httpx, h2' 2>/dev/null && ok "HTTP/2 gotowy (httpx[http2]) - wyszukiwarka i Groq"
 if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?(GROQ|GEMINI|OPENROUTER|HUGGINGFACE|CLOUDFLARE)_API_KEY[[:space:]]*=.+' "$ENV_FILE"; then
   warn "brak żadnego klucza darmowej puli: etap 'darmowe' koryta nieaktywny (zostaje Claude, jeśli ma klucz, i lokalny model). Dopisz GROQ_API_KEY/GEMINI_API_KEY/OPENROUTER_API_KEY/HUGGINGFACE_API_KEY/CLOUDFLARE_API_KEY (+CLOUDFLARE_ACCOUNT_ID) w $ENV_FILE i: sudo systemctl restart gregai"
 fi
@@ -758,16 +809,10 @@ chmod 600 "$ENV_FILE"
 # prostu wyłączona. Instalacja tylko dla użytkownika usługi (~/.local),
 # system Pythona nietknięty.
 if [ -n "$(envval ROUTER_USER)" ] && [ -n "$(envval ROUTER_PASSWORD)" ]; then
-  if ! as_user python3 -c 'import huawei_lte_api' 2>/dev/null; then
-    warp_guard
-    dpkg -s python3-pip >/dev/null 2>&1 || need_sudo apt-get install -y -qq python3-pip
-    # --break-system-packages zna pip z Ubuntu 24.04+; starszy (22.04) go nie zna,
-    # więc w razie błędu druga próba idzie bez niego.
-    as_user python3 -m pip install --user --break-system-packages --quiet huawei-lte-api 2>/dev/null \
-      || as_user python3 -m pip install --user --quiet huawei-lte-api \
-      || warn "nie udało się zainstalować huawei-lte-api (most do routera nie zadziała, reszta tak)"
+  if ! as_user "$PY" -c 'import huawei_lte_api' 2>/dev/null; then
+    warn "brak huawei-lte-api w $VENV (most do routera nie zadziała, reszta tak)"
   fi
-  as_user python3 -c 'import huawei_lte_api' 2>/dev/null && ok "most do routera HiLink gotowy (huawei-lte-api)"
+  as_user "$PY" -c 'import huawei_lte_api' 2>/dev/null && ok "most do routera HiLink gotowy (huawei-lte-api)"
 fi
 if [ "$LAN" = "1" ]; then
   ok ".env gotowy (GREGAI_LAN=1: dostęp z sieci domowej z tokenem; prawa 600)"
@@ -928,7 +973,7 @@ if [ "$KILL_OK" != 1 ]; then
     need_sudo systemctl stop gregai 2>/dev/null || true
     warn "Usługa gregai zatrzymana: bez zapory WARP w jądrze nie może działać."
   fi
-  warn "Zapora WARP w jądrze jest obowiązkowa, a nie da się jej tu włączyć - instalacja zatrzymana, usługa gregai nie startuje bez niej."
+  err "Zapora WARP w jądrze jest obowiązkowa, a nie da się jej tu włączyć - instalacja zatrzymana, usługa gregai nie startuje bez niej."
   warn "Sprawdź: sudo apt install nftables; uname -r (jądro z cgroup v2: Ubuntu 26.04 ma je domyślnie); potem: bash install.sh"
   exit 1
 fi
@@ -953,7 +998,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=$RUN_USER
 WorkingDirectory=$ROOT
-ExecStart=/usr/bin/python3 "$ROOT/agent/main.py"
+ExecStart="$VENV/bin/python" "$ROOT/agent/main.py"
 Restart=always
 RestartSec=3
 # 1.32.17 (audyt tura 19): domyślny TimeoutStopSec systemd (90s) kłóci się z
@@ -1001,7 +1046,7 @@ EOF
 # w komentarzu mógłby wstawić tu wyjście obcego polecenia (albo je uruchomić).
 UNIT_BAD="$(need_sudo cat "$SERVICE" | grep -vE '^(#|\[[A-Za-z]+\]$|[A-Za-z]+=|$)' || true)"
 if [ -n "$UNIT_BAD" ]; then
-  warn "$SERVICE zawiera linie, które nie są dyrektywami systemd (błąd w install.sh): ${UNIT_BAD%%$'\n'*}"
+  err "$SERVICE zawiera linie, które nie są dyrektywami systemd (błąd w install.sh): ${UNIT_BAD%%$'\n'*}"
   exit 1
 fi
 # Skan sieci domowej (agent/siec.py, tylko odczyt) co 15 min. Poza domem
@@ -1039,7 +1084,7 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 SystemCallArchitectures=native
-ExecStart=/usr/bin/python3 "$ROOT/agent/siec.py"
+ExecStart="$PY" "$ROOT/agent/siec.py"
 EOF
 sudo_write /etc/systemd/system/gregai-siec.timer <<'EOF'
 [Unit]
@@ -1060,7 +1105,7 @@ need_sudo systemctl enable gregai >/dev/null 2>&1 || warn "nie udało się włą
 # z poprzedniego folderu): usługa nie mogłaby się zbindować i restartowałaby się w pętli.
 if ! systemctl is-active --quiet gregai 2>/dev/null && command -v ss >/dev/null \
    && [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null || true)" ]; then
-  warn "Port $PORT jest już zajęty przez inny proces (nie przez usługę gregai), np. ręcznie uruchomiony agent/main.py."
+  err "Port $PORT jest już zajęty przez inny proces (nie przez usługę gregai), np. ręcznie uruchomiony agent/main.py."
   warn "Usługa gregai jest już zapisana i włączona, ale reguły sudo i zapora ufw jeszcze nie - dokończy je ponowne uruchomienie instalatora."
   warn "Zobacz kto: ss -ltnp 'sport = :$PORT' ; zatrzymaj go i uruchom ponownie: bash \"$ROOT/install.sh\""
   exit 1
@@ -1465,10 +1510,10 @@ echo "  bash \"$ROOT/install.sh\" --train                                       
 echo "  cd \"$ROOT\" && python3 training/bench_chat.py --models qwen2.5:3b --limit 3   # czasy modelu"
 echo "GREGAI rozgrzewa teraz duży model w tle (kilka minut, stan: http://localhost:$PORT/debug)."
 if [ "${HEALTH_FAIL:-0}" = 1 ]; then
-  warn "Instalacja zakończona, ale GREGAI nie odpowiedziało przy kontroli. Sprawdź: journalctl -u gregai -n 50; potem: gregai check"
+  err "Instalacja zakończona, ale GREGAI nie odpowiedziało przy kontroli. Sprawdź: journalctl -u gregai -n 50; potem: gregai check"
   exit 1
 fi
 if [ "${CHECK_FAIL:-0}" = 1 ]; then
-  warn "Instalacja zakończona, ale check.sh zgłosił błędy (lista wyżej). Po poprawkach: gregai check"
+  err "Instalacja zakończona, ale check.sh zgłosił błędy (lista wyżej). Po poprawkach: gregai check"
   exit 1
 fi

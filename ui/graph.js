@@ -131,9 +131,13 @@ class Graph {
   // --- Inicjalizacja sceny ---
   _initThree() {
     this.scene = new THREE.Scene();
-    // 1.31.0: osobny token tła mapy (kadr.css: ciepły brąz), z zapasem na --bg.
-    this.scene.background = new THREE.Color(this._cv("--graph-bg") || this._cv("--bg") || "#07070a");
-    this.scene.fog = new THREE.FogExp2(this.scene.background.getHex(), 0.0019);
+    // 1.34.1: tło sceny jest PRZEZROCZYSTE - kanwa nie maluje tła, więc pod
+    // nią jest jednolite tło strony. Dekoracyjna siatka 2D została usunięta,
+    // żeby nie nakładała się na THREE.GridHelper. Mgła dostaje kolor tła
+    // PLASTIC CRACK, żeby dalekie węzły gasły w tym samym kolorze co strona.
+    this.scene.background = null;
+    const fogColor = this._cv("--crack-bg") || this._cv("--bg") || "#050508";
+    this.scene.fog = new THREE.FogExp2(new THREE.Color(fogColor).getHex(), 0.0019);
 
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
     this.camera.position.set(60, 90, 420);
@@ -142,12 +146,15 @@ class Graph {
     // przeglądarka ma tylko programowe (nie sprzętowe) renderowanie; patrz
     // notatka w historii tej wersji (ten sam błąd wystąpił w podglądzie
     // artefaktu-szkicu, zanim trafił tu do produktu).
+    // alpha:true + setClearColor(0,0): kanwa nie maluje tła, tylko scenę.
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
+      alpha: true,
       failIfMajorPerformanceCaveat: false,
       powerPreference: "default",
     });
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
 
@@ -232,13 +239,13 @@ class Graph {
     // na każdym z, czasem kilkuset, węzłów.
     const auraGeo = this._sphereGeo;
     this._auraSelected = new THREE.Mesh(auraGeo, new THREE.MeshBasicMaterial({
-      color: this._cv("--text-primary") || "#ffffff", transparent: true, opacity: 0.16, depthWrite: false,
+      color: this._cv("--accent") || "#00d4ff", transparent: true, opacity: 0.2, depthWrite: false,
     }));
     this._auraSelected.visible = false;
     this.scene.add(this._auraSelected);
 
     this._auraHover = new THREE.Mesh(auraGeo, new THREE.MeshBasicMaterial({
-      color: this._cv("--text-primary") || "#ffffff", transparent: true, opacity: 0.1, depthWrite: false,
+      color: this._cv("--accent") || "#00d4ff", transparent: true, opacity: 0.1, depthWrite: false,
     }));
     this._auraHover.visible = false;
     this.scene.add(this._auraHover);
@@ -247,7 +254,7 @@ class Graph {
     // powłoka wokół węzła. Jeden obiekt, odtwarzany od zera przy każdym
     // zaznaczeniu (patrz _triggerSelectPop).
     this._popMesh = new THREE.Mesh(auraGeo, new THREE.MeshBasicMaterial({
-      color: this._cv("--text-primary") || "#ffffff", transparent: true, opacity: 0, depthWrite: false,
+      color: this._cv("--accent") || "#00d4ff", transparent: true, opacity: 0, depthWrite: false,
     }));
     this._popMesh.visible = false;
     this.scene.add(this._popMesh);

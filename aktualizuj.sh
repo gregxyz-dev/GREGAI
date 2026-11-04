@@ -122,8 +122,8 @@ restart_and_check() {  # $1 = opis, co ma być aktywne
 # training/.work/ (modele z treningu), *.gguf i __pycache__. Te zostają zawsze.
 code_copy() {  # $1 = skąd, $2 = dokąd
   (cd "$1" && tar -cf - --exclude='./.env*' --exclude=./data --exclude=./memory --exclude=./notatki \
-      --exclude=./backups --exclude=./training/.work --exclude='*.gguf' --exclude='__pycache__' \
-      --exclude='./.gregai-*' .) | (cd "$2" && tar -xf -) || return 1
+      --exclude=./backups --exclude=./training/.work --exclude=./.venv --exclude='*.gguf' \
+      --exclude='__pycache__' --exclude='./.gregai-*' .) | (cd "$2" && tar -xf -) || return 1
   if [ -f "$1/.env.example" ]; then cp -p "$1/.env.example" "$2/.env.example" || return 1; fi
 }
 
@@ -388,6 +388,20 @@ fix_unit() {  # $1 = nazwa pliku usługi, $2 = skrypt względem ROOT
   [ -f "$file" ] || return 0
   local cur
   cur="$(need_sudo sed -n -E 's|^WorkingDirectory=(.*)$|\1|p' "$file" 2>/dev/null | head -1)"
+  # Własne venv projektu (.venv): jeśli istnieje, a jednostka wciąż wskazuje
+  # systemowego Pythona, dopingujemy ją do tej samej reguły co install.sh
+  # (zależności nie mieszają się z systemem).
+  local want_start
+  if [ -x "$ROOT/.venv/bin/python" ]; then want_start="$ROOT/.venv/bin/python"; else want_start="/usr/bin/python3"; fi
+  if [ -n "$cur" ] && [ "$cur" = "$ROOT" ]; then
+    local cur_start
+    cur_start="$(need_sudo sed -n -E "s|^ExecStart=(.*)$|\1|p" "$file" 2>/dev/null | head -1)"
+    if [ "$cur_start" != "$want_start $ROOT/$script" ] \
+       && [ "$cur_start" != "\"$want_start\" \"$ROOT/$script\"" ]; then
+      need_sudo sed -i -E "s|^ExecStart=.*|ExecStart=\"$want_start\" \"$ROOT/$script\"|" "$file"
+      CHANGED=1
+    fi
+  fi
   if [ -n "$cur" ] && [ "$cur" != "$ROOT" ]; then
     # Nowy, świeżo rozpakowany folder nie ma Twoich ustawień (.env) ani danych: przepięta
     # usługa wystartowałaby bez klucza API, tokenu i pamięci, a skrypt skłamałby, że wszystko gra.
@@ -567,15 +581,16 @@ fi
 
 # httpx[http2] - od 1.30.6 POTRZEBNE ZAWSZE: wyszukiwarka (DuckDuckGo) i Groq
 # przepuszczają tylko HTTP/2, a stdlib (HTTP/1.1) odrzucają jako bota (DDG oddaje
-# 202 + stronę-wyzwanie). Starsze instalacje miały httpx tylko przy kluczu Groqa,
-# więc dociągamy przy aktualizacji. Ten sam użytkownik co usługa (aktualizuj.sh
-# uruchamiasz jako Ty, nie przez sudo), instalacja do ~/.local - system nietknięty.
-if [ "$FAIL" = 0 ] && ! python3 -c 'import httpx, h2' 2>/dev/null; then
-  echo "Dociągam httpx[http2] (wyszukiwarka i Groq wymagają HTTP/2)..."
-  python3 -m pip install --user --break-system-packages --quiet 'httpx[http2]' 2>/dev/null \
-    || python3 -m pip install --user --quiet 'httpx[http2]' 2>/dev/null \
-    || echo "UWAGA: nie udało się zainstalować httpx[http2] - wyszukiwarka spadnie na HTTP/1.1 i bywa blokowana. Zainstaluj ręcznie: python3 -m pip install --user 'httpx[http2]', albo: bash \"$ROOT/install.sh\""
-  python3 -c 'import httpx, h2' 2>/dev/null && echo "HTTP/2 gotowy (httpx[http2])."
+# 202 + stronę-wyzwanie). Instalacja idzie do venv projektu (.venv), nie przez
+# pip --user: ta sama reguła co w install.sh.
+if [ "$FAIL" = 0 ] && [ -x "$ROOT/.venv/bin/python" ] && ! "$ROOT/.venv/bin/python" -c 'import httpx, h2' 2>/dev/null; then
+  if "$ROOT/.venv/bin/python" -m pip install --quiet -r "$ROOT/requirements.txt" 2>/dev/null \
+     && "$ROOT/.venv/bin/python" -c 'import httpx, h2' 2>/dev/null; then
+    echo "HTTP/2 gotowy ($ROOT/.venv)."
+  else
+    echo "UWAGA: nie udało się uzupełnić $ROOT/.venv - wyszukiwarka spadnie na HTTP/1.1 i bywa blokowana."
+    echo "       Zainstaluj ręcznie albo: bash \"$ROOT/install.sh\""
+  fi
 fi
 
 # Restart gregai, żeby nowy kod był żywy.

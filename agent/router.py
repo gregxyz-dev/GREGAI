@@ -68,6 +68,7 @@ import re
 import threading
 import time
 import urllib.request
+from contextlib import ExitStack
 from pathlib import Path
 
 import agentloop as agentloop_mod
@@ -90,6 +91,9 @@ import symbols as symbols_mod
 import trace as trace_mod
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "").strip() or "http://localhost:11434"
+# 1.35.0: log samych liczb po każdej inferencji lokalnej (model, czas, tok/s) -
+# panel „Modele → ostatnie inferencje" w Nadzorcy. Bez treści promptu i odpowiedzi.
+OLLAMA_LOG_PATH = Path(__file__).parent.parent / "data" / "ollama_uzycie.jsonl"
 # Twarda zasada (2026-10-09, cyberbezpieczeństwo): rozmowy idą do Ollamy
 # zwykłym http, bez szyfrowania, więc Ollama musi być na TEJ maszynie.
 # Adres spoza localhost w .env jest ignorowany (powód w OLLAMA_HOST_NOTE,
@@ -277,8 +281,25 @@ OLLAMA_TIMEOUT = env_int("OLLAMA_TIMEOUT", 240, 1, 7200)
 # teraz rzadziej płacony: lokalny model wkracza tylko, gdy sieciowe AI
 # (etapy sieciowe koryta) są niedostępne (patrz KORYTO, agent/koryto.py).
 RICH_TIMEOUT = env_int("RICH_TIMEOUT", 900, 1, 7200)
-# 1.32.8: łączny czas faz Namysłu na modelu lokalnym (i7-6600U), zanim kolejne fazy dostaną minimum.
-NAMYSL_LOCAL_BUDGET_S = env_int("NAMYSL_LOCAL_BUDGET_S", 300, 60, 3600)
+# Krok "Szkic odpowiedzi" w Namysle, gdy liczy model lokalny (Ollama): na
+# i7-6600U qwen2.5:3b potrzebuje 30-60 s na cieply start, po starcie systemu
+# nawet wiecej. Osobny limit nie zmienia dostawcow sieciowych (CLOUD_TIMEOUT/
+# JUGGLER_TIMEOUT). Odczyt przy kazdym wywolaniu, zeby .env dzialalo bez
+# ponownego importu; kontrola 71 w check.sh pilnuje wartosci >= 60.
+
+
+def _namysl_local_timeout() -> int:
+    # 1.32.29 (audyt #11): minimum 60 s, tak samo jak kontrola 71 w check.sh.
+    # Wcześniej kod przyjmował 1 s, a check.sh odrzucał wartości < 60.
+    return env_int("LOKALNY_TIMEOUT", 180, 60, 3600)
+
+
+def _namysl_local_chat(system: str, history: list, message: str) -> str:
+    """Lokalny krok Namyslu, zawsze z LOKALNY_TIMEOUT przekazanym do Ollamy."""
+    return _ollama_chat(system, history, message, timeout=_namysl_local_timeout())
+
+# 1.32.27: czas pojedynczej fazy lokalnej jest w LOKALNY_TIMEOUT (domyslnie
+# 180 s), a calosc nadal pilnuje NAMYSL_TIME_BUDGET w agent/namysl.py.
 
 # Rozgrzewanie w tle (warm_up_async): przetworzenie całego promptu od zera,
 # bez nikogo, kto czeka na odpowiedź.
@@ -842,23 +863,61 @@ def namysl_cloud_call(rozdz: dict, system, msgs, msg, exclude=None, prefer=None)
 def _stage_order_for(poziom: int) -> list:
     """Pełna kolejność etapów koryta dla rozmowy przy danej wadze uwagi
     (agent/skupienie.py). Etapy sieciowe bierzemy z rozdzielnicy (polityka B:
-    darmowa pula przed płatnym Claude, a przy wadze 1-2 płatny w ogóle wypada) i
-    wstawiamy je NA ICH WŁASNE MIEJSCA z KORYTO - i-ty slot sieciowy dostaje i-ty
+    darmowa pula przed płatnym Claude, a przy wadze 1-2 płatny w ogóle wypada)
+    i wstawiamy je NA ICH WŁASNE MIEJSCA z KORYTO - i-ty slot sieciowy dostaje i-ty
     etap z polityki. Dzięki temu "lokalnie" między etapami sieciowymi zostaje tam,
     gdzie je dał KORYTO (1.30.27, audyt: wcześniej wszystkie sieciowe lądowały w
     pierwszym slocie, więc płatny skakał przed lokalny przy
     KORYTO=darmowe,lokalnie,anthropic)."""
-    net = iter(juggler_mod.rozdzielnica(poziom)["etapy"])
-    out = []
-    for e in koryto_mod.order():
-        if e in koryto_mod.SIECIOWE:
-            nxt = next(net, None)
-            if nxt is not None:          # None = polityka ma mniej etapów niż slotów -> slot przepada
-                out.append(nxt)
-        else:
-            out.append(e)
-    out.extend(net)                      # resztki (gdyby polityka miała więcej niż slotów; w praktyce nie ma)
+    out = koryto_mod.order_with_network(juggler_mod.rozdzielnica(poziom)["etapy"])
+    if not any(e in koryto_mod.SIECIOWE for e in out):
+        # 1.32.30 (audyt #2): polityka wycięła wszystkie etapy sieciowe
+        # (np. KORYTO=anthropic,lokalnie przy wadze 1-2). Lepiej użyć surowego
+        # KORYTO niż nie odpowiedzieć wcale; ROZDZIELNICA=0 nadal wyłącza
+        # politykę całkowicie.
+        return list(koryto_mod.order())
     return out
+
+
+def koryto_status() -> dict:
+    """koryto.status() + efektywna kolejność etapów dla wag 1-4 (1.32.30).
+
+    Sam `koryto.py` nie zna polityki rozdzielnicy (import kołowy), więc
+    dostaje gotową mapę stąd. /api/system_info i panel Nadzorcy pokazują
+    dzięki temu trasę, którą wiadomość naprawdę pójdzie, a nie samą listę
+    z .env."""
+    st = koryto_mod.status(
+        effective={str(p): _stage_order_for(p) for p in (1, 2, 3, 4)},
+        rozdzielnica=juggler_mod.rozdzielnica_policy(),
+    )
+    st["poziom_domyslny"] = 2
+    return st
+
+
+def _allowed_providers(poziom: int) -> list[str]:
+    """Dostawcy z etapów sieciowych dopuszczonych przy tej wadze.
+
+    Do decyzji "czy uruchomić awaryjny lokalny" liczą się TYLKO etapy, które
+    polityka dopuszcza dla tej wagi - nie cały `providers_pool()` (1.32.30,
+    audyt #3: zdrowy Claude blokował awaryjny lokalny, choć przy wadze 1-2
+    i tak nie był pytany)."""
+    return [n for e in _stage_order_for(poziom) if e in koryto_mod.SIECIOWE
+            for n in juggler_mod.providers_pool(e)]
+
+
+def emergency_local_allowed(local_now: bool, local_ok: bool, order: list, allowed_pool: list,
+                            warp_blocked: bool, exhausted: set[str]) -> bool:
+    """Czy wolno sięgnąć po lokalny model jako ostatnią szansę.
+
+    `warp_blocked`: NetGuardBlocked w trakcie tej wiadomości - to nie wina
+    dostawców, więc traktujemy to jak "wszyscy wyczerpani" (1.32.30, audyt #4).
+    `allowed_pool`/`exhausted`: tylko etapy dozwolone dla tej wagi (audyt #3),
+    nie wszyscy skonfigurowani dostawcy."""
+    if local_now or not local_ok or "lokalnie" not in order:
+        return False
+    if warp_blocked or not allowed_pool:
+        return True
+    return all(n in exhausted for n in allowed_pool)
 
 
 # Poprzednia "odpowiedź" bywa własnym komunikatem GREGAI - błędem, potwierdzeniem
@@ -1173,6 +1232,28 @@ def _set_warm(state: str, detail: str = "") -> None:
     _WARM_STATE["state"], _WARM_STATE["detail"] = state, detail
 
 
+def _log_ollama_use(model: str | None, data: dict) -> None:
+    """1.35.0: jeden wiersz na inferencję lokalną - tylko liczby, zero treści."""
+    try:
+        total_s = float(data.get("total_duration") or 0) / 1_000_000_000
+        eval_s = float(data.get("eval_duration") or 0) / 1_000_000_000
+        tokens = int(data.get("eval_count") or 0)
+        try:
+            if OLLAMA_LOG_PATH.exists() and OLLAMA_LOG_PATH.stat().st_size > 512 * 1024:
+                OLLAMA_LOG_PATH.replace(OLLAMA_LOG_PATH.with_suffix(".jsonl.1"))
+        except OSError:
+            pass
+        fsutil.append_private_line(OLLAMA_LOG_PATH, fsutil.json_line({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "model": model or OLLAMA_MODEL,
+            "sekund": round(total_s, 2),
+            "tok_s": round(tokens / eval_s, 1) if eval_s > 0 and tokens else None,
+            "tokeny": tokens or None,
+        }))
+    except Exception:
+        pass  # log to dodatek, nigdy nie psuje odpowiedzi modelu
+
+
 def _ollama_chat(
     system_prompt: str,
     history: list,
@@ -1221,6 +1302,7 @@ def _ollama_chat(
     )
     with netguard_mod.local_urlopen(req, timeout=timeout) as resp:
         data = netguard_mod.read_json(resp)
+    _log_ollama_use(model, data)
     return data.get("message", {}).get("content", "").strip()
 
 
@@ -1476,9 +1558,16 @@ def cloud_status() -> dict:
         reason = "Claude wyłączony przez bezpiecznik (zły klucz? patrz juggler.note_failure) - do restartu usługi"
     elif calls_today >= limit:
         reason = f"Claude: dzienny limit {calls_today}/{limit} wyczerpany - do północy UTC koryto płynie dalej"
+    elif "anthropic" not in _stage_order_for(2):
+        # 1.32.30 (audyt #1): powiedz wprost, że polityka wagi pomija płatny etap,
+        # zamiast twierdzić "Claude aktywny (1. etap koryta)".
+        reason = (f"Claude dostępny ({model}), ale przy wadze 1-2 polityka ROZDZIELNICA="
+                  f"{juggler_mod.rozdzielnica_policy()} go pomija; wchodzi od wagi 3 jako eskalacja, "
+                  f"gdy darmowa pula zawiedzie (dziś {calls_today}/{limit}).")
     else:
-        pos = koryto_mod.order().index("anthropic") + 1
-        reason = (f"Claude aktywny ({pos}. etap koryta): {model}, dziś {calls_today}/{limit}, "
+        eff2 = _stage_order_for(2)
+        pos = eff2.index("anthropic") + 1 if "anthropic" in eff2 else 0
+        reason = (f"Claude aktywny ({pos}. etap efektywnego koryta przy wadze 2): {model}, dziś {calls_today}/{limit}, "
                   f"limit odpowiedzi {juggler_mod._ANTHROPIC_MAX_TOKENS} tok.")
     # Twarda zasada (agent/netguard.py): bez połączonego WARP sieć stoi.
     warp_ok, warp_reason = netguard_mod.internet_allowed() if (in_koryto and key_present) else (True, "")
@@ -1496,7 +1585,8 @@ def juggler_status() -> dict:
     """Stan etapu "darmowe" koryta + wszyscy dostawcy (także Claude) - do
     /debug (main.py: /api/system_info) i paska statusu w ui/app.js. `mode`:
     "always", gdy etap darmowy jest w KORYTO, "off" gdy nie; `configured` to
-    darmowi dostawcy z kluczem; `koryto` - cała kolejność (koryto.status)."""
+    darmowi dostawcy z kluczem; `koryto` - kolejność z .env RAZEM z efektywną
+    per waga (router.koryto_status, 1.32.30)."""
     in_koryto = "darmowe" in koryto_mod.network_order()
     pool = juggler_mod.providers_pool("darmowe") if in_koryto else []
     if not in_koryto:
@@ -1504,13 +1594,14 @@ def juggler_status() -> dict:
     elif not pool:
         reason = "brak ustawionego klucza dla Groq/Gemini/OpenRouter/Hugging Face/Cloudflare w .env - pula nieaktywna"
     else:
-        pos = koryto_mod.order().index("darmowe") + 1
-        reason = f"darmowa pula aktywna ({pos}. etap koryta): {', '.join(pool)}, limit odpowiedzi {juggler_mod.JUGGLER_MAX_TOKENS} tok."
+        eff2 = _stage_order_for(2)
+        pos = eff2.index("darmowe") + 1 if "darmowe" in eff2 else 0
+        reason = f"darmowa pula aktywna ({pos}. etap efektywnego koryta przy wadze 2): {', '.join(pool)}, limit odpowiedzi {juggler_mod.JUGGLER_MAX_TOKENS} tok."
     warp_ok, warp_reason = netguard_mod.internet_allowed() if pool else (True, "")
     if pool and not warp_ok:
         reason = f"darmowa pula wstrzymana: {warp_reason}"
     return {"mode": "always" if in_koryto else "off", "configured": pool, "warp_ok": warp_ok, "reason": reason,
-            "providers": juggler_mod.status(), "koryto": koryto_mod.status(),
+            "providers": juggler_mod.status(), "koryto": koryto_status(),
             "max_tokens": juggler_mod.JUGGLER_MAX_TOKENS}
 
 
@@ -1553,6 +1644,8 @@ def _record_distill_pair(user: str, assistant: str, history: list, *,
     "anthropic" domyślnie (zgodność z parami zapisanymi przed żonglerem), nazwa
     z agent/juggler.py dla pary spoza chmury Anthropic. Osobny licznik dziennego
     limitu PER DOSTAWCA (juggler._calls_today) liczy właśnie po tym polu."""
+    if trace_mod.suppressed():  # eval/test: nie ucz produkcyjnego ucznia
+        return
     seen = _cloud_history(history)
     if seen and seen[-1]["role"] == "user":
         seen = seen[:-1]  # ta tura została sklejona z bieżącym pytaniem
@@ -1574,6 +1667,8 @@ def _mark_distill_pair_skipped(user_message: str) -> bool:
     700 MB RAM i 2 s pod blokadą rozmowy) dopisujemy krótki znacznik
     {"pomin_user": ...}; training/build_distill_dataset.py oznacza wtedy OSTATNIĄ
     wcześniejszą parę z tym pytaniem jako skip."""
+    if trace_mod.suppressed():  # eval/test: nie zmieniaj produkcyjnych par
+        return False
     if not DISTILL_PAIRS_PATH.exists() or not user_message:
         return False
     try:
@@ -1619,7 +1714,10 @@ def _planner_ask(system: str, user: str) -> str:
     Gdy KORYTO_ZADANIA=0 albo brak etapu sieciowego: jak do 1.16.x, lokalnie."""
     errors = []
     if koryto_mod.tasks_via_network():
-        for etap in koryto_mod.order():
+        # 1.32.30 (audyt #5): planner idzie TĄ SAMĄ polityką co rozmowa, na
+        # wadze TŁA - nie surowym koryto.order(). Wcześniej KORYTO=anthropic,...
+        # kazało plannerowi płacić Claude'owi pierwszy, mimo ROZDZIELNICA=B.
+        for etap in _stage_order_for(juggler_mod.POZIOM_TLA):
             if etap == "lokalnie":
                 break  # dalej lokalnie, niżej
             if not juggler_mod.providers_pool(etap):
@@ -1831,7 +1929,9 @@ def summarize_text(system: str, user: str) -> str:
     którą nikt nie czeka (zasada z OpenClaude withRetry: ponawiają tylko
     wywołania pierwszoplanowe)."""
     local_now = koryto_mod.local_allowed(bool(juggler_mod.providers_pool()), netguard_mod.internet_allowed()[0])
-    for etap in koryto_mod.order():
+    # 1.32.30 (audyt #5): streszczenie to praca w tle - ta sama polityka co
+    # rozmowa, na wadze TŁA (darmowa pula pierwsza, Claude jako eskalacja).
+    for etap in _stage_order_for(juggler_mod.POZIOM_TLA):
         try:
             if etap == "lokalnie":
                 if ollama_available() and local_now:
@@ -1932,16 +2032,26 @@ def _market_next_steps(card) -> list | None:
 
 
 def route(vault, system_prompt: str, history: list, message: str, pending_clarify: list | None = None,
-          pending_action: dict | None = None, progress=None, files: list | None = None, chat: str | None = None) -> dict:
+          pending_action: dict | None = None, progress=None, files: list | None = None, chat: str | None = None,
+          nie_ucz: bool = False, nie_zapisuj_sladu: bool = False) -> dict:
     """Jedna wiadomość = jeden zakres koryta (1.18.0, juggler.request_scope):
     wspólny termin dla wszystkich łańcuchów sieciowych tej wiadomości (krok 1,
     fazy Namysłu, rozmowa) i zbiór dostawców, którzy w niej już zawiedli.
-    Właściwa logika: _route niżej."""
+    Właściwa logika: _route niżej.
+
+    `nie_ucz=True` i `nie_zapisuj_sladu=True` (1.32.28): tryb testowy/eval.
+    Wyłącza zapis wyuczonych wzorców oraz śladu decyzji i par destylacji w
+    TYM wątku; produkcyjne pliki w data/ zostają nietknięte."""
     agentloop_mod._CHAT.id = sources_mod.chat_id(chat) if chat is not None else None  # 1.28.0: karta należy do rozmowy
     try:
         with juggler_mod.request_scope():
-            return _route(vault, system_prompt, history, message, pending_clarify, pending_action,
-                          progress=progress, files=files, chat=chat)
+            with ExitStack() as stack:
+                if nie_zapisuj_sladu:
+                    stack.enter_context(trace_mod.suppress())
+                if nie_ucz:
+                    stack.enter_context(learning_mod.suppress_learning())
+                return _route(vault, system_prompt, history, message, pending_clarify, pending_action,
+                              progress=progress, files=files, chat=chat)
     finally:
         agentloop_mod._CHAT.id = None
 
@@ -2034,10 +2144,13 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         ctx = namysl_mod.Context(
             vault=vault, message=the_msg, history_local=list(history), history_cloud=_cloud_history(history),
             files=files, sys_local=_sys(cloud=False) + kontekst, sys_cloud=_sys(cloud=True) + kontekst, local_up=model_up_now,
-            # 1.32.8: Namysł jest teraz jedynym trybem - jedna faza lokalnie nie może trwać 900 s.
-            # Każde wywołanie dostaje to, co zostało z ok. 5 minut na całość (min. 45 s).
-            local_chat=lambda system, hist, msg, _t0=time.monotonic(): _ollama_chat(
-                system, hist, msg, timeout=min(RICH_TIMEOUT, max(45, NAMYSL_LOCAL_BUDGET_S - (time.monotonic() - _t0)))),
+            # 1.32.27: szkic i pozostale fazy lokalne dostaja LOKALNY_TIMEOUT
+            # (domyslnie 180 s), a nie krotki limit zalezny od chwilowego budzetu.
+            local_chat=_namysl_local_chat,
+            # 1.33.3 (audyt #18): świeże sprawdzenie Ollamy - snapshot
+            # `model_up_now` bywa nieaktualny, a plik ma wchodzić, gdy lokalny
+            # model odpowie choćby jako rezerwa.
+            local_recheck=lambda: ollama_available(),
             # 1.30.23: rozdzielnica - waga uwagi decyduje, którą szyną (darmowa
             # pula / płatny Claude) i jakim modelem puścić KAŻDE wywołanie Namysłu.
             cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, _rozdz=juggler_mod.rozdzielnica(skup_poziom): namysl_cloud_call(
@@ -2140,7 +2253,9 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         local_ok_here = up and (not allow_net or koryto_mod.local_allowed(bool(juggler_mod.providers_pool()),
                                                                            netguard_mod.internet_allowed()[0]))
         answer, who = "", ""
-        for etap in koryto_mod.order():
+        # 1.32.30 (audyt #5): odpowiedź z notatek też respektuje wagę uwagi -
+        # przy wadze 1-2 nie płacimy Claude'owi, skoro polityka go nie dopuszcza.
+        for etap in _stage_order_for(skup_poziom):
             try:
                 if etap == "lokalnie":
                     if not local_ok_here:
@@ -2310,7 +2425,8 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         answer, who = "", ""
         local_ok_here = ollama_available() and koryto_mod.local_allowed(bool(juggler_mod.providers_pool()),
                                                                         netguard_mod.internet_allowed()[0])
-        for etap in koryto_mod.order():
+        # 1.32.30 (audyt #5): ta sama polityka co rozmowa, nie surowe KORYTO.
+        for etap in _stage_order_for(skup_poziom):
             try:
                 if etap == "lokalnie":
                     if not local_ok_here:
@@ -2541,13 +2657,22 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         # "lokalnie" między nimi zostało tam, gdzie je dał KORYTO - dawne wrzucanie
         # wszystkich sieciowych w pierwszy slot wyprzedzało lokalny przy
         # KORYTO=darmowe,lokalnie,anthropic (płatny skakał przed lokalny).
-        for etap in _stage_order_for(skup_poziom):
+        effective = _stage_order_for(skup_poziom)
+        allowed_pool = _allowed_providers(skup_poziom)
+        # 1.32.30 (audyt #4): WARP może paść W TRAKCIE tej wiadomości. NetGuardBlocked
+        # nie jest winą dostawcy, więc nie liczymy go do "wyczerpanych", ale od tej
+        # chwili lokalny model jest dozwolony (internet właśnie zniknął).
+        warp_blocked = False
+        for etap in effective:
             if etap == "lokalnie":
                 if not local_ok:
                     continue
                 if not local_now:
-                    errors["lokalnie"] = "pominięty: internet działa, a KORYTO_LOKALNIE=bez_internetu (lokalny tylko bez sieci)"
-                    continue
+                    if warp_blocked:
+                        local_now = True
+                    else:
+                        errors["lokalnie"] = "pominięty: internet działa, a KORYTO_LOKALNIE=bez_internetu (lokalny tylko bez sieci)"
+                        continue
                 reply, stage, extra = _rozmowa_lokalnie(errors)
                 if reply is None:
                     continue
@@ -2578,10 +2703,18 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                             return _finish("zongler_senior_juniorzy",
                                            {"speech": reply, "card": None, "model_active": True}, extra=extra)
                 except Exception as e:
+                    if isinstance(e, netguard_mod.NetGuardBlocked):
+                        warp_blocked = True
                     errors["juniorzy_error"] = f"{type(e).__name__}: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             try:
                 reply, provider = juggler_mod.chat(_sys(cloud=True), _cloud_history(history), message, timeout=JUGGLER_TIMEOUT,
                                                     preferred_provider=_last_juggler_provider(history), etapy=[etap])
+            except netguard_mod.NetGuardBlocked as e:
+                # 1.32.30 (audyt #4): WARP padł w trakcie - kolejni dostawcy
+                # zawiedliby tak samo, a to nie ich wina. Lokalny etap (jeśli
+                # jest dalej w kolejności) dostanie zgodę poniżej.
+                warp_blocked = True
+                errors["juggler_error" if etap == "darmowe" else "cloud_error"] = f"NetGuardBlocked: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             except Exception as e:
                 # str(e), nie tylko type(e).__name__: juggler.chat() pakuje PRAWDZIWY
                 # powód (per dostawca: "groq:HTTPError ...") w treść wyjątku, nie w jego
@@ -2601,7 +2734,7 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                 return _finish(stage, {"speech": reply, "card": None, "model_active": local_ok, "provider": provider}, extra=extra)
         extra_base.update({k: v for k, v in errors.items() if v})
         # 1.32.15 (audyt, transkrypt "DISCORD na ubuntu 26" x2): gdy WSZYSCY
-        # skonfigurowani dostawcy sieciowi są juggler_mod.exhausted() - NAPRAWDĘ
+        # dostawcy DOZWOLENI PRZY TEJ WADZE są juggler_mod.exhausted() - NAPRAWDĘ
         # bez szans teraz (wyłączeni 401/402 albo w przerwie, którą wyznaczył
         # serwer/nasza klasyfikacja 403 czy 429-dzienny), nie "akurat jedna
         # przejściowa próba padła" (ten krótki, zwykły cooldown NIE liczy się
@@ -2611,14 +2744,18 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         # mam w notatkach". `local_now` już False (inaczej etap "lokalnie" w
         # pętli wyżej by odpowiedział albo faktycznie zawiódł), więc to nie
         # podwójna próba.
-        pool = juggler_mod.providers_pool()
-        if (not local_now and local_ok and "lokalnie" in koryto_mod.order() and pool
-                and all(juggler_mod.exhausted(n) for n in pool)):
+        # 1.32.30 (audyt #3): liczą się tylko etapy dozwolone dla wagi - zdrowy
+        # Claude nie blokuje już awaryjnego lokalnego przy wadze 1-2, skoro i tak
+        # nie był pytany. NetGuardBlocked traktujemy jak "wszyscy wyczerpani".
+        exhausted_names = {n for n in allowed_pool if juggler_mod.exhausted(n)}
+        if emergency_local_allowed(local_now, local_ok, koryto_mod.order(), allowed_pool,
+                                   warp_blocked, exhausted_names):
             reply, stage, extra = _rozmowa_lokalnie(errors)
             if reply is not None:
                 extra.update(extra_base)
                 extra.update({k: v for k, v in errors.items() if v})
-                extra["lokalnie_awaryjnie"] = "sieciowi wyczerpani (cooldown/wyłączeni), internet działał"
+                extra["lokalnie_awaryjnie"] = ("WARP padł w trakcie wiadomości" if warp_blocked
+                                                else "sieciowi dozwoleni przy tej wadze wyczerpani (cooldown/wyłączeni)")
                 return _finish("lokalnie_awaryjnie", {"speech": reply, "card": None, "model_active": True}, extra=extra)
             extra_base.update({k: v for k, v in errors.items() if v})
         _koryto_errors.clear()

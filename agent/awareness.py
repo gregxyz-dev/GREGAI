@@ -125,8 +125,19 @@ def today_line(now: datetime | None = None) -> str:
             f"({now:%Y-%m-%d}), {part_of_day(now.hour)}.")
 
 
+def clock_line(now: datetime | None = None, tz_name: str = "") -> str:
+    """Data + DOKŁADNA godzina do bloku „Teraz” (1.33.2, audyt #17).
+
+    Lokalny prompt zmienia się teraz co minutę, więc Ollama nie może w pełni
+    użyć pamięci podręcznej promptu systemowego - to świadomy koszt: model ma
+    znać godzinę bez szukania w sieci ("Która godzina?")."""
+    now = now or datetime.now()
+    zone = f" {tz_name}" if tz_name else ""
+    return f"{today_line(now)} Godzina: {now:%H:%M}{zone}."
+
+
 _CLOCK_RULE = ("To Twój jedyny zegar: „jutro”, „w piątek”, „za tydzień” liczysz od tej daty; "
-               "dokładnej godziny nie znasz, więc o nią nie zgaduj.")
+               "dokładną godzinę masz w linii „Godzina: HH:MM” - nie zgaduj innej i nie szukaj jej w sieci.")
 
 
 # --- 2. Pamięć podręczna (memory/) -------------------------------------------
@@ -373,12 +384,15 @@ def local_block(vault, now: datetime | None = None, chat: str | None = None) -> 
     conv = _conversation_block(chat)
     sun = _sun_line(now)
     lessons = _lessons_line()
-    fixed = [today_line(now), _CLOCK_RULE, _background_line(with_names=True), previous_conversation_line(now), conv, sun,
-             lessons + _offline_line()]
+    offline = _offline_line()
+    fixed = [clock_line(now), _CLOCK_RULE, _background_line(with_names=True), previous_conversation_line(now), conv, sun,
+             lessons + offline]
     fixed_len = len(HEADER) + sum(len(p) + 1 for p in fixed if p) + 4
     memo_budget = MAX_BLOCK_CHARS - fixed_len - 160  # miejsce na nagłówek sekcji faktów
     memo = _memories_section(vault, max(memo_budget, 0)) if memo_budget > 80 else ""
-    return _assemble([fixed[0], sun, fixed[1], lessons, memo, fixed[2], fixed[3], conv])
+    # 1.32.29 (audyt #6): _offline_line() było liczone, ale nie trafiało do
+    # zwracanego bloku - lokalny model nie wiedział, że internet nie działa.
+    return _assemble([fixed[0], sun, fixed[1], lessons, offline, memo, fixed[2], fixed[3], conv])
 
 
 # Dla etapów sieciowych (1.17.13): dokładna godzina. Powód "pora dnia, nie
@@ -396,7 +410,7 @@ def cloud_block(now: datetime | None = None, chat: str | None = None) -> str:
     now = now or datetime.now()
     # 1.32.8: strefa (CEST/CET) przy godzinie - w noc zmiany czasu "02:30" zdarza się dwa razy.
     _tz = (now if now.tzinfo else now.astimezone()).strftime("%Z")
-    clock = today_line(now)[:-1] + f", godz. {now:%H:%M}" + (f" {_tz}" if _tz and not _tz.startswith(("+", "-")) else "") + "."
+    clock = clock_line(now, _tz if _tz and not _tz.startswith(("+", "-")) else "")
     return _assemble([clock, _sun_line(now), _CLOCK_RULE_CLOUD, _NET_RULE_CLOUD, _lessons_line(),
                       _background_line(with_names=False), previous_conversation_line(now), _conversation_block(chat)])
 

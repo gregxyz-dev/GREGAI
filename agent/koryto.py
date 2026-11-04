@@ -99,6 +99,27 @@ def network_order() -> list[str]:
     return [e for e in order() if e in SIECIOWE]
 
 
+def order_with_network(network_stages: list[str]) -> list[str]:
+    """Kolejność etapów z KORYTO, z etapami sieciowymi WSTAWIONYMI na ich sloty.
+
+    `network_stages` to etapy sieciowe dopuszczone przez politykę (np.
+    rozdzielnica: przy wadze 1-2 tylko "darmowe"). Pierwszy slot sieciowy
+    dostaje pierwszy etap z listy, drugi - drugi; nadmiar slotów przepada,
+    a brak etapu oznacza, że ten slot znika. Dzięki temu "lokalnie" zostaje
+    tam, gdzie dał je KORYTO (1.30.27), a polityka nie przenosi etapów."""
+    net = iter(network_stages or [])
+    out: list[str] = []
+    for etap in order():
+        if etap in SIECIOWE:
+            nxt = next(net, None)
+            if nxt is not None:
+                out.append(nxt)
+        else:
+            out.append(etap)
+    out.extend(net)
+    return out
+
+
 def local_before_network() -> bool:
     """Czy 'lokalnie' stoi PRZED pierwszym etapem sieciowym (np.
     KORYTO=lokalnie,anthropic). Namysł i rozmowa pytają o to, żeby nie
@@ -158,9 +179,14 @@ def _env_seconds(name: str, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, value))
 
 
-def status() -> dict:
-    """Do /api/system_info (main.py) i panelu Nadzorcy."""
-    return {
+def status(effective: dict[str, list[str]] | None = None, rozdzielnica: str | None = None) -> dict:
+    """Do /api/system_info (main.py) i panelu Nadzorcy.
+
+    `effective` (1.32.30): efektywna kolejność etapów per waga uwagi
+    ("1".."4"), liczona przez router (polityka rozdzielnicy). Sam ten moduł
+    nie zna polityki, więc dostaje ją gotową - bez importu kołowego.
+    `rozdzielnica`: "A"/"B"/"off" do wyświetlenia, skąd ta kolejność."""
+    st = {
         "kolejnosc": order(),
         "opis": describe(),
         "lokalnie": local_mode(),
@@ -171,3 +197,8 @@ def status() -> dict:
         "zadania_siecia": tasks_via_network(),
         "domyslne": _parse(DOMYSLNE),
     }
+    if effective:
+        st["efektywna"] = effective
+    if rozdzielnica:
+        st["rozdzielnica"] = rozdzielnica
+    return st

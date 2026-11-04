@@ -4,6 +4,7 @@
 .env-*
 !.env.example
 .gregai-*.tmp
+.venv/
 data/
 memory/
 backups/
@@ -24,9 +25,26 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
 .pytest_cache/
 
 # Samo-trening routera (training/README.md): venv, model bazowy, llama.cpp,
 # scalony model i GGUF - gigabajty, odtwarzalne przez `bash training/run.sh`.
 training/.work/
+training/models/
+training/eval_history/
 *.gguf
+
+# Paczki wydania i podpisy - budowane przez `bash wydaj.sh`.
+*.zip
+GREGAI.sha256.sig
+
+# Audyt i dane lokalne (katalog data/ jest wyłączony wyżej; wpis jawny dla czytelności).
+data/audyt/
+
+# Klucze i podpisy - nigdy do repozytorium.
+*.gpg
+*.key
+
+# Node, jeśli kiedyś pojawi się w projekcie (obecnie UI nie ma builda).
+node_modules/

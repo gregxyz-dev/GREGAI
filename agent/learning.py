@@ -56,6 +56,8 @@ from __future__ import annotations
 import functools
 import json
 import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -104,6 +106,22 @@ MAX_LEARN_CHARS = 200
 SCAN_CHARS = 1500
 
 _CACHE: list[dict] | None = None
+# 1.32.28 (audyt #1): tryb eval nie uczy produkcyjnego routera.
+_SUPPRESS = threading.local()
+
+
+@contextmanager
+def suppress_learning():
+    previous = getattr(_SUPPRESS, "on", False)
+    _SUPPRESS.on = True
+    try:
+        yield
+    finally:
+        _SUPPRESS.on = previous
+
+
+def suppressed() -> bool:
+    return bool(getattr(_SUPPRESS, "on", False))
 
 
 def _now_iso() -> str:
@@ -174,9 +192,9 @@ def _normalize_routes(routes: list[dict]) -> list[dict]:
     return routes
 
 
-def _load() -> list[dict]:
+def _load(fresh: bool = False) -> list[dict]:
     global _CACHE
-    if _CACHE is None or str(LEARNED_PATH) in _READ_FAILED:
+    if _CACHE is None or fresh or str(LEARNED_PATH) in _READ_FAILED:
         _READ_FAILED.discard(str(LEARNED_PATH))  # ponowna próba po chwilowym błędzie
         _CACHE = _normalize_routes(_read_json(LEARNED_PATH, [], _valid_routes))
     return _CACHE
@@ -187,7 +205,8 @@ def _save() -> None:
     try:
         if str(LEARNED_PATH) in _READ_FAILED:
             return  # nie nadpisujemy pliku, którego nie udało się przeczytać
-        fsutil.atomic_write_text(LEARNED_PATH, json.dumps(_CACHE, ensure_ascii=False, indent=2))
+        with fsutil.data_lock():
+            fsutil.atomic_write_text(LEARNED_PATH, json.dumps(_CACHE, ensure_ascii=False, indent=2))
     except (OSError, ValueError) as e:  # ValueError: tekst, którego nie da się zapisać w UTF-8
         print(f"UWAGA: nie zapisano {LEARNED_PATH.name}: {e}")
 
@@ -286,12 +305,15 @@ def _expired(r: dict) -> bool:
 
 
 def prune_expired() -> int:
-    routes = _load()
-    before = len(routes)
-    routes[:] = [r for r in routes if not _expired(r)]
-    if len(routes) != before:
-        _save()
-    return before - len(routes)
+    if suppressed():
+        return 0
+    with fsutil.data_lock():
+        routes = _load(fresh=True)
+        before = len(routes)
+        routes[:] = [r for r in routes if not _expired(r)]
+        if len(routes) != before:
+            _save()
+        return before - len(routes)
 
 
 def find_learned_record(message: str) -> dict | None:
@@ -359,6 +381,8 @@ def find_learned_match(message: str) -> tuple[str, str | None] | None:
     if record is None:
         return None
     arg = _strip_triggers(message, record["words"]) or None
+    if suppressed():  # eval: dopasowanie bez zapisu licznika trafień
+        return record["tool"], arg
     record["hits"] = record.get("hits", 0) + 1
     record["last_used"] = _now_iso()
     _save()
@@ -374,18 +398,31 @@ def forget_route(tool: str, words: list[str]) -> bool:
     nauczyć się niczego, niż nauczyć się źle", tutaj: wolimy ZAPOMNIEĆ
     coś źle wyuczonego, niż pozwolić mu dalej mylić się w ten sam
     sposób. Zwraca True, jeśli faktycznie coś usunięto."""
-    routes = _load()
-    word_set = set(words)
-    before = len(routes)
-    routes[:] = [r for r in routes if not (r["tool"] == tool and set(r["words"]) == word_set)]
-    if len(routes) != before:
-        _save()
-        return True
-    return False
+    if suppressed():
+        return False
+    with fsutil.data_lock():
+        routes = _load(fresh=True)
+        word_set = set(words)
+        before = len(routes)
+        routes[:] = [r for r in routes if not (r["tool"] == tool and set(r["words"]) == word_set)]
+        if len(routes) != before:
+            _save()
+            return True
+        return False
 
 
 def learn_from_resolution(message: str, tool: str, model_arg: str, by: str | None = None,
                           kontekst: bool = False) -> dict | None:
+    """Publiczny wrapper: w trybie eval nic nie zapisuje, a poza nim trzyma
+    międzyprocesowy zamek data/ przez cały odczyt-modyfikację-zapis."""
+    if suppressed():
+        return None
+    with fsutil.data_lock():
+        return _learn_from_resolution(message, tool, model_arg, by=by, kontekst=kontekst)
+
+
+def _learn_from_resolution(message: str, tool: str, model_arg: str, by: str | None = None,
+                           kontekst: bool = False) -> dict | None:
     """Wywoływane z router.py WYŁĄCZNIE gdy Ollama sama, bez pomocy
     żadnego wzorca (ani ręcznego, ani wcześniej wyuczonego), poprawnie
     rozpoznała narzędzie dla tej wiadomości. Taki moment jest żywym
@@ -436,7 +473,7 @@ def learn_from_resolution(message: str, tool: str, model_arg: str, by: str | Non
     if word_set <= _GENERIC_TRIGGER_STEMS:
         return None
 
-    routes = _load()
+    routes = _load(fresh=True)
     for existing in routes:
         existing_set = set(existing["words"])
         if existing["tool"] == tool:
@@ -542,9 +579,9 @@ def _valid_topic_words(data) -> bool:
         isinstance(k, str) and isinstance(v, list) and all(isinstance(w, str) for w in v) for k, v in data.items())
 
 
-def _load_topic_words() -> dict:
+def _load_topic_words(fresh: bool = False) -> dict:
     global _TOPIC_CACHE
-    if _TOPIC_CACHE is None or str(TOPIC_WORDS_PATH) in _READ_FAILED:
+    if _TOPIC_CACHE is None or fresh or str(TOPIC_WORDS_PATH) in _READ_FAILED:
         _READ_FAILED.discard(str(TOPIC_WORDS_PATH))
         _TOPIC_CACHE = _read_json(TOPIC_WORDS_PATH, {}, _valid_topic_words)
     return _TOPIC_CACHE
@@ -554,7 +591,8 @@ def _save_topic_words() -> None:
     try:
         if str(TOPIC_WORDS_PATH) in _READ_FAILED:
             return
-        fsutil.atomic_write_text(TOPIC_WORDS_PATH, json.dumps(_TOPIC_CACHE, ensure_ascii=False, indent=2))
+        with fsutil.data_lock():
+            fsutil.atomic_write_text(TOPIC_WORDS_PATH, json.dumps(_TOPIC_CACHE, ensure_ascii=False, indent=2))
     except (OSError, ValueError) as e:
         print(f"UWAGA: nie zapisano {TOPIC_WORDS_PATH.name}: {e}")
 
@@ -582,6 +620,8 @@ def learn_topic_words(message: str, resolved_key: str, own_words: set, other_wor
 
     Zwraca listę NOWO dodanych słów (do trace.py, widoczne na /debug) albo
     None, gdy nic nowego nie dodano (brak sygnału albo kolizja)."""
+    if suppressed():
+        return None
     candidates = set(significant_words(message))
     if not candidates or len(candidates) > MAX_TOPIC_WORDS_PER_LEARN:
         return None
@@ -603,36 +643,40 @@ def learn_topic_words(message: str, resolved_key: str, own_words: set, other_wor
     if not new_words:
         return None
 
-    store = _load_topic_words()
-    existing = store.setdefault(resolved_key, [])
-    existing_set = set(existing)
-    added = sorted(w for w in new_words if w not in existing_set)
-    if not added:
-        return None
+    with fsutil.data_lock():
+        store = _load_topic_words(fresh=True)
+        existing = store.setdefault(resolved_key, [])
+        existing_set = set(existing)
+        added = sorted(w for w in new_words if w not in existing_set)
+        if not added:
+            return None
 
-    existing.extend(added)
-    if len(existing) > MAX_LEARNED_TOPIC_WORDS_PER_TOOL:
-        del existing[: len(existing) - MAX_LEARNED_TOPIC_WORDS_PER_TOOL]
+        existing.extend(added)
+        if len(existing) > MAX_LEARNED_TOPIC_WORDS_PER_TOOL:
+            del existing[: len(existing) - MAX_LEARNED_TOPIC_WORDS_PER_TOOL]
 
-    _save_topic_words()
-    return added
+        _save_topic_words()
+        return added
 
 
 def forget_topic_words(tool: str, words: list[str]) -> bool:
     """Jak forget_route wyżej, dla drugiej warstwy (słowa-tematy do
     dopytań): usuwa konkretne słowa z listy wyuczonej dla `tool`.
     Zwraca True, jeśli faktycznie coś usunięto."""
-    store = _load_topic_words()
-    existing = store.get(tool)
-    if not existing:
+    if suppressed():
         return False
-    to_remove = set(words)
-    new_list = [w for w in existing if w not in to_remove]
-    if len(new_list) == len(existing):
-        return False
-    store[tool] = new_list
-    _save_topic_words()
-    return True
+    with fsutil.data_lock():
+        store = _load_topic_words(fresh=True)
+        existing = store.get(tool)
+        if not existing:
+            return False
+        to_remove = set(words)
+        new_list = [w for w in existing if w not in to_remove]
+        if len(new_list) == len(existing):
+            return False
+        store[tool] = new_list
+        _save_topic_words()
+        return True
 
 
 def all_learned_topic_words() -> dict:

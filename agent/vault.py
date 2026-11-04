@@ -28,6 +28,9 @@ from typing import Dict, List, Set
 import slowa as slowa_mod
 
 MAX_FILE_BYTES = 2 * 1024 * 1024  # 2 MB
+# Tytuł (pierwszy H1) idzie do JSON-a grafu i do UI. Bez limitu pojedyncza
+# linia 2 MB dawała tytuł 2 MB i ogromny /api/graph (1.32.29, audyt #9).
+MAX_TITLE_CHARS = 300
 SKIP_DIRS = {"node_modules", ".git"}
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
 
@@ -124,6 +127,20 @@ def find_title(text: str, masked: str | None = None) -> str | None:
     # Linia z ORYGINAŁU: w zamaskowanym tekście `kod` na początku tytułu jest spacjami,
     # więc grupa 1 zaczynałaby się dopiero po nim ("`kubectl` podstawy" -> "podstawy").
     return re.sub(r"^#[ \t]+", "", text[m.start():m.end()]).strip() or None
+
+
+def strip_bom(text: str) -> str:
+    """Usuwa wiodący BOM; inaczej "# Tytuł" nie jest linią zaczynającą się od "#"
+    (1.32.29, audyt #8)."""
+    return (text or "").lstrip("\ufeff")
+
+
+def limit_title(title: str) -> str:
+    """Tytuł węzła najwyżej MAX_TITLE_CHARS znaków; pełny H1 zostaje w treści."""
+    title = (title or "").strip()
+    if len(title) <= MAX_TITLE_CHARS:
+        return title
+    return title[: MAX_TITLE_CHARS - 1].rstrip() + "…"
 
 
 def find_type(text: str, masked: str | None = None) -> str | None:
@@ -614,7 +631,18 @@ def _pdf_adjacent(stream: bytes, a: int, b: int) -> bool:
 
 
 def _pdf_unescape(raw: bytes) -> str:
-    return re.sub(rb"\\([()\\])", rb"\1", raw).decode("latin-1", errors="ignore")
+    """Tekst z literału PDF. 1.32.29 (audyt #5): UTF-16 z BOM (typowe dla
+    Worda), potem UTF-8 (polskie znaki), dopiero na końcu cp1252. Wcześniejsze
+    latin-1 zamieniało "Zażółć" na "ZaÅ¼Ã³ÅÄ‡", a UTF-16 dawało NUL-e."""
+    raw = re.sub(rb"\\([()\\])", rb"\1", raw)
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = raw.decode("utf-16", errors="replace")
+    else:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252", errors="replace")
+    return text.replace("\x00", "")
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -814,7 +842,7 @@ def build_vault(roots: List[str]) -> Vault:
 
             masked = mask_code(text)  # raz na notatkę: to większość czasu budowy indeksu
             ntype = find_type(text, masked) or "Note"
-            title = find_title(text, masked) or path.stem
+            title = limit_title(find_title(text, masked) or path.stem)
 
             slug = _slug_for(path, root)
             # Ta sama względna nazwa w dwóch korzeniach (np. python.md w notatki/

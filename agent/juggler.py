@@ -88,6 +88,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as _FutureTimeout
 from pathlib import Path
 
+import fsutil
 import koryto as koryto_mod
 import netguard as netguard_mod
 import trace as trace_mod
@@ -452,6 +453,12 @@ def providers_pool(etap: str | None = None) -> list[str]:
 # KORYTO (nie wskrzesza etapu, który użytkownik wyłączył). ROZDZIELNICA=0 wyłącza
 # (zachowanie jak dawniej: kolejność i model wg KORYTO/NAMYSL_MODEL).
 _PLATNY_ETAP = "anthropic"
+# 1.32.30: waga uwagi dla pracy w TLE (planner pętli zadań, streszczenia
+# rozmowy, ocena zadań stałych, straż). Ma być ta sama polityka co w rozmowie,
+# ale bez zgadywania wagi użytkownika: 3 = "ważne" (darmowa pula pierwsza,
+# płatny Claude dopiero jako eskalacja). Dzięki temu KORYTO nie jest omijane
+# przez surowe koryto.order() w żadnej ścieżce.
+POZIOM_TLA = 3
 _ROZDZ_LICZNIK = {"bez_claude": 0, "z_claude": 0, "blokady_platnego": 0}
 
 
@@ -506,14 +513,15 @@ def rozdzielnica(poziom: int) -> dict:
 
 def samodopasowanie() -> list | None:
     """1.32.4 (decyzja Grzegorza: "niech dostawca sam się dopasowuje"): wywołania bez
-    wskazanej kolejności (wybór narzędzia, straż, zadania stałe, streszczenia) idą najpierw
-    darmową pulą, a płatny Claude wchodzi dopiero, gdy pula zawiedzie. Rozmowa i Namysł mają
-    własną kolejność z rozdzielnicy (waga uwagi). ROZDZIELNICA=0 wraca do kolejności KORYTO."""
+    wskazanej kolejności (wybór narzędzia, straż, zadania stałe, streszczenia) idą
+    polityką rozdzielnicy na wadze TŁA (`POZIOM_TLA` = 3): darmowa pula pierwsza,
+    płatny Claude wchodzi dopiero, gdy pula zawiedzie. ROZDZIELNICA=0 wraca do
+    kolejności KORYTO. 1.32.30: wcześniej ta funkcja miała WŁASNĄ kopię reguły
+    ("darmowe przed anthropic"), a planner i streszczenia i tak wołały surowe
+    koryto.order() - teraz wszystkie ścieżki pytają jedno miejsce."""
     if rozdzielnica_policy() == "off":
         return None
-    net = koryto_mod.network_order()
-    order = [e for e in ("darmowe", _PLATNY_ETAP) if e in net] + [e for e in net if e not in ("darmowe", _PLATNY_ETAP)]
-    return order or None
+    return rozdzielnica(POZIOM_TLA)["etapy"] or None
 
 
 def rozdzielnica_licznik() -> dict:
@@ -687,6 +695,10 @@ def reset_breakers() -> None:
 # wydatki w USD. Ceny w .env (KORYTO_CENA_*_USD, za milion tokenów): to
 # SZACUNEK do bezpiecznika, rachunek prowadzi Anthropic Console.
 JOURNAL_PATH = Path(os.environ.get("KORYTO_DZIENNIK_PLIK") or (DISTILL_PAIRS_PATH.parent.parent / "koryto_dziennik.json"))
+# 1.35.0: per-wywołanie ślad kosztu Claude (panel „Wydatki dziś").
+# Dziennik wyżej ma tylko sumy dnia/miesiąca; ten plik dopisuje każdy rachunek
+# (model, tokeny, USD) bez treści rozmowy.
+SPEND_LOG_PATH = DISTILL_PAIRS_PATH.parent.parent / "koryto_wydatki.jsonl"
 _JOURNAL: dict = {}
 _JOURNAL_LOADED = False
 _PRICE_IN = env_float("KORYTO_CENA_WEJSCIE_USD", 1.0, 0.0, 1000.0)
@@ -761,11 +773,11 @@ def _journal_roll_locked() -> None:
 
 def _journal_save_locked() -> None:
     try:
-        import fsutil
         JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
         if _JOURNAL.get("_blad_odczytu"):
             return  # nie nadpisujemy pliku, którego nie udało się przeczytać
-        fsutil.atomic_write_text(JOURNAL_PATH, json.dumps(_JOURNAL, ensure_ascii=False))
+        with fsutil.data_lock():
+            fsutil.atomic_write_text(JOURNAL_PATH, json.dumps(_JOURNAL, ensure_ascii=False))
     except Exception:
         pass  # dziennik to dodatek: brak zapisu nie psuje odpowiedzi
 
@@ -819,6 +831,16 @@ def _note_spend(usage: dict) -> None:
         else:
             p_in, p_out = _PRICE_IN, _PRICE_OUT
         usd = (inp * p_in + cw * p_in * 1.25 + cr * p_in * 0.1 + out * p_out) / 1_000_000
+        try:
+            if SPEND_LOG_PATH.exists() and SPEND_LOG_PATH.stat().st_size > 512 * 1024:
+                SPEND_LOG_PATH.replace(SPEND_LOG_PATH.with_suffix(".jsonl.1"))
+            fsutil.append_private_line(SPEND_LOG_PATH, fsutil.json_line({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "model": _m, "wejscie": inp, "wyjscie": out,
+                "cache_w": cw, "cache_r": cr, "usd": round(usd, 6),
+            }))
+        except OSError:
+            pass  # ślad wydatków to dodatek: brak zapisu nie blokuje odpowiedzi
         with _LOCK:
             _journal_load_locked()
             _journal_roll_locked()
@@ -1109,7 +1131,7 @@ def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], tim
     except ImportError as e:
         raise RuntimeError(
             "brak httpx (potrzebny do HTTP/2 z Groq, patrz 1.8.0) - zainstaluj: "
-            "bash install.sh, albo ręcznie: python3 -m pip install --user httpx[http2]"
+            "bash install.sh, albo ręcznie w venv projektu: .venv/bin/python -m pip install -r requirements.txt"
         ) from e
     # 1.19.0: w oknie świeżego sprawdzenia z chat()/research() bez ponownego warp-cli.
     if not netguard_mod.recently_verified(_guard_reuse()):

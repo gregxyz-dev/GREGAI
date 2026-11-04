@@ -33,7 +33,7 @@ envval() { grep -E "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$ENV_FIL
 
 # Kontrole nie zapisują do prawdziwego dziennika Koryta (1.20.0).
 export KORYTO_DZIENNIK_PLIK="$(mktemp -u /tmp/gregai-koryto-XXXXXX.json)"
-printf '\n\033[1;36m== GREGAI: 68 kontrole (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
+printf '\n\033[1;36m== GREGAI: 80 kontroli (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
 sudo -v || { echo "Bez sudo nie da się sprawdzić wszystkiego. Uruchom ponownie i podaj hasło."; exit 1; }
 
 # 1. System
@@ -2416,7 +2416,7 @@ import router as rr
 src = inspect.getsource(rr._route)
 chk("namysl_dostaje_temat", "(dotyczy: {label}" in src and "_synthesize_instead(tool_name, arg)" in src)
 chk("notatki_bez_zgody_lokalnie", 'tool_name == "search_brain" and not (model_up or _namysl_settings.get("material_do_sieci") is True)' in src)
-chk("faza_lokalna_limit", "NAMYSL_LOCAL_BUDGET_S - (time.monotonic() - _t0)" in src and rr.NAMYSL_LOCAL_BUDGET_S <= 600)
+chk("faza_lokalna_limit", "local_chat=_namysl_local_chat" in src and rr._namysl_local_timeout() >= 1)
 
 # 5. Historia złota/srebra: przy awarii Yahoo przynajmniej bieżąca cena z zapasu
 import tools as tt, netguard as ng
@@ -3759,10 +3759,249 @@ else
   bad 69 "Open source tura 5/5: ${TURA69_CHECK:-błąd importu}" "sprawdź LICENSE, agent/persona.py (USER_GENDER*), agent/awareness.py, agent/namysl.py, agent/bramka.py"
 fi
 
+# 70. Narzędzia deweloperskie z rozmowy (1.32.26): pięć zdolności tylko do
+# odczytu/testów, uruchamianych wyłącznie bezpośrednią prośbą użytkownika.
+# Na atrapie runnera: run_eval ma domyślnie --bez-zapisu bez --zywo, tryb na
+# żywo dodaje --zywo, check.sh jest wołany bez sudo, env/service zwracają
+# czytelny stan, docs_check nie wymaga sieci ani zapisu. To sprawdza rejestr
+# i kontrakt wywołań, nie jakość modeli.
+DEVTOOLS_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import capabilities as cap
+import devtools as dt
+
+expected = {"run_eval", "run_check", "env_status", "service_status", "docs_check"}
+missing = sorted(name for name in expected if name not in cap.CAPABILITIES)
+calls = []
+original = dt._run
+
+def fake(argv, timeout=120):
+    calls.append(list(argv))
+    text = " ".join(argv)
+    if "ewaluacja.py" in text:
+        return {"rc": 0, "out": "Zaliczone: 1/1", "err": ""}
+    if argv[-1] == "--version":
+        return {"rc": 0, "out": "Python 3.14.4", "err": ""}
+    if "-c" in argv:
+        return {"rc": 0, "out": '{"httpx": "0.28.1", "huawei-lte-api": "1.10.0"}', "err": ""}
+    if argv[:2] == ["systemctl", "is-active"]:
+        return {"rc": 0, "out": "active", "err": ""}
+    if argv[:2] == ["ollama", "list"]:
+        return {"rc": 0, "out": "NAME ID SIZE\nqwen2.5:3b abc 2GB", "err": ""}
+    return {"rc": 0, "out": "MOCK", "err": ""}
+
+try:
+    dt._run = fake
+    offline = dt.run_eval(False)
+    live = dt.run_eval(True)
+    check = dt.run_check()
+    env = dt.env_status()
+    service = dt.service_status()
+    docs = dt.docs_check()
+finally:
+    dt._run = original
+
+eval_calls = [argv for argv in calls if "ewaluacja.py" in " ".join(argv)]
+ok = (
+    not missing
+    and offline.get("ok") is True
+    and any("--bez-zapisu" in argv and "--zywo" not in argv for argv in eval_calls)
+    and live.get("ok") is True and any("--zywo" in argv for argv in eval_calls)
+    and check.get("ok") is True and "check.sh" in check.get("speech", "")
+    and "httpx" in env.get("speech", "") and "Ollama" in env.get("speech", "")
+    and "gregai" in service.get("speech", "")
+    and isinstance(docs.get("speech"), str) and bool(docs.get("speech"))
+)
+print("OK" if ok else "FAIL " + (",".join(missing) or "kontrakt"))
+PY
+)"
+if [ "$DEVTOOLS_CHECK" = "OK" ]; then
+  ok 70 "Narzędzia deweloperskie z rozmowy: eval, check, venv/pakiety, status usługi i spójność dokumentacji; tylko odczyt i bezpośrednia prośba"
+else
+  bad 70 "Narzędzia deweloperskie: ${DEVTOOLS_CHECK:-błąd importu}" "sprawdź agent/devtools.py i wpisy run_*/env_status/service_status/docs_check w agent/capabilities.py"
+fi
+
+# 71. LOKALNY_TIMEOUT (1.32.27): lokalny szkic Namysłu na qwen2.5:3b potrzebuje
+# na i7-6600U 30-60 s na ciepło, po starcie nawet więcej. Poniżej 60 s grozi
+# fałszywym "Model nie odpowiedział"; brak wpisu = domyślne 180 s. Ten limit
+# dotyczy tylko etapu lokalnego; CLOUD_TIMEOUT/JUGGLER_TIMEOUT zostają bez zmian.
+LOCAL_TIMEOUT_RAW="$(envval LOKALNY_TIMEOUT)"
+LOCAL_TIMEOUT_VAL="${LOCAL_TIMEOUT_RAW:-180}"
+if [[ "$LOCAL_TIMEOUT_VAL" =~ ^[0-9]+$ ]] && [ "$LOCAL_TIMEOUT_VAL" -ge 60 ]; then
+  ok 71 "LOKALNY_TIMEOUT=${LOCAL_TIMEOUT_VAL} s (minimum 60; domyślnie 180; dotyczy tylko lokalnego Namysłu)"
+else
+  bad 71 "LOKALNY_TIMEOUT=${LOCAL_TIMEOUT_RAW:-brak} jest za mały albo nie jest liczbą" "wpisz LOKALNY_TIMEOUT=180 w .env (minimum 60) i zrestartuj usługę"
+fi
+
+# 72. Izolacja eval + chat_id + maska outbound (1.32.28, audyt #1, #2, #7):
+# eval --zywo nie może uczyć produkcyjnego routera ani dopisywać śladu/par;
+# "/" w slugu projektu nie może zlepiać dwóch rozmów; maska outbound nie może
+# zjadać adresu portfela, ale hasło nadal musi być ukryte.
+IZOLACJA_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_isolation()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$IZOLACJA_CHECK" = "OK" ]; then
+  ok 72 "Izolacja eval: brak zapisu do produkcyjnych data/, chat_id rozróżnia / od -, maska outbound zostawia adres portfela a chowa hasło"
+else
+  bad 72 "Izolacja eval: ${IZOLACJA_CHECK:-błąd importu}" "sprawdź agent/ewaluacja.py (_check_isolation), agent/sources.py (chat_id), agent/trace.py i agent/sysop.py (outbound)"
+fi
+
+# 73. Audyt 1.32.29 (kosz, PDF, offline, BOM, limit tytułu, .env.example,
+# LOKALNY_TIMEOUT min 60, kolejność wpisów .env) - te same testy co w eval.
+AUDYT_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1329()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AUDYT_CHECK" = "OK" ]; then
+  ok 73 "Audyt 1.32.29: kosz i metadane, PDF UTF-8/UTF-16/cp1252, blok offline, BOM, limit tytułu, dokumentacja .env, LOKALNY_TIMEOUT min 60, ostatni wpis .env"
+else
+  bad 73 "Audyt 1.32.29: ${AUDYT_CHECK:-błąd importu}" "sprawdź agent/ewaluacja.py (_check_audyt_1329) i pliki z poprawek 1.32.29"
+fi
+
+# 74. Audyt 1.32.29, poprawki koryta (#1-#5): efektywna kolejność per waga
+# (rozdzielnica) w /api/system_info i UI, fallback do surowego KORYTO, gdy
+# polityka wycina wszystkie etapy sieciowe, awaryjny lokalny liczony z etapów
+# dozwolonych dla wagi, NetGuardBlocked traktowany jak wyczerpanie, oraz
+# planner/streszczenia/standing/straż przez rozdzielnicę (nie surowe KORYTO).
+AUDYT30_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1330()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AUDYT30_CHECK" = "OK" ]; then
+  ok 74 "Koryto 1.32.30: efektywna kolejność per waga, fallback pustej polityki, awaryjny lokalny wg wagi, NetGuardBlocked, tło przez rozdzielnicę"
+else
+  bad 74 "Koryto 1.32.30: ${AUDYT30_CHECK:-błąd importu}" "sprawdź agent/ewaluacja.py (_check_audyt_1330), agent/koryto.py, agent/router.py, agent/juggler.py, agent/namysl.py"
+fi
+
+# 75. Namysł ma gwarancję modelu (1.32.31): po porażce chmury (limit, HTTP 413
+# "Request too large" przy Groq TPM 8000, awaria) faza spada na lokalny
+# _namysl_local_chat z wariantem promptu lokalnym - także przy
+# KORYTO_LOKALNIE=bez_internetu. Bez tego "Szkic odpowiedzi" kończy się
+# "Model nie odpowiedział" w 0,3 s, a Namysł przerywany.
+NAMYSL_GUARANTEE_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1331()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$NAMYSL_GUARANTEE_CHECK" = "OK" ]; then
+  ok 75 "Namysł 1.32.31: awaryjny lokalny po porażce chmury w każdej fazie, z wariantem promptu lokalnym (bez materiału 16k)"
+else
+  bad 75 "Namysł 1.32.31: ${NAMYSL_GUARANTEE_CHECK:-błąd importu}" "sprawdź agent/ewaluacja.py (_check_audyt_1331) i agent/namysl.py (_Models.ask, user_local)"
+fi
+
+# 76. Front 1.33.0 (MVP): stepper 6 faz nad composerem, jeden helper stanu
+# (namyslState) dla osi w dymku i steppera, animacja oddechu i brak inline
+# styles w index.html (CSP). Statycznie, bez przeglądarki - żywy wygląd
+# sprawdza się ręcznie (Namysł 60 s+).
+UI_STARK_CHECK="$(cd "$ROOT" && python3 - <<'PY'
+from pathlib import Path
+html = Path("ui/index.html").read_text(encoding="utf-8")
+css = Path("ui/styles.css").read_text(encoding="utf-8")
+js = Path("ui/app.js").read_text(encoding="utf-8")
+problems = []
+if 'id="namysl-track"' not in html:
+    problems.append("brak #namysl-track")
+for faza in ("rozpoznanie", "zbieranie", "szkic", "krytyka", "poprawa", "sprawdzenie"):
+    if f'data-faza="{faza}"' not in html:
+        problems.append(f"brak fazy {faza}")
+if "@keyframes nt-breathe" not in css or ".nt-track-step.active" not in css:
+    problems.append("brak animacji oddechu")
+if "function namyslState" not in js or "renderNamyslTrack(" not in js:
+    problems.append("brak wspólnego stanu/steppera w app.js")
+if "style=" in html:
+    problems.append("inline style w index.html (CSP)")
+if "prefers-reduced-motion" not in css:
+    problems.append("brak prefers-reduced-motion")
+print("OK" if not problems else "FAIL " + "; ".join(problems))
+PY
+)"
+if [ "$UI_STARK_CHECK" = "OK" ]; then
+  ok 76 "Front 1.33.0: stepper 6 faz, wspólny namyslState, oddech faz, zero inline styles, prefers-reduced-motion"
+else
+  bad 76 "Front 1.33.0: ${UI_STARK_CHECK:-błąd importu}" "sprawdź ui/index.html, ui/styles.css i ui/app.js (namyslState, renderNamyslTrack)"
+fi
+
+# 77. Front 1.33.1: Nadzorca w dwóch kolumnach (rura koryta, tabela modeli,
+# timeline Straży, paski budżetu) oraz toasty Straży zamiast alertu inline.
+# Statycznie, bez przeglądarki; żywy wygląd sprawdza się ręcznie.
+UI_1331_CHECK="$(cd "$ROOT" && python3 - <<'PY'
+from pathlib import Path
+ui = Path("ui")
+html = ui.joinpath("index.html").read_text(encoding="utf-8") + ui.joinpath("debug.html").read_text(encoding="utf-8")
+css = ui.joinpath("styles.css").read_text(encoding="utf-8") + ui.joinpath("debug.css").read_text(encoding="utf-8")
+js = ui.joinpath("app.js").read_text(encoding="utf-8") + ui.joinpath("debug.js").read_text(encoding="utf-8")
+problems = []
+for token in ("dbg-columns", "korytoPipe", "modelTable", "strazTimeline", "budgetBars"):
+    if token not in html: problems.append("brak " + token)
+for token in ("dbg-pipe-flow", "dbg-budget-fill", "straz-toast", "prefers-reduced-motion"):
+    if token not in css: problems.append("brak " + token)
+for token in ("extractStrazAlerts", "showStrazToast", "renderKorytoPipe", "renderModelTable", "renderStrazTimeline", "renderBudget"):
+    if token not in js: problems.append("brak " + token)
+if "<style" in html: problems.append("inline <style>")
+print("OK" if not problems else "FAIL " + "; ".join(problems))
+PY
+)"
+if [ "$UI_1331_CHECK" = "OK" ]; then
+  ok 77 "Front 1.33.1: Nadzorca 2 kolumny (koryto, modele, straż, budżet) i toasty Straży z pełnym tekstem w szufladzie"
+else
+  bad 77 "Front 1.33.1: ${UI_1331_CHECK:-błąd importu}" "sprawdź ui/index.html, ui/debug.html, ui/debug.css, ui/debug.js, ui/app.js i ui/styles.css"
+fi
+
+# 78. Audyt 1.33.2: akcje w powitaniach (#6), wąska maska outbound (#11),
+# checkbox zgody w catch (#14), brak martwych trybów (#16) i dokładna godzina
+# w bloku „Teraz” (#17) - te same testy co w eval.
+AUDYT32_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1332()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AUDYT32_CHECK" = "OK" ]; then
+  ok 78 "Audyt 1.33.2: akcje w powitaniach, maska outbound (sk-or/gsk/ssh/AKIA/xox/ghp/gho), checkbox zgody, brak starych trybów, Godzina: HH:MM"
+else
+  bad 78 "Audyt 1.33.2: ${AUDYT32_CHECK:-błąd importu}" "sprawdź agent/namysl.py, agent/trace.py, agent/awareness.py i ui/app.js"
+fi
+
+# 79. Audyt 1.33.3: jeden timer i numerowane fazy w stepperze (#18) oraz
+# prywatny plik w prompcie lokalnego modelu, gdy chmura padnie (#19).
+AUDYT33_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1333()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AUDYT33_CHECK" = "OK" ]; then
+  ok 79 "Audyt 1.33.3: jeden timer w stepperze, fazy 1-6, plik w prompcie lokalnego modelu po padnięciu chmury"
+else
+  bad 79 "Audyt 1.33.3: ${AUDYT33_CHECK:-błąd importu}" "sprawdź agent/namysl.py (local_recheck, zbieranie plików) i ui/app.js (stepper, pending status)"
+fi
+
+# 80. Audyt 1.33.4 (#19b): faza Zbierania sama sprawdza ollama_available();
+# material_do_sieci=false + lokalny działa -> plik czytany i digest tylko w
+# prompcie lokalnym; bez lokalnego (i bez zgody) -> uczciwie pominięty.
+AUDYT34_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_audyt_1334()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AUDYT34_CHECK" = "OK" ]; then
+  ok 80 "Audyt 1.33.4: recheck Ollamy w Zbieraniu, plik czytany dla lokalnego, digest nie idzie do chmury, pominięty tylko bez obu"
+else
+  bad 80 "Audyt 1.33.4: ${AUDYT34_CHECK:-błąd importu}" "sprawdź agent/namysl.py (Context.local_available, zbieranie plików)"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[1;32m== %d/69 OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$PORT"
+  printf '\033[1;32m== %d/80 OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$PORT"
   exit 0
 fi
-printf '\033[1;31m== %d/69 OK, do poprawy: %s\033[0m\n\n' "$PASS" "${FAILED[*]}"
+printf '\033[1;31m== %d/80 OK, do poprawy: %s\033[0m\n\n' "$PASS" "${FAILED[*]}"
 exit 1

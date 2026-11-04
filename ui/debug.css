@@ -286,3 +286,214 @@ body.segment-debug { margin: 0; }
   #debug-segment nav.dbg-tabs.dbg-tabs { width: 100%; border-radius: 16px; gap: 4px; padding: 4px; }
   #debug-segment nav.dbg-tabs .dbg-tab { height: auto; border-radius: 12px; padding: 8px; }
 }
+
+/* ============================================================================
+   1.33.1 - Nadzorca w dwóch kolumnach: koryto jako rura, modele, timeline
+   Straży i budżet. CSP: zero <style>, zero inline styles poza CSSOM
+   (--f dla paska budżetu). Animacje tylko tam, gdzie prosił projekt.
+   ========================================================================== */
+#debug-segment {
+  --stark-accent: #00d4ff;
+  --stark-ok: #00ff88;
+  --stark-bad: #ff4466;
+  --stark-warn: #ffaa00;
+  font-size: 15px;
+  line-height: 1.6;
+}
+#debug-segment section h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+#debug-segment .dbg-intro { margin: 0 0 16px; font-size: 12px; line-height: 1.6; }
+
+#debug-segment .dbg-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+#debug-segment .dbg-col { min-width: 0; }
+#debug-segment .dbg-col > h2 { margin-top: 24px; }
+#debug-segment .dbg-col > h2:first-child { margin-top: 0; }
+
+/* --- Koryto: rura z przepływem --- */
+#debug-segment .dbg-pipe { display: flex; align-items: stretch; margin: 0 0 8px; }
+#debug-segment .dbg-pipe-link {
+  flex: 0 0 16px;
+  align-self: center;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.35), rgba(136, 136, 160, 0.12));
+}
+#debug-segment .dbg-pipe-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+#debug-segment .dbg-pipe-node {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-2);
+}
+#debug-segment .dbg-pipe-name { font-size: 14px; font-weight: 600; line-height: 1.3; }
+#debug-segment .dbg-pipe-sub { margin-top: 8px; font-size: 12px; color: var(--text-dim); word-break: break-word; }
+#debug-segment .dbg-pipe-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+#debug-segment .dbg-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--text-dim);
+}
+#debug-segment .dbg-chip b { font-weight: 600; }
+#debug-segment .dbg-chip.ok { color: var(--stark-ok); border-color: rgba(0, 255, 136, 0.34); }
+#debug-segment .dbg-chip.warn { color: var(--stark-warn); border-color: rgba(255, 170, 0, 0.34); }
+#debug-segment .dbg-chip.bad { color: var(--stark-bad); border-color: rgba(255, 68, 102, 0.38); }
+#debug-segment .dbg-chip.off { color: var(--text-dim); border-style: dashed; }
+#debug-segment .dbg-pipe-badge {
+  align-self: flex-start;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.8;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+#debug-segment .dbg-pipe-badge.ok { color: var(--stark-ok); border-color: rgba(0, 255, 136, 0.34); }
+#debug-segment .dbg-pipe-badge.warn { color: var(--stark-warn); border-color: rgba(255, 170, 0, 0.34); }
+#debug-segment .dbg-pipe-badge.bad { color: var(--stark-bad); border-color: rgba(255, 68, 102, 0.38); }
+#debug-segment .dbg-pipe-stage.active .dbg-pipe-node {
+  border-color: rgba(0, 212, 255, 0.55);
+  box-shadow: 0 0 24px -12px rgba(0, 212, 255, 0.6);
+}
+#debug-segment .dbg-pipe-stage.bad .dbg-pipe-node { border-color: rgba(255, 68, 102, 0.38); }
+#debug-segment .dbg-pipe-stage.warn .dbg-pipe-node { border-color: rgba(255, 170, 0, 0.38); }
+#debug-segment .dbg-pipe-flow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 20%, rgba(0, 212, 255, 0.2) 45%, transparent 70%);
+  background-size: 220% 100%;
+  animation: dbg-flow 1.8s linear infinite;
+}
+@keyframes dbg-flow {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+/* --- Timeline Straży --- */
+#debug-segment .dbg-timeline {
+  margin: 0 0 8px;
+  padding: 0 0 0 16px;
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+#debug-segment .dbg-timeline li { position: relative; padding: 0 0 16px 16px; }
+#debug-segment .dbg-timeline li:last-child { padding-bottom: 0; }
+#debug-segment .dbg-tl-dot {
+  position: absolute;
+  left: -21px;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--stark-accent);
+  box-shadow: 0 0 0 4px rgba(0, 212, 255, 0.12);
+}
+#debug-segment .dbg-tl-body time { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+#debug-segment .dbg-tl-co { margin-top: 8px; font-size: 14px; line-height: 1.6; }
+#debug-segment .dbg-tl-ocena { margin-top: 8px; font-size: 12px; color: var(--text-dim); }
+
+/* --- Budżet: dwa paski, szerokość przez --f + scaleX --- */
+#debug-segment .dbg-budget { display: flex; flex-direction: column; gap: 16px; margin: 0 0 8px; }
+#debug-segment .dbg-budget-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+#debug-segment .dbg-budget-val { font-family: var(--font-mono); }
+#debug-segment .dbg-budget-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(136, 136, 160, 0.18);
+  overflow: hidden;
+}
+#debug-segment .dbg-budget-fill {
+  width: 100%;
+  height: 100%;
+  transform: scaleX(var(--f, 0));
+  transform-origin: left center;
+  transition: transform 300ms ease-out;
+  background: var(--stark-accent);
+}
+#debug-segment .dbg-budget-fill.ok { background: var(--stark-ok); }
+#debug-segment .dbg-budget-fill.warn { background: var(--stark-warn); }
+#debug-segment .dbg-budget-fill.bad { background: var(--stark-bad); }
+
+/* --- Tabela modeli --- */
+#debug-segment .dbg-table-wrap { overflow-x: auto; }
+#debug-segment .dbg-model-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#debug-segment .dbg-model-table th {
+  padding: 0 8px 8px 0;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+#debug-segment .dbg-model-table td { padding: 8px 8px 8px 0; border-top: 1px solid var(--border); vertical-align: top; }
+#debug-segment .dbg-model-name { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+#debug-segment .dbg-model-role {
+  display: block;
+  margin-top: 0;
+  font-family: var(--font-sans, inherit);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+#debug-segment .dbg-status {
+  display: inline-block;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--text-dim);
+}
+#debug-segment .dbg-status.ok { color: var(--stark-ok); border-color: rgba(0, 255, 136, 0.34); }
+#debug-segment .dbg-status.warn { color: var(--stark-warn); border-color: rgba(255, 170, 0, 0.34); animation: dbg-pulse 1.8s ease-in-out infinite; }
+#debug-segment .dbg-status.off { color: var(--text-dim); }
+@keyframes dbg-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+@media (max-width: 860px) {
+  #debug-segment { font-size: 14px; }
+  #debug-segment .dbg-columns { grid-template-columns: 1fr; gap: 24px; }
+  #debug-segment button, #debug-segment .dbg-tab { min-height: 44px; }
+  #debug-segment .dbg-pipe { flex-direction: column; gap: 8px; }
+  #debug-segment .dbg-pipe-stage { width: 100%; }
+  #debug-segment .dbg-pipe-link { display: none; }
+}
+
+/* Backup /debug.html nie ładuje styles.css, więc globalny reduced-motion
+   z styles.css tu nie działa - wyłączamy animacje lokalnie. */
+@media (prefers-reduced-motion: reduce) {
+  #debug-segment .dbg-pipe-flow,
+  #debug-segment .dbg-status.warn,
+  #debug-segment .dbg-budget-fill { animation: none !important; transition: none !important; }
+}

@@ -298,7 +298,7 @@ def run() -> dict:
         needs_h2 = not curl
     out.append(_layer("httpx z HTTP/2 (zapas za curl, Groq)", True if h2_ok else (False if needs_h2 else None),
                       "zainstalowane" if h2_ok else ("brak (potrzebne)" if needs_h2 else "brak (opcjonalne: curl wystarcza)"),
-                      "" if h2_ok else "python3 -m pip install --user --break-system-packages 'httpx[http2]'", 8))
+                      "" if h2_ok else "bash install.sh (uzupełni .venv z requirements.txt)", 8))
 
     # Werdykt: pierwsza warstwa, która nie działa (w kolejności warstw).
     failed = [l for l in out if l["ok"] is False]

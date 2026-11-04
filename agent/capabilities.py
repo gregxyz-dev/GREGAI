@@ -35,6 +35,7 @@ import symbols as symbols_mod
 import sysop as sysop_mod
 import tools as tools_mod
 import tryby as tryby_mod
+import devtools as devtools_mod
 
 
 class Capability:
@@ -233,6 +234,27 @@ def _call_standing_task_stop(vault, message, arg):
     return standing_mod.stop_task(arg or message)
 
 
+def _call_run_eval(vault, message, arg):
+    live = bool(re.search(r"(?:--zywo|--żywo|\bna\s+żywo\b)", message or arg or "", re.IGNORECASE))
+    return devtools_mod.run_eval(live=live)
+
+
+def _call_run_check(vault, message, arg):
+    return devtools_mod.run_check()
+
+
+def _call_env_status(vault, message, arg):
+    return devtools_mod.env_status()
+
+
+def _call_service_status(vault, message, arg):
+    return devtools_mod.service_status()
+
+
+def _call_docs_check(vault, message, arg):
+    return devtools_mod.docs_check()
+
+
 # Tryby mocy (freeram, fullon) zatrzymują albo uruchamiają Ollamę, więc łapie je
 # tylko wiadomość będąca WYŁĄCZNIE tym poleceniem ("freeram", "tryb fullon!"),
 # nigdy zdanie, które zaczyna się od tego słowa ("freeram czemu tak wolno?").
@@ -282,6 +304,65 @@ CAPABILITIES = {
             "jego działania z głowy."
         ),
         keywords=[re.compile(_MODE_RE.format(name=r"gregai[\s-]?panic[\s-]?mode"), re.IGNORECASE)],
+    ),
+    "run_eval": Capability(
+        key="run_eval",
+        call=_call_run_eval,
+        short="uruchom lokalne testy regresji GREGAI",
+        user_only=True,
+        prompt=(
+            "- **run_eval**: uruchamia testy regresji GREGAI. Domyślnie szybkie, "
+            "offline i bez zapisu historii; z parametrem --zywo korzysta z prawdziwych "
+            "modeli i płatnych limitów Koryta. Tylko bezpośrednia prośba użytkownika, "
+            "nie decyzja modelu."
+        ),
+        keywords=[re.compile(r"\A.*\b(?:uruchom|zrób|odpal|przeprowadź|sprawdź)\s+(?:mi\s+)?(?:szybkie\s+)?(?:testy|eval|ewaluacj\w*)\b", re.IGNORECASE | re.DOTALL)],
+    ),
+    "run_check": Capability(
+        key="run_check",
+        call=_call_run_check,
+        short="uruchom check.sh bez zmian w systemie",
+        user_only=True,
+        prompt=(
+            "- **run_check**: uruchamia check.sh i pokazuje wynik kontroli. Skrypt nie "
+            "zmienia systemu, ale pełny audyt wymaga sudo, którego przeglądarka nie ma. "
+            "Tylko bezpośrednia prośba użytkownika."
+        ),
+        keywords=[re.compile(r"\A.*\b(?:uruchom|zrób|odpal|sprawdź|wykonaj)\s+(?:mi\s+)?(?:check(?:\.sh)?|kontrolę|kontrole)\b", re.IGNORECASE | re.DOTALL)],
+    ),
+    "env_status": Capability(
+        key="env_status",
+        call=_call_env_status,
+        short="stan venv, pakietów runtime i lokalnej Ollamy",
+        user_only=True,
+        prompt=(
+            "- **env_status**: pokazuje stan .venv, wersje pakietów runtime (httpx, "
+            "huawei-lte-api) i lokalnej Ollamy. Tylko bezpośrednia prośba użytkownika."
+        ),
+        keywords=[re.compile(r"\A.*\b(?:stan|status)\s+(?:środowiska|venv|pakietów|zależności)\b|\bwersje\s+pakietów\b", re.IGNORECASE | re.DOTALL)],
+    ),
+    "service_status": Capability(
+        key="service_status",
+        call=_call_service_status,
+        short="stan usługi gregai i ostatnie logi (tylko odczyt)",
+        user_only=True,
+        prompt=(
+            "- **service_status**: pokazuje stan usługi gregai, jej właściwości i ostatnie "
+            "30 linii dziennika. Tylko odczyt, bez restartu. Tylko bezpośrednia prośba użytkownika."
+        ),
+        keywords=[re.compile(r"\A.*\b(?:status|stan)\s+(?:usługi\s+)?gregai\b|\Alogi\s+(?:usługi\s+)?gregai\b", re.IGNORECASE | re.DOTALL)],
+    ),
+    "docs_check": Capability(
+        key="docs_check",
+        call=_call_docs_check,
+        short="sprawdź spójność dokumentacji projektu",
+        user_only=True,
+        prompt=(
+            "- **docs_check**: porównuje wersję i liczbę kontroli w README, FUNDAMENT, "
+            "CHANGELOG i check.sh oraz sprawdza odwołania do plików. Tylko bezpośrednia "
+            "prośba użytkownika."
+        ),
+        keywords=[re.compile(r"\A.*\b(?:sprawdź|zweryfikuj)\s+(?:spójność\s+)?(?:dokumentacj\w*|docs)\b|\brozbieżności\s+w\s+dokumentacji\b", re.IGNORECASE | re.DOTALL)],
     ),
     "search_brain": Capability(
         key="search_brain",
@@ -930,6 +1011,7 @@ if sysop_mod.enabled():
 # trafić w sys_service_action, nie w search_brain.
 _FALLBACK_ORDER = ([name for name in sysop_mod.active_tools() if name in CAPABILITIES] if sysop_mod.enabled() else []) + [
     "gregaipanicmode", "freeram", "fullon",
+    "run_eval", "run_check", "env_status", "service_status", "docs_check",
     "remember", "plan_day", "standing_task_new", "standing_task_list", "standing_task_stop",
     "network_status", "graph_overview",
     "net_diagnose", "self_model", "weather",

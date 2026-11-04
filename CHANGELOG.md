@@ -2,6 +2,722 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.36.0
+
+Wydanie przygotowujące repozytorium do publikacji. Bez zmian w logice
+rozmowy, Namysłu, SYSOP-a i Koryta - to warstwa prawna, dokumentacyjna i
+porządkowa.
+
+**LICENSE.** Copyright zmieniony z `GREGAI project` na
+`Copyright (c) 2026 GREGAI contributors` - neutralny podmiot zbiorowy,
+bez nazwiska autora, spójny z decyzją z 1.32.23. Licencja pozostaje MIT
+(bez zmian w treści uprawnień).
+
+**SECURITY.md.** Przepisany z ogólnego akapitu na politykę z konkretami:
+kanał prywatny (adres `security@example.com`, jawnie oznaczony jako
+placeholder do podmiany przed publikacją), SLA 72 godziny na potwierdzenie
+i 30 dni na poprawkę, zakres (`agent/`, `ui/`, `install.sh`/`aktualizuj.sh`/
+`check.sh`), poza zakresem (Ollama, Cloudflare WARP, systemd jako zależności
+systemowe) oraz sekcja znanych ograniczeń: `SYSOP_MODE=pelny` (sudo bez
+hasła, świadomie tylko na wyizolowanym laptopie), `GREGAI_LAN=1` (panel w
+sieci domowej z tokenem) i killswitch WARP na `nftables` (wymaga roota).
+Usunięto deklarację "brak formalnego SLA", która przeczyłaby nowej sekcji.
+
+**.gitignore.** Dopisane: `*.zip` i `GREGAI.sha256.sig` (paczki wydania),
+`Thumbs.db`, `training/models/`, `training/eval_history/`, `data/audyt/`
+(wpis jawny, choć `data/` już jest wyłączone), `*.gpg`, `*.key`,
+`node_modules/`. Reguły dla `.env`, `data/`, `memory/` i prywatnych notatek
+zostają bez zmian - `notatki/wiedza/` i `notatki/szkola/` nadal należą do
+paczki.
+
+**.github/.** Szablony zgłoszeń `bug.md` (wersja, system, kroki, oczekiwany
+i rzeczywisty wynik) i `feature.md` (opis, motywacja, propozycja,
+alternatywy), `config.yml` kierujący podatności do `SECURITY.md` zamiast
+publicznego issue oraz `CODEOWNERS` wskazujący właściciela przeglądu.
+
+**README.** Sekcja "Open Source" na końcu: licencja MIT, gdzie zgłaszać
+błędy, gdzie podatności (i że nie przez publiczne issue) oraz wymagania
+systemowe. Nagłówek i wersja w szynie UI podniesione do 1.36.0.
+
+**Weryfikacja.** `bash weryfikuj.sh` z przenośnym Node 22 w `PATH`
+(składnia Pythona, bash i JavaScript oraz szybki eval bez zapisu historii;
+werdykt GOTOWE, 64/64). `bash wydaj.sh` zbudował paczkę i przeszedł
+`sha256sum -c` na świeżym rozpakowaniu. `LICENSE` sprawdzony ręcznie pod
+kątem braku nazwiska autora; kontrola 69 w `check.sh` czyta ten sam plik,
+ale `check.sh` z sudo nie był uruchamiany. Nie uruchamiano też
+`eval --zywo` (płatne limity) - to wydanie nie zmienia kodu usługi, więc
+audyt żywej instalacji zostaje poza zakresem.
+
+## Co nowego w 1.35.1
+
+Dwie nowe zakładki: ZADANIA i NOTATKI. Przełącznik w każdym segmencie ma teraz
+5 pozycji (ikony + etykiety), skróty `Alt+Shift+1..5`, adresy `#zadania` i
+`#notatki`. Rozmowa, Węzły i Nadzorca bez zmian funkcjonalnych.
+
+**ZADANIA.** Lista kart z filtrami AKTYWNE / PAUZA / WYKONANE: nazwa, komenda,
+interwał, ostatnie sprawdzenie i status. Przyciski Pauza/Start
+(`POST /api/standing/pauza`) i Usuń (do kosza, `POST /api/standing/usun`).
+Klik karty otwiera historię wykonania (do 20 wpisów) i „Wyczyść historię”
+(`POST /api/standing/wyczysc`). Formularz „Dodaj zadanie”: nazwa, komenda,
+interwał (15 min - raz dziennie) → `POST /api/standing/nowe`, które składa
+zlecenie z „co N minut” i korzysta z istniejącego `standing.create_task()`
+(limit 10 zadań, deduplikacja i maskowanie sekretów zostają po stronie
+backendu). Lista odświeża się co 20 s tylko przy widocznym segmencie.
+
+**NOTATKI.** Trzy kolumny: lista (wyszukiwarka pełnotekstowa
+`/api/notes?q=`, filtr typu i daty), podgląd (markdown przez istniejący
+`renderMarkdownLite`, kod mono na `#0a0a10`, scroll) i metadane (typ, data
+modyfikacji, tagi z `#hashtagów`, backlinki z `/api/graph`, „Otwórz w
+rozmowie” wstawiający `[[Tytuł]]` do pola rozmowy). Szukanie działa po treści,
+nie tylko tytule (`vault.search_hits`).
+
+**Backend.** `POST /api/standing/wyczysc` i prawdziwe usuwanie zadania do
+`data/kosz` (`standing.delete_task`); `/api/note?id=` dokłada `modyfikacja`
+(mtime). Wcześniejsze endpointy z 1.35.0 (`/api/notes`, `/api/standing`)
+zasilają nowe panele bez zmian.
+
+**Poprawka: martwy węzeł po usunięciu zadania.** `POST /api/standing/usun`
+(i nowe `DELETE /api/standing/<plik>`) woła teraz `delete_standing_task()`:
+najpierw zadanie idzie do kosza, potem szukana jest notatka `type: Task`
+o tytule równym nazwie/zleceniu zadania (z pominięciem prefiksu „Zadanie:”)
+i również trafia do `data/kosz`; brak notatki = no-op, bez błędu. Odpowiedź:
+`{"removed": true|false, "note_removed": true|false}`. Cache grafu jest
+unieważniany, a panel Zadań po usunięciu woła `refreshGraphData()`, więc węzeł
+znika z Węzłów od razu.
+
+**Weryfikacja.** `python3 -m py_compile` zmienionych modułów, `node --check`
+na `app.js`/`panele.js`/`debug.js`/`graph.js` (przenośny Node 22 w `/tmp`),
+`tinycss2` na `crack.css`/`styles.css`/`debug.css` (0 błędów), HTTP smoke na
+tymczasowej instancji serwera (`/api/notes`, `/api/standing` - 200), nowy
+przypadek eval `audyt-1351-usun-zadanie` (**64/64** w szybkim przebiegu) oraz
+`bash wydaj.sh` ze świeżym rozpakowaniem i `sha256sum -c`. POST-y zmieniające
+zadania nie były uruchamiane na produkcji; wyglądu nie sfotografowano
+(headless Firefox w tym środowisku nie startuje). `check.sh` z sudo i
+`eval --zywo` nie były uruchamiane.
+
+## Co nowego w 1.35.0
+
+Węzły w trzech kolumnach i Nadzorca z podsekcjami. Rozmowa bez zmian.
+
+**Węzły.** Lewa kolumna (280 px): pole „szukaj węzła...”, filtr daty
+(wszystkie/dziś/tydzień/miesiąc), kwadratowe filtry typu, lista do 50 węzłów
+(tytuł + typ + data) i przycisk Dodaj. Prawa kolumna (320 px): szczegóły z
+pełną treścią pobraną z `/api/note` (przewijane 400 px), backlinki (już były),
+„Połącz z...” (wybór notatki + zapis do linii `Powiązania:`), Edytuj, Usuń i
+Zamknij. Klik w listę podświetla węzeł i otwiera kartę; wybrana aureola w 3D
+jest teraz cyan (`--accent`), nie biała. `/api/graph` niesie `modyfikacja`
+(mtime), więc filtr daty działa bez dodatkowego zapytania.
+
+**Nadzorca.** Pionowy rail 160 px z 10 podsekcjami: STAN, KORYTO, MODELE,
+STRAŻ, BUDŻET, SIEĆ, EWALUACJA oraz zachowane MYŚLI, NAUKA, SYSTEM. Nowe
+tabele: ostatnie wywołania koryta + wykres słupkowy „kto odpowiadał dziś”
+(CSS `scaleX(var(--f))`), ostatnie inferencje lokalne (model, sekundy, tok/s),
+archiwum Straży z filtrami poziomu i „Wycisz”, wydatki dnia (model, tokeny,
+USD) i suma, urządzenia w sieci + „Skanuj teraz” (wątek w tle) oraz historia
+eval + „Uruchom” (wątek w tle, bez zapisu historii). Wszystko mono/bez
+promieni, zgodnie z PLASTIC CRACK.
+
+**Nowe endpointy** (wszystkie za `_auth_gate` i `_browser_origin_ok`):
+`GET /api/notes?q=&typ=&data=&limit=` (pełnotekstowe `vault.search_hits`),
+`GET /api/standing`, `POST /api/standing/nowe|pauza|usun`,
+`GET /api/koryto/historia?limit=`, `GET /api/straz/historia?limit=&poziom=`,
+`POST /api/straz/wycisz`, `GET /api/budget/daily`, `GET /api/network/devices`,
+`POST /api/network/scan`, `GET /api/eval/history?limit=`,
+`POST /api/eval/run`, `GET /api/models/log?limit=`.
+
+**Nowe, lokalne ślady (same liczby, zero treści rozmów):**
+`data/ollama_uzycie.jsonl` (model, sekundy, tok/s po każdej inferencji w
+`router._ollama_chat`), `data/koryto_wydatki.jsonl` (model, tokeny, USD w
+`juggler._note_spend`), `data/straz/odczytane.json` (znaczniki „Wycisz” -
+dziennik i łańcuch dowodowy nietknięte). `agent/standing.py` dostał tylko
+odczyt `list_tasks_detail()` i `set_task_status()` (pauza/stop bez czatu).
+
+**Weryfikacja.** `python3 -m py_compile` na zmienionych modułach,
+`node --check` na `app.js`/`debug.js`/`graph.js` (przenośny Node 22 w `/tmp`,
+bo system nie ma `node`), `bash weryfikuj.sh` (Python, bash, eval szybki
+63/63), `bash wydaj.sh` ze świeżym rozpakowaniem i `sha256sum -c`. Endpointy
+GET sprawdzone na tymczasowej instancji serwera (port 7788, te same dane):
+`/api/notes`, `/api/standing`, `/api/koryto/historia`, `/api/straz/historia`,
+`/api/budget/daily`, `/api/network/devices`, `/api/eval/history`,
+`/api/models/log` - wszystkie 200 z poprawnym JSON. POST-y „Wycisz”, skan i
+eval nie były uruchamiane na produkcji; wyglądu nie sfotografowano
+(headless Firefox w tym środowisku nie startuje). `check.sh` z sudo i
+`eval --zywo` nie były uruchamiane.
+
+## Co nowego w 1.34.1
+
+Węzły bez podwójnej siatki. Kanwa three.js nie maluje już własnego tła, a
+dekoracyjna siatka 2D zniknęła - w mapie węzłów zostaje jedna siatka, ta 3D.
+
+**`ui/crack.css`.** Usunięta reguła `body::before` (siatka 40 px z 1.34.0):
+w Węzłach nakładała się na siatkę `THREE.GridHelper`, a w Rozmowie nic nie
+wnosiła. Zostaje jednolite tło `#050508` i strumień danych. Zostaje też
+`#graph-canvas { background: transparent; }` - bez tego nieprzezroczysty
+CSS-owy background kanwy (styles.css:176) zasłoniłby scenę.
+
+**`ui/graph.js` (konstruktor sceny).** `scene.background = null`,
+`new THREE.WebGLRenderer({ alpha: true, ... })` i
+`renderer.setClearColor(0x000000, 0)`. Mgła (`FogExp2`) dostaje kolor
+`--crack-bg` (zapas `#050508`), żeby dalekie węzły i krawędzie gasły w tym
+samym kolorze co strona, a nie w dawnym brązie `--graph-bg`. Kamera, światła,
+`THREE.GridHelper` i skybox bez zmian.
+
+**`ui/crack.css`: Nadzorca taki jak Rozmowa.** Cały re-skin `#debug-segment`
+przeniesiony z `ui/debug.css` do `crack.css` (jeden plik wyglądu, ładowany po
+`debug.css` także na zapasowej stronie `/debug`):
+karty i panele `#0c0c14` z ramką 1 px `rgba(0,212,255,.15)`, zero promieni,
+cieni i gradientów; nagłówki sekcji Oxanium 700, 14 px, uppercase, tracking
++0.1em; dane (czasy, statusy, wersje, budżet) JetBrains Mono 12 px; treść
+Barlow 400, 14 px; meta Barlow 12 px `#6a6a80`. Rura koryta: linia 1 px z
+wędrującym pikselem 8x8, aktywny etap cyan, wyczerpany czerwony, lokalny
+zielony. Tabela modeli z ramkami 1 px i monospace, status „rozgrzewa" z
+pulsującym kwadratem 8x8, zero hover-background (zmienia się tylko ramka).
+Timeline Straży: linia 1 px, kwadratowe kropki 6x6, czas mono 11 px. Budżet:
+tor `#1a1a24` z ramką, wypełnienie `#00d4ff` przez `scaleX(var(--f))`.
+Przyciski i zakładki korzystają z mechaniki Rozmowy (0 ms, uppercase,
+promień 0). Scrollbar 4 px, thumb cyan, track przezroczysty. `ui/debug.css`
+wrócił do stanu 1.33.1 - bez duplikatu skina.
+
+**Weryfikacja.** `node --check ui/graph.js` i `ui/crack.css` (poprawność
+nawiasów), `bash weryfikuj.sh` (Python, bash, eval szybki) oraz
+`bash wydaj.sh` ze świeżym rozpakowaniem i `sha256sum -c`. Wyglądu nie
+sfotografowano automatem (headless Firefox w tym środowisku nie startuje),
+więc trzeba potwierdzić ręcznie: w Węzłach jest tylko siatka 3D (bez drugiej,
+2D, pod nią), w Rozmowie nie ma żadnej siatki, a Nadzorca nie ma ani jednego
+promienia, cienia ani gradientu. `check.sh` z sudo i `eval --zywo` nie były
+uruchamiane.
+
+## Co nowego w 1.34.0
+
+Warstwa wyglądu „PLASTIC CRACK": kokpit stacji badawczej, ostre krawędzie,
+mechaniczne stany i pękające karty odpowiedzi. Zmiana jest wyłącznie wizualna -
+logika rozmowy, Namysłu, koryta i Straży zostaje bez zmian.
+
+**Nowy plik `ui/crack.css`** (ładowany po `kadr.css` w `index.html` i
+`debug.html`): czarne tło `#050508`, siatka 40 px, cyan `#00d4ff` jako jedyny
+akcent (1 px, bez poświaty), zero promieni i cieni, przyciski i diody fazy
+zmieniają stan natychmiast (`transition: none`). Dochodzi lokalny **JetBrains
+Mono** (400/500, subset latin + latin-ext, OFL w `ui/fonty/`) dla czasów,
+wersji, statusów i uptime.
+
+**Boot (≤ 320 ms, CSS-only).** Siatka skanuje z lewej (120 ms), logo pęka z
+góry (80 ms), composer i pasek pod nim z lewej (200/240/280 ms). Każdy krok to
+`clip-path`, bez `opacity`. Druga wizyta (`localStorage["gregai.booted.v1"]`)
+dostaje `html.booted` i zero animacji; gdy `app.js` zdąży tylko dodać klasę,
+pełny boot i tak działa, bo cała sekwencja jest w CSS.
+
+**Fragmentacja odpowiedzi.** Nowa odpowiedź dostaje 4 odłamki (na telefonie i
+w karcie niższej niż 100 px - 2), kaskadę co 40 ms, mikro-overshoot przy
+domknięciu i jedno cięcie treści z dołu po 200 ms. Wiadomość użytkownika pęka
+jednym cięciem z lewej (80 ms). Karty narzędzi dostają krótkie cięcie z góry.
+Poza oknem (poza viewportem) treść jest od razu - bez animacji.
+
+**Błysk „visual click”** (`#vflash`): jedno-klatkowy rozbłysk przy kliknięciu,
+przejściu fazy Namysłu, domknięciu odłamka i skopiowaniu; czerwony przy błędzie
+i toaście Straży. Maksymalnie jeden błysk na 100 ms, intensywność ≤ 0.08.
+
+**Strumień danych** (`#data-stream`): 200 linii hex/tok/ctx w dwóch kolumnach,
+`opacity: 0.03`, przewijanie 60 s. Na telefonie i przy `prefers-reduced-motion`
+wyłączony.
+
+**Re-skin Straży i Nadzorcy.** Toasty: ostra czerwona rama, wejście `clip-path`
+z prawej (80 ms), wyjście 60 ms, tło zależne od ważności. Nadzorca: rura koryta
+jako linia 1 px z wędrującym pikselem 8x8, tabela modeli w monospace z ramkami
+1 px, timeline jako pionowa linia z kwadratowymi kropkami, budżet jako pasek
+2 px (`scaleX`), uptime w pasku statusu.
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona, basha i JavaScriptu
+(`node --check` na `ui/**/*.js`, wykonany przenośnym Node 22 w `/tmp`, bo w
+systemie nie ma `node`) oraz eval szybki 63/63. Testy Node (18 asercji, harness
+poza repo) na wyciągniętym bloku z `app.js`: debounce błysku (drugi w 50 ms
+ignorowany, po 120 ms znowu działa), 4 odłamki w kolejności 1-4 i czasy
+80/120/160/200/320, 2 odłamki dla niskiej karty, boot z/bez
+`localStorage["gregai.booted.v1"]`, strumień danych 2 kolumny, obecność
+timingów w CSS. Nowe pliki: `ui/crack.css`,
+`ui/fonty/jetbrains-mono-latin.woff2`, `ui/fonty/jetbrains-mono-latin-ext.woff2`,
+`ui/fonty/OFL-JetBrainsMono.txt`. `GREGAI.sha256` przeliczony przez
+`bash wydaj.sh`. Wyglądu nie udało się sfotografować automatem (headless
+Firefox w tym środowisku nie startuje: brak framebuffera), więc boot,
+fragmentacja i błysk wymagają ręcznego Ctrl+Shift+R w przeglądarce;
+`eval --zywo` i pełny `check.sh` z sudo nie były uruchamiane.
+
+## Co nowego w 1.33.4
+
+Dokończenie #19: faza „Zbieranie materiału" sama sprawdza, czy lokalny model
+odpowiada, zamiast opierać się na snapshocie z początku wiadomości.
+
+**Recheck w Zbieraniu, nie tylko w _Models.** Decyzja o czytaniu plików nie
+zależy już od `models.local_up_now()` (to była warstwa szkicu). Nowa metoda
+`Context.local_available()` jest wołana bezpośrednio w fazie Zbierania:
+`material_do_sieci=false` + `ollama_available()=True` → plik jest czytany,
+digest idzie do `user_local` (prompt szkicu lokalnego), a nie do chmurowego.
+„Pominięty" zostaje wyłącznie dla `material_do_sieci=false` **i**
+`ollama_available()=False` (brak obu dostawców).
+
+**Czytelna narracja.** Plik dzielony na części mówi teraz
+„Czytam plik X: część 1/N" zamiast ogólnego „Czytam plik X"; kolejne części
+dalej melduje jak dotąd. Przy pustym digestcie lokalny dostaje surowy wycinek
+pliku (zachowane z 1.33.3), więc plik nie ginie.
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+63/63 (nowy przypadek `audyt-1334-zbieranie-plik`). Test A: zgoda=false,
+snapshot `local_up=False`, świeże `ollama_available()=True` → plik czytany
+(„część 1/3"), digest w prompcie lokalnym, żaden prompt chmurowy nie zawiera
+treści pliku. Test B: zgoda=false i brak Ollamy → uczciwe „nie mogę
+przeczytać", bez digestu. Nowa kontrola 80 w `check.sh` (80 kontroli razem)
+uruchamia oba warianty. `eval --zywo` i pełny `check.sh` z sudo nie były
+uruchamiane.
+
+## Co nowego w 1.33.3
+
+Dwa fixy z audytu: jeden timer i numerowane fazy w interfejsie oraz
+prywatne pliki w prompcie lokalnego modelu, gdy chmura padnie.
+
+**#18 Jeden timer, numerowane fazy.** Pasek czekania (`pending-status`) nie ma
+już własnego licznika - jedyny timer jest w stepperze Namysłu nad composerem.
+Fazy są numerowane: 1. Rozpoznanie, 2. Zbieranie, 3. Szkic, 4. Krytyka,
+5. Poprawa, 6. Sprawdzenie. Po zakończeniu stepper pokazuje JEDEN wiersz
+„Namysł — 34s" (bez osobnego tytułu, dostawcy i drugiego czasu); czasy
+poszczególnych faz zostają. Pigułka „Postęp" w nagłówku chowa się, gdy stepper
+jest widoczny, a klik w stepper otwiera panel „Ta rozmowa" (ta sama funkcja,
+bez duplikatu timera).
+
+**#19 Plik załączony w prompcie lokalnego modelu.** Przy `material_do_sieci =
+false` plik ma iść do lokalnego modelu - i tak się dzieje. Problem był w
+snapshotcie `local_up`: jeśli Ollama chwilę wcześniej nie odpowiedziała,
+„Zbieranie materiału" uznawało, że nie ma żadnego dostawcy i pomijało plik,
+choć kolejne fazy i tak spadały na lokalny model. Teraz decyduje świeże
+sprawdzenie (`local_recheck` → `ollama_available()`):
+`private_blocked` jest prawdą tylko wtedy, gdy NIE MA ani zgody na chmurę,
+ani lokalnego modelu TERAZ. Plik jest czytany i digest wchodzi do promptu
+szkicu lokalnego (`user_local`). „Pominięty" zostaje wyłącznie dla przypadku
+„brak obu dostawców".
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+62/62 (nowy przypadek `audyt-1333-timer-plik`). Test #19 odtwarza scenariusz:
+plik załączony, chmura rzuca HTTP 413, `local_up=False`, świeże sprawdzenie
+Ollamy mówi „tak" - plik zostaje przeczytany, digest `TRESC PLIKU 42` trafia do
+promptu szkicu lokalnego, odpowiedź powstaje. Test #18 sprawdza statycznie
+numerację 1-6, brak `pending-status-timer` w `app.js` i jednowierszowe
+„Namysł — Ns". Nowa kontrola 79 w `check.sh` (79 kontroli razem) uruchamia
+oba testy. `eval --zywo` i pełny `check.sh` z sudo nie były uruchamiane.
+
+## Co nowego w 1.33.2
+
+Pięć poprawek z audytu „ruchomego kodu": akcje w powitaniach, maska
+wychodzących sekretów, przywracanie checkboxa zgody, usunięcie martwych
+trybów i dokładna godzina w bloku „Teraz".
+
+**#6 Powitanie + realna prośba nie omija Namysłu.** `_ACTION_WORD_RE` zna
+teraz `przeczytaj`, `wyjaśnij`, `otwórz`, `uruchom`, `zainstaluj`, `streść`,
+`przeanalizuj`, `opowiedz`, `porównaj` (oraz warianty `pokaż`, `znajdź`,
+`sprawdź`, `dodaj`, `usuń`, `zmień`). „hej, przeczytaj to" i „cześć, wyjaśnij
+mi to" dostają pełny Namysł; samo „dzięki" nadal nie.
+
+**#11 Maska outbound obejmuje klucze z myślnikami i SSH.** Do wąskiego
+zestawu (działającego przy `outbound=True`, czyli w zapytaniach do sieci)
+doszły `sk-or-...` (OpenRouter), `gsk_...` (Groq), `ssh-rsa`/`ssh-ed25519`,
+`AKIA`, `xox[baprs]-`, `ghp_`, `gho_`. Adres portfela i skrót sha256 nadal
+przechodzą (to temat zapytania, nie sekret).
+
+**#14 Checkbox zgody wraca do stanu serwera po błędzie zapisu.**
+`saveNamyslSettings` w `catch` ustawia `consent.checked` z ostatniej
+potwierdzonej wartości `namyslSettings.material_do_sieci`.
+
+**#16 Koniec martwych trybów w `wants()`.** Usunięte gałęzie
+`"wylaczony"`/`"auto"` i nieużywany `_DEEP_RE`; jedyny tryb to „zawsze".
+`settings`/`first_turn` zostają w sygnaturze dla zgodności wywołań.
+
+**#17 Dokładna godzina w bloku „Teraz".** Nowy `awareness.clock_line()` daje
+`Dziś: ... Godzina: HH:MM.` (cloud z nazwą strefy). Lokalny prompt zmienia się
+teraz co minutę, więc Ollama traci część korzyści z pamięci podręcznej promptu
+- świadomy koszt, żeby „Która godzina?" nie wymagało sieci. Reguła zegara
+mówi wprost: godzinę masz z linii „Godzina: HH:MM", nie zgaduj.
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+61/61 (nowy przypadek `audyt-1332-poprawki`: 15 powitań z prośbą, 8 prefiksów
+sekretów + portfel, statyczny test catch w `app.js`, brak starych gałęzi,
+godzina w `clock_line`/`cloud_block`/`local_block`). Nowa kontrola 78 w
+`check.sh` (78 kontroli razem) uruchamia te same testy. `eval --zywo` i pełny
+`check.sh` z sudo nie były uruchamiane.
+
+## Co nowego w 1.33.1
+
+Etap 2 redesignu frontendu: Nadzorca w dwóch kolumnach, koryto jako „rura",
+tabela modeli, timeline Straży i paski budżetu. Do tego toasty Straży zamiast
+alertu wklejanego w środek rozmowy. Zmiany wyłącznie w `ui/` (bez `agent/`,
+API, `vendor/` i `graph.js`), vanilla JS + CSS, zero build stepu.
+
+**Nadzorca: dwie kolumny.** Lewa: stan systemu, timeline Straży (ostatnie 3
+wpisy z `straz.status().ostatnie`) i budżet. Prawa: koryto i modele. Statyczne
+sekcje zostają w swoich zakładkach - nowy układ obejmuje tylko „Przegląd".
+
+**Koryto jako rura.** `#korytoPipe` rysuje efektywną trasę przy wadze 1-2
+(`koryto.efektywna["2"]`): Claude, darmowa pula i lokalny. Aktywny etap ma
+animowany gradient (`background-position`, zgodnie z projektem), wyczerpani
+dostawcy są czerwoni z kodem (429 przy dziennym limicie/cooldownie 4 h, 403
+przy 15-minutowej przerwie), a lokalny jest zielony z medianą czasu z
+`localStorage["gregai.fazeTimes"]` (jeśli są min. 3 próbki).
+
+**Modele i budżet.** Tabela `#modelTable`: nazwa, RAM (z `/api/ps`), czas
+(mediana lokalna) i status gotowy/rozgrzewa/brak. Dwa paski budżetu
+(dzień/miesiąc) używają `--f` ustawianego przez CSSOM i `transform: scaleX` -
+bez animowania szerokości i bez inline `<style>`.
+
+**Toasty Straży.** Alert `🔔 „Straż systemu”: ...` jest wyjmowany z odpowiedzi
+i pokazywany jako toast w prawym górnym rogu (`position: fixed`, `z-index:
+9999`): nagłówek z ikoną, tytułem i ✕, opis oraz „Pokaż szczegóły" /
+„Zignoruj". Wysokie ryzyko nie znika samo, średnie po 15 s, niskie po 8 s
+(najechanie pauzuje). Maksymalnie 3 toasty, starsze są wypychane. „Pokaż
+szczegóły" otwiera istniejący drawer „Ta rozmowa" z pełnym tekstem w nowej
+szufladzie Straży. Inne alerty (zadania stałe) zostają inline - nic nie znika.
+
+**Typografia i mobile.** `html body` 15 px/1.6, nagłówki 18-22 px/1.3, meta
+12 px; nowe reguły trzymają się siatki 8 px. Fonty Oxanium/Barlow zostają w
+`kadr.css` (bez zmian). Na wąskim ekranie: jedna kolumna, 14 px, przyciski
+min. 44 px. Animacje wyłączane przez `prefers-reduced-motion` (toasty: tylko
+fade).
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+60/60. Składnię `ui/app.js`, `ui/debug.js` i `ui/graph.js` sprawdzono parserem
+tree-sitter; czyste funkcje `providerState`, `dbgMedian`, `dbgSecs`,
+`extractStrazAlerts` i `strazSeverity` przeszły testy w QuickJS; funkcje
+renderujące Nadzorcę przepuszczono przez prawdziwy `/api/system_info` z
+atrapą DOM (powstał poprawny HTML rury, tabeli, timeline'u i budżetu). Nowa
+kontrola 77 w `check.sh` sprawdza statycznie układ i toasty. Ręcznego testu w
+przeglądarce nie udało się tu wykonać (Firefox snap nie startuje headless w
+sandboxie); `eval --zywo` i pełny `check.sh` z sudo nie były uruchamiane.
+
+## Co nowego w 1.33.0
+
+Etap 1 (MVP) redesignu frontendu: aplikacja nie może wyglądać na martwą,
+gdy Namysł liczy 30-120 s. Zmiany wyłącznie w `ui/` (bez `agent/`, API,
+`vendor/` i `graph.js`), vanilla JS + CSS, zero build stepu.
+
+**Stepper 6 faz nad composerem.** `#namysl-track` pokazuje Rozpoznanie ->
+Zbieranie -> Szkic -> Krytyka -> Poprawa -> Sprawdzenie (sześć, bo tyle ma
+Namysł; „Poprawa" nie jest ukrywana). Aktywna faza pulsuje `nt-breathe`
+(scale 1.0 -> 1.02 -> 1.0, 3 s), ma cyanowy pasek; zakończone dostają ✓ i czas,
+pominięte — i powód, a faza bez modelu ✗ i powód (np. „HTTP 413"). Po
+zakończeniu stepper zostaje jako metryka do następnej wiadomości.
+
+**Jeden stan faz.** `namyslState(events)` w `ui/app.js` zastępuje pętlę, która
+żyła tylko w `renderNamyslLive`; teraz oś w dymku, panel „Postęp" i stepper
+korzystają z tego samego wyniku, więc nie mogą się rozjechać.
+
+**Timer per faza + szacunek.** Licznik fazy rośnie co sekundę (nie co odczyt
+postępu), całkowity czas pochodzi z `t` ostatniego zdarzenia. `phaseEta()`
+liczy medianę z ostatnich 8 próbek w `localStorage["gregai.fazeTimes"]`
+(klucz dostawca|faza); poniżej 3 próbek szacunek jest ukryty, żeby nie zgadywać.
+
+**Heartbeat narracji.** Brak streamingu w API (Ollama `stream=False`), więc
+zamiast tokenów na żywo aktywna faza dopisuje co 5 s „…przetwarzam (Ns)" -
+tekst nie wygląda na zamrożony.
+
+**Oddech tła i mikrointerakcje.** Za dymkiem odpowiedzi w trakcie pracy stoi
+subtelny glow (opacity 0.03-0.06, tylko `transform`/`opacity`); kopiowanie
+pokazuje ✓ na 1,5 s; hover przygasza się do `brightness(1.1)`, focus ma cyan
+(`--accent`/`--accent-ring` przemapowane na `#00d4ff` przez `:root:root`, żeby
+wygrać z późniejszą skórką `kadr.css`). Fonty (Oxanium/Barlow) zostają w
+`kadr.css` - `:root` w `styles.css` ich nie nadpisuje.
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+60/60 (bez zmian w logice). Składnię `ui/app.js`, `ui/debug.js` i `ui/graph.js`
+sprawdzono parserem tree-sitter (node nie jest zainstalowany w tym środowisku);
+czyste funkcje `namyslState`, `ntMedian`, `ntSecs`, `ntErrReason` przeszły testy
+w QuickJS. Nowa kontrola 76 w `check.sh` sprawdza statycznie stepper, wspólny
+helper, animację, `prefers-reduced-motion` i brak inline styles. Ręcznego testu
+w przeglądarce (Namysł 60 s+) nie udało się tu wykonać: Firefox jest snapem,
+którego headless nie startuje w tym sandboxie - kroki do sprawdzenia są w
+opisie wydania/commitcie. `eval --zywo` i pełny `check.sh` z sudo nie były
+uruchamiane.
+
+## Co nowego w 1.32.31
+
+Debug zgłoszenia „Szkic odpowiedzi → Model nie odpowiedział w 0,3 s”:
+Namysł nie miał gwarancji modelu, gdy chmura odrzucała prompt zanim w ogóle
+zaczęła liczyć. Fazy Namysłu dostają teraz awaryjny lokalny model i swój
+wariant promptu.
+
+**Namysł: faza po porażce chmury spada na lokalny.** `models.ask` przy każdej
+porażce chmury (dzienny limit, HTTP 413 „Request too large”, awaria) dołącza
+lokalny etap `_namysl_local_chat` do kolejki tej fazy - także przy
+`KORYTO_LOKALNIE=bez_internetu` (to rezerwa awaryjna, nie zmiana kolejności).
+Bez tego „Co masz w notatkach?” kończyło się tak: gemini 429 (limit dzienny,
+instant), groq HTTP 413 (darmowy `openai/gpt-oss-20b` ma limit TPM 8000, a
+prompt szkicu to 8411 tokenów - instant) → łańcuch pusty w 0,3 s → „Szkic:
+brak”, Namysł przerwany, odpowiedź z rutynowej ścieżki.
+
+**Wariant promptu lokalnego (`user_local`).** Fazy szkicu, krytyki i poprawy
+budują teraz dwa prompty: chmurowy (materiał do 16 tys. znaków) i lokalny
+(do 7 tys.). Gdy faza spada na lokalny, dostaje swój wariant, a nie materiał
+16k + pełne 24 tys. znaków promptu chmurowego (towarzyszył temu HTTP 413).
+`_namysl_local_chat` pozostaje poza korytem i rozdzielnicą - to krok lokalny,
+nie korytowy.
+
+**Weryfikacja.** Żywa reprodukcja na tej maszynie: „Co masz w notatkach?” →
+rozpoznanie (groq, 2,4 s) → zbieranie 0,2 s → szkic: chmura 413 w 0,3 s →
+„Sieć nie odpowiedziała - liczę lokalnie” → szkic z Ollamy po 80 s, Namysł
+zakończony (krytyka/poprawa pominięte uczciwie z powodu budżetu 150 s),
+odpowiedź dotarła. Test off-line `audyt-1331-namysl-lokalny` w `gregai eval`
+(atrapa chmury rzucającej 413; assert: lokalny dostaje `user_local`) i
+kontrola 75 w `check.sh`. `node` nadal nie jest zainstalowany, więc składnia
+UI nie została sprawdzona automatycznie; `eval --zywo` i pełny `check.sh`
+z sudo nie były uruchamiane.
+
+## Co nowego w 1.32.30
+
+Pięć poprawek koryta z audytu „ruchomego kodu” 1.32.29: efektywna kolejność
+dostawców per waga uwagi, brak odpowiedzi przy pustej polityce, awaryjny
+lokalny liczony z etapów dozwolonych, przełączenie na lokalny po utracie WARP
+w trakcie wiadomości oraz jedna polityka dla pracy w tle (planner,
+streszczenia, standing, straż).
+
+**#1 Koryto: prawda o kolejności w API i UI.** `koryto.status()` przyjmuje
+efektywną mapę wag 1-4, a `/api/system_info` (`router.koryto_status`) liczy ją
+przez `rozdzielnica`. Narrator czekania i panel Nadzorcy pokazują teraz
+„waga 1-2: darmowa pula -> lokalny” i „waga 3-4: darmowa pula -> Claude ->
+lokalny”, zamiast „Pyta Claude” przy wadze 2. `cloud.reason` mówi wprost, gdy
+polityka pomija płatny etap.
+
+**#2 Koryto: pusta polityka nie oznacza braku odpowiedzi.**
+`_stage_order_for()` przy polityce wycinającej wszystkie etapy sieciowe
+(np. `KORYTO=anthropic,lokalnie` przy wadze 1-2) wraca do surowego
+`koryto.order()`, zamiast zostawiać pustą trasę. `ROZDZIELNICA=0` nadal
+wyłącza politykę.
+
+**#3 Awaryjny lokalny liczy tylko etapy dozwolone dla wagi.** Zdrowy Claude
+nie blokuje już lokalnego przy wadze 1-2 (wtedy i tak nie był pytany);
+`_allowed_providers()` i `emergency_local_allowed()` są wydzielone i testowane.
+
+**#4 WARP padający w trakcie wiadomości.** `NetGuardBlocked` nie trafia do
+bezpiecznika dostawcy, jest traktowany jak „wszyscy wyczerpani”, a Namysł
+dopisuje lokalny etap do kolejki danej fazy. Następne pytanie i tak liczy stan
+od nowa.
+
+**#5 Jedna polityka dla pracy w tle.** Planner (`_planner_ask`), streszczenia
+(`summarize_text`), standing i straż idą `rozdzielnica(POZIOM_TLA=3)`, nie
+surowym `koryto.order()`. Płatny Claude może być pierwszy w tle tylko wtedy,
+gdy pozwala na to polityka; `samodopasowanie()` jest teraz cienką nakładką na
+tę samą funkcję.
+
+**Weryfikacja.** `bash weryfikuj.sh`: składnia Pythona i basha OK, eval szybki
+59/59 (nowy przypadek `audyt-1330-koryto`). `check.sh` ma nową kontrolę 74
+(74 kontrole razem), która uruchamia te same testy na atrapach. `node` nie był
+zainstalowany, więc składnia `ui/app.js` i `ui/debug.js` nie została tu
+sprawdzona automatycznie; `eval --zywo` i pełny `check.sh` z sudo nie były
+uruchamiane.
+
+## Co nowego w 1.32.29
+
+Dziewięć poprawek z audytu: kosz notatek, metadane i rollback, PDF,
+blok „Teraz”, BOM, limit tytułu, dokumentacja `.env`, minimum
+`LOKALNY_TIMEOUT` i kolejność wpisów `.env`.
+
+**#3 Kosz: przywracanie notatek z nawiasami, przecinkiem i ampersandem.**
+`restore_from_trash()` używał regexu z wąską listą znaków, więc notatki
+`Raport (2026).md`, `C++ basics.md` czy `a, b & c.md` dawały się usunąć, ale
+„Cofnij” kończyło się błędem. Teraz sprawdzane jest tylko: jeden segment
+ścieżki, brak `/`, `\`, `..` i NUL-a oraz limit 255 bajtów UTF-8
+(`fsutil.trash_name_ok`).
+
+**#4 Kosz: metadane przed przeniesieniem, rollback i EXDEV.**
+`move_to_trash()` zapisuje metadane do pliku tymczasowego z fsync, przenosi
+notatkę, a na końcu atomowo przemianowuje metadane. Błąd któregokolwiek
+kroku cofa przeniesienie; na innym systemie plików (`EXDEV`) używa
+`shutil.move`. Nazwa wpisu jest przycinana bajtowo, żeby długie polskie
+tytuły nie przekroczyły 255 bajtów.
+
+**#5 PDF: UTF-16 z BOM, UTF-8, cp1252, bez NUL-i.**
+`_pdf_unescape()` dekodował wszystko jako latin-1, więc „Zażółć” dawało
+„ZaÅ¼Ã³ÅÄ‡”, a PDF-y Worda z UTF-16 miały NUL-e. Teraz kolejność to UTF-16
+z BOM, UTF-8, cp1252; NUL-e są usuwane.
+
+**#6 Blok „Teraz”: lokalny model wie, że internet nie działa.**
+`_offline_line()` było liczone, ale nie trafiało do zwracanego bloku.
+Dopisane; lokalny model nie obiecuje już sprawdzenia w sieci bez internetu.
+
+**#8 BOM w tworzeniu notatki.**
+`POST /api/note/create` z polem `raw` usuwa wiodący `U+FEFF` przed
+`find_title()`/`find_type()`, więc BOM nie ukrywa już H1 i typu.
+
+**#9 Limit tytułu węzła.**
+`vault.build_vault()` przycina tytuł do 300 znaków (z „…”). Plik 2 MB z
+jedną długą linią H1 nie produkuje już tytułu 2 MB i ogromnego
+`/api/graph`.
+
+**#10 `.env.example` dokumentuje trzy wewnętrzne zmienne.**
+Dopisane `KORYTO_DZIENNIK_PLIK`, `SYSOP_LOG_OPCJONALNY` i
+`GREGAI_STRAZ_ANCHOR`.
+
+**#11 `LOKALNY_TIMEOUT` ma minimum 60 s w kodzie.**
+`_namysl_local_timeout()` używa `env_int(..., 60, 3600)`, tak samo jak
+kontrola 71 w `check.sh`; wartość 30 jest podnoszona do 60.
+
+**#12 `_env_value()`: ostatni wpis `.env` wygrywa.**
+Quick-check w `devtools` czyta teraz cały plik i zostawia ostatnią wartość,
+tak jak `env_loader.load_env()` i `install.sh/envval`.
+
+**Testy:** nowy przypadek `audyt-1329` w `gregai eval` sprawdza wszystkie
+dziewięć poprawek bez sieci i bez zapisu do produkcji; kontrola 73 w
+`check.sh` uruchamia ten sam test. Eval: 58/58. `bash weryfikuj.sh`,
+`devtools.docs_check()`, `sha256sum -c` i rozpakowanie paczki - OK.
+
+## Co nowego w 1.32.28
+
+Trzy poprawki z audytu: **eval nie psuje produkcyjnych danych**, **projekty
+nie zlepiają się przez "/"** i **maska zapytań wychodzących nie zjada adresów
+portfeli**.
+
+**1. Eval --zywo był w praktyce drugim producentem danych.** `router.route()`
+wywołany z `agent/ewaluacja.py` zapisywał wpisy do `data/decision_log.json`,
+uczył `data/learned_routes.json`, dopisywał pary do
+`data/training/distill_pairs.jsonl` i zmieniał `data/koryto_dziennik.json`.
+Osobny proces ma własne cache `trace._CACHE` i `learning._CACHE`, więc
+nadpisywał zmiany serwisu (ginęły wpisy i liczniki wydatków Claude).
+Teraz `router.route()` ma flagi `nie_ucz=True` i `nie_zapisuj_sladu=True`;
+`trace` i `learning` mają wątkowe `suppress()`/`suppress_learning()`, a
+`ewaluacja.prepare_isolation()` ustawia własny `KORYTO_DZIENNIK_PLIK`,
+podmienia ścieżki `TRACE_PATH`, `LEARNED_PATH`, `TOPIC_WORDS_PATH`,
+`DISTILL_PAIRS_PATH` i czyści cache. `fsutil.data_lock()` dokłada
+międzyprocesowy `flock` na `data/.gregai.lock`, więc zapisy read-modify-write
+nie gubią się już między procesami. Eval --zywo porównuje na końcu odciski
+pięciu produkcyjnych plików i pokazuje „Izolacja produkcyjnych plików: OK”
+albo listę zmienionych.
+
+**2. Kolizja `chat_id`.** `sources.chat_id()` zamieniał `/` na `-`, więc
+projekt `projekty/klient.md` i `projekty-klient.md` miały ten sam identyfikator
+rozmowy: wspólne Źródła, wgrane pliki i pamięć. Teraz `/` i `\` są kodowane
+jako `%2F` i `%5C` (a `%` jako `%25`), a po przekroczeniu 80 znaków dochodzi
+skrót SHA-256 całości. Stare wpisy źródeł projektów zagnieżdżonych pod
+folderem mogą wymagać ponownego dodania - ich identyfikator się zmienił.
+
+**3. Maska outbound.** `trace.mask(..., outbound=True)` wołał
+`sysop.mask_secrets()`, a to bezwarunkowo uruchamiało szerokie wzorce
+(długie ciągi, adresy portfeli). Zapytanie „sprawdź adres 0x5290...” szło do
+wyszukiwarki jako „sprawdź adres ***”. `mask_secrets()` przyjmuje teraz
+`outbound` i przekazuje je do `redact_typed()`; szerokie wzorce są pomijane
+tylko na wyjściu do internetu, a hasła, klucze API i PIN-y nadal są maskowane.
+Adres portfela i skrót SHA zostają w zapytaniu, bo są jego tematem.
+
+**Jak sprawdzone:** `bash weryfikuj.sh` (składnia i szybki eval),
+`python3 agent/ewaluacja.py --bez-zapisu` (wszystkie przypadki, w tym nowy
+`izolacja-eval`), `ewaluacja._check_isolation()`, kontrola 72 w `check.sh`
+oraz reczne próby `sources.chat_id("projekty/klient.md")` i
+`trace.mask("adres 0x...", outbound=True)`. Pełny `check.sh` wymaga sudo i
+usługi na porcie 7777; tutaj uruchomiono jego nowy test izolacji bez sudo.
+Pakiet 1.32.28 zbudowano przez `bash wydaj.sh` (sumy kontrolne i rozpakowanie
+sprawdzone przez skrypt).
+
+## Co nowego w 1.32.27
+
+Lokalny krok **"Szkic odpowiedzi"** w Namyśle dostaje własny limit czasu,
+niezależny od dostawców sieciowych.
+
+**Przyczyna:** lokalny qwen2.5:3b na i7-6600U potrzebuje 30-60 s na ciepły
+start, a po starcie systemu nawet więcej. Zbyt krótki limit kończył się
+komunikatem "Model nie odpowiedział", po czym retry po około 2 minutach
+działał, bo model zdążył się rozgrzać.
+
+**Zmiana:** `agent/router.py` ma `_namysl_local_timeout()` i
+`_namysl_local_chat()`. Każde lokalne wywołanie Namysłu przekazuje do
+`_ollama_chat()` limit z `.env` `LOKALNY_TIMEOUT` (domyślnie 180 s,
+zakres 1-3600). Limit chmury bez zmian: `CLOUD_TIMEOUT`, `JUGGLER_TIMEOUT`
+i `LOKALNY_TIMEOUT` są osobnymi ustawieniami.
+
+Nowy klucz `.env.example`:
+
+```dotenv
+# LOKALNY_TIMEOUT=180
+```
+
+Bez wpisu działa 180 s. Wartość poniżej 60 s jest zgłaszana przez
+kontrolę 71 w `check.sh` jako błąd, bo grozi fałszywym timeoutem.
+
+**Sprawdzenie:** nowy przypadek `lokalny-timeout` w `gregai eval` sprawdza
+domyślne 180 s, nadpisanie z `.env` (240 s) i faktyczne przekazanie
+wartości do `_ollama_chat()`. Szybki eval: 56/56.
+
+## Co nowego w 1.32.26
+
+Pięć narzędzi deweloperskich dostępnych z rozmowy, bez terminala. Wszystkie
+są tylko do odczytu albo uruchamiają lokalne testy i mają `user_only=True`:
+model nie wybiera ich sam, działa wyłącznie bezpośrednie polecenie
+użytkownika. Kod w `agent/devtools.py`, rejestracja w
+`agent/capabilities.py`.
+
+- **run_eval**: `uruchom testy regresji` albo `uruchom eval` daje szybki
+  eval offline z `--bez-zapisu` (nie psuje historii regresji). Wariant
+  `na żywo` używa `--zywo --k 3`, prawdziwych modeli i płatnego budżetu
+  Koryta. Wynik wraca jako tekst odpowiedzi.
+- **run_check**: `uruchom check.sh` zwraca wynik kontroli. Skrypt jest
+  read-only, ale pełny audyt nadal wymaga sudo w terminalu; przeglądarka
+  nie ma gdzie wpisać hasła, więc bez wcześniejszego `sudo -n` narzędzie
+  zwraca uczciwy komunikat i dodatkowo krótką kontrolę bez sudo (venv,
+  usługa, port, WARP, Ollama, `.env`).
+- **env_status**: `stan środowiska` pokazuje `.venv`, wersje `httpx` i
+  `huawei-lte-api`, stan Ollamy oraz listę modeli. Braki są oznaczone jako
+  `[BŁĄD]`, brak listy modeli jako `[UWAGA]`.
+- **service_status**: `status usługi gregai` pokazuje stan przez
+  `systemctl` i ostatnie 30 linii `journalctl`. Tylko odczyt, bez restartu
+  i bez zmian w usłudze.
+- **docs_check**: `sprawdź spójność dokumentacji` porównuje wersję w
+  `VERSION`, README i CHANGELOG, liczbę kontroli w `check.sh` i README
+  oraz odwołania do plików w README i FUNDAMENT.
+
+Polecenia systemowe idą przez `sysop.run_cmd`: bez shella, z limitem czasu,
+maskowaniem sekretów i obcięciem wyjścia. Kolory ANSI z `check.sh` są
+usuwane przed pokazaniem tekstu w przeglądarce.
+
+**Sprawdzenie:** nowa kontrola 70 w `check.sh` testuje rejestr i kontrakt
+wywołań na atrapie runnera (bez sieci, sudo i modeli), a `gregai eval` ma
+przypadek `narzedzia-deweloperskie`. Pełny szybki eval: 55/55.
+
+## Co nowego w 1.32.25
+
+Wdrożone narzędzia dla czystej kopii, jednej regresji, paczki wydania
+i izolowanych zależności runtime.
+
+**Szybka weryfikacja czystej kopii** (`bash gregai weryfikuj`, nowy
+`weryfikuj.sh`): składnia Pythona i skryptów bash, JavaScript gdy jest
+`node`, potem szybki eval. Bez sudo, usług systemd, WARP i modeli -
+dobrze sprawdza się tam, gdzie pełny `check.sh` na żywym systemie nie
+jest możliwy. Brak node'a jest jawnie zgłaszany jako `POMINIĘTO`, nie
+ukrywany.
+
+**Jeden przypadek evala bez naruszania historii** (`gregai eval --id ID`):
+jedna regresja nie wymaga już pełnego uruchomienia. Przebieg jednego
+przypadku nie zapisuje się do `data/ewaluacja/historia.jsonl`, więc
+pełne przebiegi (i porównania regresji w nim) pozostają czyste. Nieznany
+identyfikator albo przypadek nienależący do wybranego trybu kończy się
+kodem 2 z komunikatem, a nie wynikiem "0/0 zaliczone".
+
+**Powtarzalna paczka wydania** (`bash gregai wydaj`, nowy `wydaj.sh`):
+aktualizuje `GREGAI.sha256`, buduje ZIP i testuje sumy oraz weryfikację
+na świeżym rozpakowaniu. Nie dopisuje treści dokumentów ani nie wypycha
+gita; gdy nagłówek README albo sekcja CHANGELOG nie odpowiadają `VERSION`,
+zatrzymuje się z podpowiedzią, a nie "naprawia" dokumenty w cudzym
+imieniu.
+
+**Zależności Pythona w venv projektu** (`.venv` w `.gitignore`):
+`requirements.txt` z przypiętymi wersjami instaluje się do `.venv`
+projektu, a usługi startują z `.venv/bin/python`. Zamiast `pip --user`
+z `--break-system-packages` w `install.sh` i `aktualizuj.sh`. To
+oddziela zależności GREGAI od systemowego Pythona i innych projektów.
+`gregai diagnoza` w trybie awaryjnym wybiera `.venv/bin/python`, gdy
+istnieje, i systemowego `python3`, gdy brak. `.venv` jest wykluczony
+z paczki i aktualizacji kodu (jak `data/`, `memory/`, `training/.work`).
+
+**Usunięte zamrożone liczby kontroli**: nagłówek `check.sh` mówił
+"68 kontrole", mimo że kontrola 69 istnieje, a mapa `FUNDAMENT.md`
+podawała "(50)". Teraz nagłówek `check.sh` podaje właściwą liczbę
+("69 kontroli"), a mapa `FUNDAMENT.md` odsyła do bannera skryptu.
+
+**Sprawdzenie:** `weryfikuj.sh` daje 54/54 offline eval i zero błędów
+składni Pythona/basha (node nieobecny w awaryjnym środowisku, więc JS
+wyszedł jako `POMINIĘTO`). `eval --id panic` daje 1/1. `wydaj.sh`
+buduje paczkę 1.32.25 i testuje ją na świeżym rozpakowaniu.
+
 ## Co nowego w 1.32.24
 
 Dodana sekcja "Wsparcie" w README (po "Koszty", przed "Znane ograniczenia"):

@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="debug.css" />
 <link rel="stylesheet" href="sistem.css" />
 <link rel="stylesheet" href="kadr.css" />
+<link rel="stylesheet" href="crack.css" />
 </head>
 <body class="segment-chat">
 
@@ -34,6 +35,7 @@
       <span class="header-dot" id="header-dot" aria-hidden="true"></span>
       <div class="rail-brand">
         <span class="rail-name">GREGAI</span>
+        <span class="rail-version" id="rail-version">1.36.0</span>
       </div>
       <!-- Przełącznik segmentów: Rozmowa / Węzły / Nadzorca - trzy ikony w
            rogu panelu, nie karty w treści szyny. Od 1.11.0 jedna aplikacja:
@@ -51,6 +53,14 @@
         <button type="button" id="rail-switch-debug" class="segment-switch-btn" title="Nadzorca" aria-label="Przejdź do Nadzorcy">
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="seg-label">Nadzorca</span>
+        </button>
+        <button type="button" id="rail-switch-zadania" class="segment-switch-btn" title="Zadania" aria-label="Przejdź do Zadań">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="1.8" cy="3.5" r="0.8" fill="currentColor"/><circle cx="1.8" cy="7" r="0.8" fill="currentColor"/><circle cx="1.8" cy="10.5" r="0.8" fill="currentColor"/></svg>
+        <span class="seg-label">Zadania</span>
+        </button>
+        <button type="button" id="rail-switch-notatki" class="segment-switch-btn" title="Notatki" aria-label="Przejdź do Notatek">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 1.8h6.2L13 5.6v8.6H3z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9.2 1.8v3.8H13M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <span class="seg-label">Notatki</span>
         </button>
       </div>
     </div>
@@ -70,6 +80,7 @@
 
     <div class="rail-footer">
       <span id="chat-model-badge" class="chat-model-badge">sprawdzam…</span>
+      <span id="rail-uptime" class="rail-uptime">UPTIME 00:00:00</span>
     </div>
   </aside>
 
@@ -109,6 +120,26 @@
     <div id="chat-attachments" class="chat-attachments" aria-live="polite"></div>
     <!-- 1.32.0: podpowiedzi komend po wpisaniu "/" (lista z serwera: /api/komendy) -->
     <div id="cmd-popover" class="cmd-popover hidden" role="listbox" aria-label="Komendy"></div>
+    <!-- 1.33.0: stepper 6 faz Namysłu, nad composerem. Widoczny tylko wtedy,
+         gdy przychodzą zdarzenia postępu (GET /api/chat/progress); po
+         zakończeniu zostaje jako metryka do następnej wiadomości. Zero inline
+         styles: wszystko klasami, więc CSP bez zmian. -->
+    <div id="namysl-track" class="nt-track hidden" role="progressbar"
+         aria-valuemin="0" aria-valuemax="6" aria-valuetext="Namysł nieaktywny">
+      <div class="nt-track-head">
+        <span class="nt-track-title">Namysł</span>
+        <span class="nt-track-timer" aria-hidden="true">0,0s</span>
+        <span class="nt-track-eta hidden" aria-hidden="true"></span>
+      </div>
+      <ol class="nt-track-steps">
+        <li class="nt-track-step" data-faza="rozpoznanie"><span class="nt-track-dot"></span><span class="nt-track-name">1. Rozpoznanie</span><span class="nt-track-time"></span></li>
+        <li class="nt-track-step" data-faza="zbieranie"><span class="nt-track-dot"></span><span class="nt-track-name">2. Zbieranie</span><span class="nt-track-time"></span></li>
+        <li class="nt-track-step" data-faza="szkic"><span class="nt-track-dot"></span><span class="nt-track-name">3. Szkic</span><span class="nt-track-time"></span></li>
+        <li class="nt-track-step" data-faza="krytyka"><span class="nt-track-dot"></span><span class="nt-track-name">4. Krytyka</span><span class="nt-track-time"></span></li>
+        <li class="nt-track-step" data-faza="poprawa"><span class="nt-track-dot"></span><span class="nt-track-name">5. Poprawa</span><span class="nt-track-time"></span></li>
+        <li class="nt-track-step" data-faza="sprawdzenie"><span class="nt-track-dot"></span><span class="nt-track-name">6. Sprawdzenie</span><span class="nt-track-time"></span></li>
+      </ol>
+    </div>
     <form id="chat-form" class="chat-input-row">
       <input type="file" id="chat-file-input" class="hidden" multiple accept=".txt,.md,.markdown,.rst,.csv,.tsv,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.log,.py,.js,.ts,.html,.htm,.css,.sh,.sql,.xml,.tex,.srt,.vtt,.pdf,.docx,.xlsx" aria-hidden="true" tabindex="-1" />
       <button type="button" id="chat-attach" class="inspector-btn chat-attach-btn" title="Dołącz plik (pdf, docx, xlsx, csv, tekst) - GREGAI przeczyta go ze zrozumieniem" aria-label="Dołącz plik">
@@ -179,6 +210,19 @@
           <div class="drawer-content">
             <div id="drawer-progress-live"></div>
             <p class="drawer-progress-empty" id="drawer-progress-empty">Namysł jeszcze się nie odezwał w tej rozmowie - pojawi się tu na żywo przy pierwszym pytaniu (GREGAI zawsze myśli dokładnie, krok po kroku).</p>
+          </div>
+        </details>
+        <!-- 1.33.1: pełny tekst alertu Straży, otwierany z toastu „Pokaż szczegóły”.
+             Ten sam drawer „Ta rozmowa”, tylko nowa szufladka - nic nie znika. -->
+        <details class="drawer-section d-alert hidden" id="drawer-alert">
+          <summary>
+            <span class="drawer-ico" aria-hidden="true">🛡️</span>
+            <span class="drawer-sum"><span class="drawer-name">Straż</span><span class="drawer-hint">Pełny tekst alertu</span></span>
+            <span class="drawer-count" id="drawer-count-alert">0</span>
+            <svg class="drawer-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </summary>
+          <div class="drawer-content">
+            <pre class="drawer-alert-text" id="drawer-alert-text"></pre>
           </div>
         </details>
         <details class="drawer-section d-src">
@@ -265,6 +309,14 @@
         <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span class="seg-label">Nadzorca</span>
         </button>
+        <button type="button" id="nodes-switch-zadania" class="segment-switch-btn" title="Zadania" aria-label="Przejdź do Zadań">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="1.8" cy="3.5" r="0.8" fill="currentColor"/><circle cx="1.8" cy="7" r="0.8" fill="currentColor"/><circle cx="1.8" cy="10.5" r="0.8" fill="currentColor"/></svg>
+        <span class="seg-label">Zadania</span>
+        </button>
+        <button type="button" id="nodes-switch-notatki" class="segment-switch-btn" title="Notatki" aria-label="Przejdź do Notatek">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 1.8h6.2L13 5.6v8.6H3z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9.2 1.8v3.8H13M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <span class="seg-label">Notatki</span>
+        </button>
     </div>
     <div class="nodes-title lt">
       <span class="lt-chip">Węzły</span>
@@ -282,18 +334,29 @@
     <button id="nodes-help-btn" class="nodes-help-btn" type="button" title="Jak korzystać z mapy" aria-label="Pokaż podpowiedzi do mapy">?</button>
   </header>
 
-  <!-- Lewa kolumna: znajdź i przefiltruj -->
+  <!-- Lewa kolumna (1.35.0): wyszukiwarka, filtr typu/data i pełna lista węzłów. -->
   <aside id="browse-panel" class="panel">
-    <section class="insp-card browse-card" aria-label="Najbardziej połączone">
-      <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">⭐</span>Najbardziej połączone</h4>
-      <p class="browse-hint">Notatki z największą liczbą powiązań. Kliknij, żeby je pokazać na mapie.</p>
-      <ul class="hub-list" id="hub-list"></ul>
-    </section>
-    <section class="insp-card browse-card browse-filters" aria-label="Rodzaje notatek">
-      <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">🎨</span>Rodzaje notatek</h4>
-      <p class="browse-hint">Kliknij rodzaj, żeby ukryć go albo pokazać na mapie.</p>
-      <ul class="filter-list" id="filter-list"></ul>
-    </section>
+    <div class="nodes-pane">
+      <div class="nodes-pane-head">
+        <span class="nodes-pane-title">Węzły</span>
+        <span class="nodes-count" id="nodes-count"></span>
+      </div>
+      <input id="nodes-filter-input" class="nodes-filter-input" type="search" placeholder="szukaj węzła..." autocomplete="off" aria-label="Filtruj listę węzłów" />
+      <label class="nodes-date-wrap"><span>Data</span>
+        <select id="nodes-date-filter" class="nodes-date-filter" aria-label="Filtr daty">
+          <option value="">wszystkie</option>
+          <option value="dzis">dziś</option>
+          <option value="tydzien">tydzień</option>
+          <option value="miesiac">miesiąc</option>
+        </select>
+      </label>
+      <div class="nodes-filter-block">
+        <p class="nodes-filter-label">Typ</p>
+        <ul class="filter-list" id="filter-list"></ul>
+      </div>
+      <ul class="nodes-list" id="nodes-list" aria-label="Lista węzłów"></ul>
+      <button type="button" id="btn-new-node-left" class="inspector-btn nodes-add">Dodaj</button>
+    </div>
   </aside>
 
   <!-- Prawa kolumna: szczegóły wybranej notatki -->
@@ -313,7 +376,7 @@
       <li><span><b>Shift + klik</b> drugiej kuli pokaże ścieżkę między nimi.</span></li>
       <li><span><b>Nowa notatka</b> (u góry) dodaje węzeł; powiązania wybierasz z listy.</span></li>
     </ol>
-    <p class="nodes-guide-keys"><b>Skróty:</b> <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> Rozmowa, Węzły, Nadzorca · <kbd>/</kbd> pole rozmowy</p>
+    <p class="nodes-guide-keys"><b>Skróty:</b> <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>-<kbd>5</kbd> Rozmowa, Węzły, Nadzorca, Zadania, Notatki · <kbd>/</kbd> pole rozmowy</p>
   </div>
 
 </div>
@@ -341,6 +404,14 @@
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="seg-label">Nadzorca</span>
         </button>
+        <button type="button" id="debug-switch-zadania" class="segment-switch-btn" title="Zadania" aria-label="Przejdź do Zadań">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="1.8" cy="3.5" r="0.8" fill="currentColor"/><circle cx="1.8" cy="7" r="0.8" fill="currentColor"/><circle cx="1.8" cy="10.5" r="0.8" fill="currentColor"/></svg>
+        <span class="seg-label">Zadania</span>
+        </button>
+        <button type="button" id="debug-switch-notatki" class="segment-switch-btn" title="Notatki" aria-label="Przejdź do Notatek">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 1.8h6.2L13 5.6v8.6H3z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9.2 1.8v3.8H13M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+        <span class="seg-label">Notatki</span>
+        </button>
       </div>
       <div class="lt">
         <span class="lt-chip">Nadzorca</span>
@@ -361,15 +432,22 @@
     <span class="chip" id="statFast"></span>
     <span class="chip" id="statLearned"></span>
     <span class="chip" id="statModel"></span>
+    <span class="chip chip-mono" id="dbgUptime">UPTIME 00:00:00</span>
   </div>
     <nav class="dbg-tabs" role="tablist" aria-label="Sekcje Nadzorcy">
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="przeglad" aria-selected="true">Przegląd <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false">Co myśli</button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false">Czego się nauczył</button>
-      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false">System i dostęp</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="stan" aria-selected="true">Stan <i class="dbg-tab-dot hidden" id="dbgTabDot"></i></button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="koryto" aria-selected="false">Koryto</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="modele" aria-selected="false">Modele</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="straz" aria-selected="false">Straż</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="budzet" aria-selected="false">Budżet</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="siec" aria-selected="false">Sieć</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="evaluacja" aria-selected="false">Ewaluacja</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="mysli" aria-selected="false">Myśli</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="nauka" aria-selected="false">Nauka</button>
+      <button type="button" role="tab" class="dbg-tab" data-tab-btn="system" aria-selected="false">System</button>
     </nav>
 
-  <section data-tab="przeglad">
+  <section data-tab="stan">
     <h2>Stan systemu</h2>
     <p class="dbg-intro">Sprzęt, silnik i połączenia GREGAI w jednym miejscu.</p>
     <div class="sysinfo-grid" id="sysinfoGrid"></div>
@@ -380,8 +458,111 @@
     </div>
   </section>
 
+  <section data-tab="koryto">
+    <h2>Koryto</h2>
+    <p class="dbg-intro">Efektywna trasa przy wadze 1-2 (ROZDZIELNICA): pierwszy zdrowy etap odpowiada teraz, następne są rezerwą.</p>
+    <div class="dbg-pipe" id="korytoPipe"></div>
+    <div class="empty hidden" id="korytoEmpty">Brak danych o korycie.</div>
+    <h2>Ostatnie wywołania</h2>
+    <p class="dbg-intro">Kto odpowiadał i ile to trwało. Bez treści rozmów.</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="korytoHistoria">
+        <thead><tr><th>Czas</th><th>Kto</th><th>Etap</th><th>Sekundy</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="korytoHistoriaEmpty">Brak zapisanych wywołań.</div>
+    <h2>Kto odpowiadał dziś</h2>
+    <div class="dbg-bars" id="korytoBars"></div>
+    <div class="empty hidden" id="korytoBarsEmpty">Dziś jeszcze nikt nie odpowiadał.</div>
+  </section>
+
+  <section data-tab="modele">
+    <h2>Modele</h2>
+    <p class="dbg-intro">Co jest zainstalowane, co siedzi w RAM i ile trwa typowa odpowiedź (mediana z tej przeglądarki).</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="modelTable">
+        <thead><tr><th>Model</th><th>RAM</th><th>Czas</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="modelEmpty">Ollama nie zgłosiła żadnego modelu.</div>
+    <h2>Ostatnie inferencje</h2>
+    <p class="dbg-intro">Model, czas i tempo lokalnych inferencji. Bez promptów i odpowiedzi.</p>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="modelLog">
+        <thead><tr><th>Czas</th><th>Model</th><th>Sekundy</th><th>Tokeny/s</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="modelLogEmpty">Brak zapisanych inferencji.</div>
+  </section>
+
+  <section data-tab="straz">
+    <h2>Straż</h2>
+    <p class="dbg-intro">Archiwum obchodów bezpieczeństwa (agent/straz.py). „Wycisz” zapisuje tylko znacznik w osobnym pliku - dziennik i łańcuch dowodowy zostają nietknięte.</p>
+    <div class="dbg-filter-row" id="strazFiltry" role="group" aria-label="Filtr poziomu">
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="" aria-pressed="true">Wszystkie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="wysokie" aria-pressed="false">Wysokie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="średnie" aria-pressed="false">Średnie</button>
+      <button type="button" class="inspector-btn secondary" data-straz-poziom="niskie" aria-pressed="false">Niskie</button>
+    </div>
+    <ol class="dbg-timeline" id="strazTimeline"></ol>
+    <div class="empty hidden" id="strazTimelineEmpty">Straż nie zgłosiła jeszcze żadnego zdarzenia.</div>
+    <div class="dbg-more-row"><button type="button" class="inspector-btn secondary" id="strazMoreBtn">Pokaż więcej</button></div>
+  </section>
+
+  <section data-tab="budzet">
+    <h2>Budżet Claude</h2>
+    <p class="dbg-intro">Szacunek zużycia dziennego i miesięcznego limitu (KORYTO_BUDZET_* w .env).</p>
+    <div class="dbg-budget" id="budgetBars"></div>
+    <div class="empty hidden" id="budgetEmpty">Brak danych o budżecie.</div>
+    <h2>Wydatki dziś</h2>
+    <div class="dbg-suma" id="budzetSuma"></div>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="budzetTabela">
+        <thead><tr><th>Czas</th><th>Model</th><th>Wejście</th><th>Wyjście</th><th>USD</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="budzetTabelaEmpty">Dziś nie było płatnych wywołań.</div>
+  </section>
+
+  <section data-tab="siec">
+    <h2>Sieć domowa</h2>
+    <p class="dbg-intro">Urządzenia widziane w domu (cache ostatniego skanu). Skan działa w tle i nie blokuje reszty.</p>
+    <div class="dbg-siec-head">
+      <span class="dbg-meta" id="siecMeta">—</span>
+      <button type="button" class="inspector-btn" id="siecSkanBtn">Skanuj teraz</button>
+    </div>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="siecTabela">
+        <thead><tr><th>IP</th><th>Nazwa</th><th>Status</th><th>Ostatnio</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="siecEmpty">Brak urządzeń w cache. Uruchom skan.</div>
+  </section>
+
+  <section data-tab="evaluacja">
+    <h2>Ewaluacja</h2>
+    <p class="dbg-intro">Historia szybkiego eval (offline). „Uruchom” liczy w tle i nie zapisuje historii.</p>
+    <div class="dbg-siec-head">
+      <span class="dbg-meta" id="evalOstatni">—</span>
+      <button type="button" class="inspector-btn" id="evalRunBtn">Uruchom</button>
+    </div>
+    <pre class="teraz-pre hidden" id="evalWynik"></pre>
+    <div class="dbg-table-wrap">
+      <table class="dbg-model-table" id="evalHistoria">
+        <thead><tr><th>Data</th><th>Tryb</th><th>Wynik</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="empty hidden" id="evalHistoriaEmpty">Brak zapisanych ewaluacji.</div>
+  </section>
+
   <!-- 1.32.0: diagnoza internetu warstwa po warstwie (agent/diagnoza.py, /api/diagnoza) -->
-  <section data-tab="przeglad" class="diag-section">
+  <section data-tab="stan" class="diag-section">
     <h2>Internet krok po kroku</h2>
     <p class="dbg-intro">Sprawdzam każdą warstwę po kolei: klient WARP, tunel, ruch przez Cloudflare, DNS, wyszukiwarki, Wikipedię, pogodę i dostawców AI. Pierwsza niedziałająca warstwa to przyczyna, a obok jest polecenie naprawy. To samo w czacie: /diagnoza, w terminalu: gregai diagnoza.</p>
     <div class="restart-row">
@@ -500,6 +681,140 @@
   </div>
 </div>
 
+
+<!-- ============================================================
+     SEGMENT 4: ZADANIA STAŁE (1.35.1) - lista, filtry, szczegóły i
+     formularz; dane z /api/standing. ============================================================ -->
+<div id="zadania-segment" class="segment">
+  <header class="panele-top panel">
+    <div class="segment-switch" role="group" aria-label="Przełącz widok">
+      <button type="button" id="zadania-switch-chat" class="segment-switch-btn" title="Rozmowa" aria-label="Przejdź do Rozmowa">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.2h10a1.3 1.3 0 0 1 1.3 1.3v5.4A1.3 1.3 0 0 1 13 11.2H6.8L4 13.4v-2.2H3A1.3 1.3 0 0 1 1.7 9.9V4.5A1.3 1.3 0 0 1 3 3.2z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Rozmowa</span>
+      </button>
+      <button type="button" id="zadania-switch-nodes" class="segment-switch-btn" title="Węzły" aria-label="Przejdź do Węzły">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="11.6" r="1.6" fill="currentColor"/><path d="M5.3 4.9L7 9.8M10.7 4.9L9 9.8M5.7 4L10.3 4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="seg-label">Węzły</span>
+      </button>
+      <button type="button" id="zadania-switch-debug" class="segment-switch-btn" title="Nadzorca" aria-label="Przejdź do Nadzorca">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Nadzorca</span>
+      </button>
+      <button type="button" id="zadania-switch-zadania" class="segment-switch-btn active" title="Zadania" aria-label="Zadania (aktualny widok)" aria-current="true">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="1.8" cy="3.5" r="0.8" fill="currentColor"/><circle cx="1.8" cy="7" r="0.8" fill="currentColor"/><circle cx="1.8" cy="10.5" r="0.8" fill="currentColor"/></svg>
+      <span class="seg-label">Zadania</span>
+      </button>
+      <button type="button" id="zadania-switch-notatki" class="segment-switch-btn" title="Notatki" aria-label="Przejdź do Notatki">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 1.8h6.2L13 5.6v8.6H3z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9.2 1.8v3.8H13M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="seg-label">Notatki</span>
+      </button>
+    </div>
+    <div class="lt"><span class="lt-chip">Zadania</span><h2 class="lt-title">Zadania stałe</h2></div>
+    <div class="panele-filters" role="group" aria-label="Filtr zadań">
+      <button type="button" class="inspector-btn secondary" data-zad-filtr="aktywne" aria-pressed="true">Aktywne</button>
+      <button type="button" class="inspector-btn secondary" data-zad-filtr="wstrzymane" aria-pressed="false">Pauza</button>
+      <button type="button" class="inspector-btn secondary" data-zad-filtr="zakończone" aria-pressed="false">Wykonane</button>
+    </div>
+    <button type="button" class="inspector-btn" id="btn-zadanie-nowe">Dodaj zadanie</button>
+  </header>
+  <div class="panele-grid panele-grid-zadania">
+    <aside class="panel panele-list" id="zadania-lista" aria-live="polite"></aside>
+    <aside class="panel panele-detail" id="zadania-panel">
+      <div class="panele-empty" id="zadania-pusty">Wybierz zadanie z listy.</div>
+      <div id="zadanie-szczegoly" class="hidden"></div>
+    </aside>
+  </div>
+  <form id="zadanie-form" class="panel panele-form hidden" aria-label="Nowe zadanie">
+    <div class="lt"><span class="lt-chip">Nowe</span><h2 class="lt-title">Dodaj zadanie</h2></div>
+    <label class="field-label">Nazwa<input id="zad-nazwa" type="text" maxlength="120" placeholder="np. Nowe urządzenie w sieci" /></label>
+    <label class="field-label">Komenda / warunek<textarea id="zad-komenda" rows="2" placeholder="np. powiadom mnie, gdy w sieci pojawi się nowe urządzenie"></textarea></label>
+    <label class="field-label">Interwał
+      <select id="zad-interwal">
+        <option value="15">co 15 minut</option>
+        <option value="30">co 30 minut</option>
+        <option value="60" selected>co godzinę</option>
+        <option value="120">co 2 godziny</option>
+        <option value="360">co 6 godzin</option>
+        <option value="720">co 12 godzin</option>
+        <option value="1440">raz dziennie</option>
+      </select>
+    </label>
+    <div class="inspector-btn-row">
+      <button type="submit" class="inspector-btn">Dodaj</button>
+      <button type="button" class="inspector-btn secondary" id="zad-anuluj">Anuluj</button>
+    </div>
+    <p id="zad-status" class="note-edit-status"></p>
+  </form>
+</div>
+
+<!-- ============================================================
+     SEGMENT 5: NOTATKI (1.35.1) - lista, podgląd, metadane.
+     Wyszukiwanie pełnotekstowe: /api/notes?q= (vault.search_hits). ============================================================ -->
+<div id="notatki-segment" class="segment">
+  <header class="panele-top panel">
+    <div class="segment-switch" role="group" aria-label="Przełącz widok">
+      <button type="button" id="notatki-switch-chat" class="segment-switch-btn" title="Rozmowa" aria-label="Przejdź do Rozmowa">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.2h10a1.3 1.3 0 0 1 1.3 1.3v5.4A1.3 1.3 0 0 1 13 11.2H6.8L4 13.4v-2.2H3A1.3 1.3 0 0 1 1.7 9.9V4.5A1.3 1.3 0 0 1 3 3.2z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Rozmowa</span>
+      </button>
+      <button type="button" id="notatki-switch-nodes" class="segment-switch-btn" title="Węzły" aria-label="Przejdź do Węzły">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4" cy="4" r="1.6" fill="currentColor"/><circle cx="12" cy="4" r="1.6" fill="currentColor"/><circle cx="8" cy="11.6" r="1.6" fill="currentColor"/><path d="M5.3 4.9L7 9.8M10.7 4.9L9 9.8M5.7 4L10.3 4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="seg-label">Węzły</span>
+      </button>
+      <button type="button" id="notatki-switch-debug" class="segment-switch-btn" title="Nadzorca" aria-label="Przejdź do Nadzorca">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 8.6h2.6l1.6-4.2 2.2 7.4 1.9-5.2 1.1 2h2.9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="seg-label">Nadzorca</span>
+      </button>
+      <button type="button" id="notatki-switch-zadania" class="segment-switch-btn" title="Zadania" aria-label="Przejdź do Zadania">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="1.8" cy="3.5" r="0.8" fill="currentColor"/><circle cx="1.8" cy="7" r="0.8" fill="currentColor"/><circle cx="1.8" cy="10.5" r="0.8" fill="currentColor"/></svg>
+      <span class="seg-label">Zadania</span>
+      </button>
+      <button type="button" id="notatki-switch-notatki" class="segment-switch-btn active" title="Notatki" aria-label="Notatki (aktualny widok)" aria-current="true">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 1.8h6.2L13 5.6v8.6H3z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M9.2 1.8v3.8H13M5.5 8h5M5.5 10.5h5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="seg-label">Notatki</span>
+      </button>
+    </div>
+    <div class="lt"><span class="lt-chip">Notatki</span><h2 class="lt-title">Wszystkie notatki</h2></div>
+    <span class="panele-count" id="notatki-liczba"></span>
+  </header>
+  <div class="panele-grid panele-grid-notatki">
+    <aside class="panel panele-list" id="notatki-lista-panel">
+      <input id="notatki-szukaj" class="nodes-filter-input" type="search" placeholder="szukaj notatki..." autocomplete="off" aria-label="Szukaj notatki" />
+      <div class="panele-filters panele-filters-col">
+        <label class="nodes-date-wrap"><span>Typ</span><select id="notatki-typ" class="nodes-date-filter"><option value="">wszystkie</option></select></label>
+        <label class="nodes-date-wrap"><span>Data</span>
+          <select id="notatki-data" class="nodes-date-filter">
+            <option value="">wszystkie</option>
+            <option value="dzis">dziś</option>
+            <option value="tydzien">tydzień</option>
+            <option value="miesiac">miesiąc</option>
+          </select>
+        </label>
+      </div>
+      <ul id="notatki-lista" class="notes-list" aria-label="Lista notatek"></ul>
+    </aside>
+    <section class="panel notes-preview" id="notatki-podglad">
+      <div class="panele-empty" id="notatki-pusty">Wybierz notatkę z listy.</div>
+      <article id="notatka-tresc" class="hidden">
+        <h2 id="notatka-tytul"></h2>
+        <div id="notatka-body" class="note-body"></div>
+      </article>
+    </section>
+    <aside class="panel notes-meta" id="notatki-meta">
+      <div id="notatka-meta" class="hidden">
+        <p class="meta-row"><span>Typ</span><b id="notatka-typ"></b></p>
+        <p class="meta-row"><span>Utworzono</span><b id="notatka-utworzono"></b></p>
+        <p class="meta-row"><span>Zmieniono</span><b id="notatka-zmieniono"></b></p>
+        <p class="meta-label">Tagi</p>
+        <div id="notatka-tagi" class="tagi"></div>
+        <p class="meta-label">Backlinks</p>
+        <ul id="notatka-backlinki" class="backlinki"></ul>
+        <button type="button" class="inspector-btn" id="notatka-do-rozmowy">Otwórz w rozmowie</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
 <!-- Modal: tworzenie nowego węzła -->
 <div id="create-modal-overlay" class="modal-overlay">
   <div class="modal-panel panel" role="dialog" aria-modal="true" aria-labelledby="create-modal-title">
@@ -537,10 +852,15 @@
   </div>
 </div>
 
+<div id="straz-toasts" class="straz-toasts" aria-live="assertive" aria-atomic="false"></div>
+<div id="data-stream" aria-hidden="true"></div>
+<div id="vflash" aria-hidden="true"></div>
+
 <script src="vendor/three.min.js"></script>
 <script src="vendor/OrbitControls.js"></script>
 <script src="graph.js"></script>
 <script src="debug.js"></script>
+<script src="panele.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

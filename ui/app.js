@@ -254,6 +254,7 @@ async function loadGraph() {
 
   populateHubList();
   populateFilterList();
+  renderNodesList();
   populateProjectList();
   if (loaded) {
     restoreSavedProject();
@@ -307,6 +308,7 @@ async function refreshGraphData() {
   graph.loadDataWhenVisible(graphData.nodes, graphData.edges, { keep: true });
   populateHubList();
   populateFilterList();
+  renderNodesList();
   // Projekt przypisany do aktywnej rozmowy mógł właśnie zniknąć (usunięty węzeł,
   // zmieniony typ): rozmowa nie może dalej udawać, że jest przy nim przypisana.
   if (activeProject && !graphData.nodes.some((n) => n.id === activeProject.id && n.type === "Project")) {
@@ -512,6 +514,7 @@ function populateFilterList() {
       graph.setTypeActive(type, !active);
       li.classList.toggle("disabled", active);
       li.setAttribute("aria-pressed", String(!active));
+      renderNodesList();
     };
     li.addEventListener("click", toggle);
     li.addEventListener("keydown", onActivateKey(toggle));
@@ -519,7 +522,112 @@ function populateFilterList() {
   }
 }
 
-// Enter albo spacja uruchamiają element, który działa jak przycisk.
+// --- 1.35.0: lista węzłów w lewej kolumnie (Węzły 3-kolumnowe) ------------
+let nodesFilterQuery = "";
+let nodesFilterTimer = null;
+
+function nodeDateText(ts) {
+  const n = Number(ts);
+  if (!n) return "";
+  try {
+    return new Date(n * 1000).toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric" });
+  } catch (e) { return ""; }
+}
+
+function renderNodesList() {
+  const list = document.getElementById("nodes-list");
+  if (!list) return;
+  const q = nodesFilterQuery.trim().toLowerCase();
+  const dateSel = document.getElementById("nodes-date-filter");
+  const okres = dateSel ? dateSel.value : "";
+  const maxAge = okres === "dzis" ? 86400 : okres === "tydzien" ? 7 * 86400 : okres === "miesiac" ? 31 * 86400 : 0;
+  const now = Date.now() / 1000;
+  const all = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+  const visible = all.filter((n) => {
+    if (typeof graph !== "undefined" && graph && graph.activeTypes && !graph.activeTypes.has(n.type)) return false;
+    if (maxAge && (!n.modyfikacja || now - n.modyfikacja > maxAge)) return false;
+    if (q) {
+      const hay = `${n.title || ""} ${n.type || ""} ${n.excerpt || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "pl")).slice(0, 50);
+  list.innerHTML = "";
+  for (const n of visible) {
+    const li = document.createElement("li");
+    li.className = "nodes-row" + (selectedNodeId === n.id ? " active" : "");
+    li.dataset.nodeId = n.id;
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.innerHTML = `<span class="nodes-row-title">${escapeHtml(n.title || "")}</span>` +
+      `<span class="nodes-row-meta">${escapeHtml(typeLabelPl(n.type))}${n.modyfikacja ? " · " + escapeHtml(nodeDateText(n.modyfikacja)) : ""}</span>`;
+    li.addEventListener("click", () => { if (typeof graph !== "undefined" && graph) graph.focusNode(n.id); });
+    li.addEventListener("keydown", onActivateKey(() => { if (typeof graph !== "undefined" && graph) graph.focusNode(n.id); }));
+    list.appendChild(li);
+  }
+  const count = document.getElementById("nodes-count");
+  if (count) count.textContent = `${visible.length} / ${all.length}`;
+}
+
+function markNodesListSelection(id) {
+  document.querySelectorAll("#nodes-list .nodes-row").forEach((row) => {
+    row.classList.toggle("active", row.dataset.nodeId === id);
+  });
+}
+
+function initNodesList() {
+  const input = document.getElementById("nodes-filter-input");
+  if (input) input.addEventListener("input", () => {
+    clearTimeout(nodesFilterTimer);
+    nodesFilterTimer = setTimeout(() => { nodesFilterQuery = input.value; renderNodesList(); }, 120);
+  });
+  const dateSel = document.getElementById("nodes-date-filter");
+  if (dateSel) dateSel.addEventListener("change", renderNodesList);
+  const add = document.getElementById("btn-new-node-left");
+  if (add) add.addEventListener("click", () => openCreateModal());
+}
+
+async function loadInspectorBody(id) {
+  try {
+    const res = await gregaiFetch(`/api/note?id=${encodeURIComponent(id)}`);
+    const data = await res.json();
+    if (selectedNodeId !== id || editing) return;
+    if (data.error) return;
+    const slot = document.querySelector("#inspector-body [data-node-body]");
+    if (!slot) return;
+    slot.classList.add("insp-full");
+    slot.innerHTML = renderMarkdownLite(String(data.body || ""));
+  } catch (e) { /* podgląd zostaje przy wycinku z grafu */ }
+}
+
+async function quickLinkNote(id, targetTitle) {
+  const status = document.getElementById("insp-link-status");
+  if (!status) return;
+  status.textContent = "Łączę…";
+  try {
+    const data = await (await gregaiFetch(`/api/note?id=${encodeURIComponent(id)}`)).json();
+    if (data.error) { status.textContent = `Błąd: ${data.error}`; return; }
+    if (data.readonly) { status.textContent = "Ta notatka jest tylko do odczytu."; return; }
+    const split = splitLinksLine(data.body || "");
+    if (split.links.includes(targetTitle)) { status.textContent = "Już połączone."; return; }
+    const text = `# ${data.title}\ntype: ${data.type}\n\n${composeBody(split.content, [...split.links, targetTitle])}\n`;
+    const res = await gregaiFetch("/api/note", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, text, base: data.version }),
+    });
+    const out = await res.json();
+    if (out.error) { status.textContent = `Błąd: ${out.error}`; return; }
+    status.textContent = "Połączono.";
+    visualClick(0.03);
+    await refreshGraphData();
+    const fresh = (graphData.nodes || []).find((n) => n.id === id);
+    if (fresh && selectedNodeId === id) onNodeSelect(fresh);
+  } catch (e) {
+    status.textContent = `Błąd: ${e && e.message ? e.message : "sieć"}`;
+  }
+}
+
+
 function onActivateKey(fn) {
   return (e) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -618,21 +726,39 @@ function onNodeSelect(node) {
   editDirty = false;
   deleteConfirmId = null; // potwierdzenie "Na pewno?" dotyczyło poprzedniej notatki
   selectedNodeId = node ? node.id : null;
+  if (node) visualClick(0.02);
   if (!node) {
     body.innerHTML = `<div class="insp-empty"><span class="insp-empty-ico" aria-hidden="true">👆</span><p>Kliknij węzeł w grafie, żeby zobaczyć jego treść i powiązania.</p><p class="insp-empty-sub">Shift-klik na drugim węźle wyznacza ścieżkę między nimi.</p></div>`;
+    markNodesListSelection(null);
     return;
   }
   const excerpt = String(node.excerpt || "").replace(/\s*Powiązania:.*$/, "").trim();
+  const dataTxt = nodeDateText(node.modyfikacja);
+  const linkOptions = (graphData.nodes || [])
+    .filter((n) => n.id !== node.id)
+    .sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "pl"))
+    .slice(0, 300)
+    .map((n) => `<option value="${escapeHtml(n.title)}">${escapeHtml(n.title)} (${escapeHtml(typeLabelPl(n.type))})</option>`)
+    .join("");
   body.innerHTML = `
     <header class="insp-head">
       <span class="insp-dot" data-cv="${typeColorVar(node.type)}"></span>
-      <div class="insp-head-text"><div class="note-title">${escapeHtml(node.title)}</div><div class="note-type">${escapeHtml(typeLabelPl(node.type))}</div></div>
+      <div class="insp-head-text"><div class="note-title">${escapeHtml(node.title)}</div><div class="note-type">${escapeHtml(typeLabelPl(node.type))}${dataTxt ? " · " + escapeHtml(dataTxt) : ""}</div></div>
+      <button type="button" class="insp-close" id="insp-close" aria-label="Zamknij szczegóły">✕</button>
     </header>
     <section class="insp-card" aria-label="Treść">
       <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">📝</span>Treść</h4>
-      <p class="insp-text">${escapeHtml(excerpt || "Brak podglądu treści.")}</p>
+      <div class="insp-text" data-node-body>${escapeHtml(excerpt || "Brak podglądu treści.")}</div>
     </section>
     ${renderLinksCard(node)}
+    ${node.readonly ? "" : `<section class="insp-card insp-connect" aria-label="Połącz z">
+      <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">🔗</span>Połącz z...</h4>
+      <div class="insp-connect-row">
+        <select id="insp-link-target" aria-label="Notatka do połączenia">${linkOptions}</select>
+        <button type="button" class="inspector-btn" id="btn-insp-link">Połącz</button>
+      </div>
+      <p class="note-edit-status" id="insp-link-status"></p>
+    </section>`}
     <section class="insp-card insp-actions" aria-label="Działania">
       <h4 class="insp-h"><span class="insp-ico" aria-hidden="true">⚙️</span>Działania</h4>
       ${node.readonly
@@ -647,7 +773,19 @@ function onNodeSelect(node) {
   body.querySelectorAll(".link-chip").forEach((chip) => chip.addEventListener("click", () => {
     if (canChangeSelection(null)) graph.focusNode(chip.dataset.nodeId);
   }));
+  const close = document.getElementById("insp-close");
+  if (close) close.addEventListener("click", () => {
+    if (typeof graph !== "undefined" && graph) graph.clearSelection();
+    onNodeSelect(null);
+  });
+  markNodesListSelection(node.id);
+  loadInspectorBody(node.id);
   if (node.readonly) return;
+  const linkBtn = document.getElementById("btn-insp-link");
+  const linkSel = document.getElementById("insp-link-target");
+  if (linkBtn && linkSel) linkBtn.addEventListener("click", () => {
+    if (linkSel.value) quickLinkNote(node.id, linkSel.value);
+  });
   document.getElementById("btn-edit-note").addEventListener("click", () => startNoteEdit(node.id));
   document.getElementById("btn-delete-note").addEventListener("click", (e) => handleDeleteClick(e.currentTarget, node.id));
 }
@@ -1518,6 +1656,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initSearchBar();
   initNodesGuide();
   initCreateModal();
+  initNodesList();
   initChat();
 });
 
@@ -1895,7 +2034,7 @@ function buildWelcome(project) {
     `<p class="welcome-keys">Komendy: wpisz <kbd>/</kbd> na początku wiadomości, np. /diagnoza, /plan, /badaj, /lekcja (pełna lista: /pomoc).</p>` +
     `<p class="welcome-keys">Pliki i foldery dołączysz też z menu <span class="welcome-menuicon" aria-hidden="true">☰</span> w rogu; „Zatrzymaj” przerwie odpowiedź w każdej chwili.</p>` +
     `<p class="welcome-keys"><b>Skróty:</b> <kbd>/</kbd> pole rozmowy · <kbd>↑</kbd> ostatnia wiadomość · ` +
-    `<kbd>Esc</kbd> zatrzymuje odpowiedź · <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> Rozmowa, Węzły, Nadzorca</p>` +
+    `<kbd>Esc</kbd> zatrzymuje odpowiedź · <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>-<kbd>5</kbd> Rozmowa, Węzły, Nadzorca, Zadania, Notatki</p>` +
     `</details>`;
   const grid = root.querySelector(".welcome-grid");
   for (const t of WELCOME_STARTERS) {
@@ -1993,6 +2132,113 @@ function buildBubble(role, text) {
 // stałego („🔔 ...”, router._finish) dostaje czerwony znacznik - to nie zwykła rozmowa.
 function markAlertBubble(bubble, role, text) {
   if (role === "assistant" && typeof text === "string" && text.trimStart().startsWith("🔔")) bubble.classList.add("alarm");
+}
+
+// --- 1.33.1: toasty Straży zamiast alertu inline w #chat-messages ---------
+// Backend dokleja alerty z kolejki (agent/router.py: "🔔 „<zlecenie>”: ...")
+// przed zwykłą odpowiedzią. Alert Straży wyjmujemy z dymka i pokazujemy jako
+// toast w prawym górnym rogu; pełny tekst trafia do istniejącej szuflady
+// „Ta rozmowa” (sekcja Straż). Inne alerty (zadania stałe) zostają inline.
+const STRAZ_TOAST_MAX = 3;
+const STRAZ_TOAST_MS = { high: 0, medium: 15000, low: 8000 };
+
+function extractStrazAlerts(text) {
+  const lines = String(text || "").split("\n");
+  const alerts = [];
+  const kept = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*🔔\s*„([^”]+)”\s*:\s*(.*)$/);
+    if (m && /^Straż systemu$/i.test(m[1].trim())) {
+      alerts.push({ tytul: m[1].trim(), tekst: (m[2] || "").trim(), raw: line.trim() });
+      continue;
+    }
+    kept.push(line);
+  }
+  return { text: kept.join("\n").replace(/^\s*\n+/, "").trim(), alerts };
+}
+
+function strazSeverity(alert) {
+  const t = `${alert.tytul || ""} ${alert.tekst || ""}`.toLowerCase();
+  if (/(wysokie|krytyczn|poważn|groźn|zagroż)/.test(t)) return "high";
+  if (/(średnie|srednie|umiarkowan)/.test(t)) return "medium";
+  if (/(niskie|niegroźn|niegrozn)/.test(t)) return "low";
+  // Alert Straży bez oceny: bezpieczniej wymagać kliknięcia niż schować sam.
+  return "high";
+}
+
+function showStrazToast(alert) {
+  let host = document.getElementById("straz-toasts");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "straz-toasts";
+    host.className = "straz-toasts";
+    host.setAttribute("aria-live", "assertive");
+    document.body.appendChild(host);
+  }
+  while (host.children.length >= STRAZ_TOAST_MAX) {
+    dismissStrazToast(host.firstElementChild, true);
+  }
+  const sev = strazSeverity(alert);
+  const cut = String(alert.tekst || "");
+  const body = cut.length > 240 ? cut.slice(0, 239).trimEnd() + "…" : cut;
+  const el = document.createElement("div");
+  el.className = "straz-toast";
+  el.dataset.severity = sev;
+  el.setAttribute("role", "alert");
+  el.innerHTML =
+    `<div class="straz-toast-header">` +
+      `<span class="straz-toast-ico" aria-hidden="true">🛡️</span>` +
+      `<span class="straz-toast-title">${escapeHtml(alert.tytul || "Straż systemu")}</span>` +
+      `<button type="button" class="straz-toast-close" aria-label="Zamknij alert">✕</button>` +
+    `</div>` +
+    `<div class="straz-toast-body">${escapeHtml(body)}</div>` +
+    `<div class="straz-toast-actions">` +
+      `<button type="button" class="straz-toast-show">Pokaż szczegóły</button>` +
+      `<button type="button" class="straz-toast-ignore">Zignoruj</button>` +
+    `</div>`;
+  el.querySelector(".straz-toast-close").addEventListener("click", () => dismissStrazToast(el));
+  el.querySelector(".straz-toast-ignore").addEventListener("click", () => dismissStrazToast(el));
+  el.querySelector(".straz-toast-show").addEventListener("click", () => {
+    openStrazDetails(alert);
+    dismissStrazToast(el);
+  });
+  const ms = STRAZ_TOAST_MS[sev] || 0;
+  if (ms > 0) {
+    const arm = () => { el._strazTimer = setTimeout(() => dismissStrazToast(el), ms); };
+    arm();
+    // Czytanie nie może być karane znikaniem w połowie zdania.
+    el.addEventListener("mouseenter", () => { clearTimeout(el._strazTimer); el._strazTimer = null; });
+    el.addEventListener("mouseleave", () => { if (el.isConnected && !el._strazTimer) arm(); });
+  }
+  host.appendChild(el);
+  visualError();
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("in")));
+}
+
+function dismissStrazToast(el, immediate = false) {
+  if (!el) return;
+  if (el._strazTimer) { clearTimeout(el._strazTimer); el._strazTimer = null; }
+  el.classList.remove("in");
+  el.classList.add("out");
+  if (immediate) { el.remove(); return; }
+  setTimeout(() => el.remove(), 320);
+}
+
+function openStrazDetails(alert) {
+  const section = document.getElementById("drawer-alert");
+  const pre = document.getElementById("drawer-alert-text");
+  if (!section || !pre) return;
+  pre.textContent = alert.raw || alert.tekst || "";
+  section.classList.remove("hidden");
+  document.querySelectorAll("#chat-drawer details.drawer-section").forEach((d) => {
+    if (d !== section) d.open = false;
+  });
+  section.open = true;
+  const count = document.getElementById("drawer-count-alert");
+  if (count) count.textContent = "1";
+  // Toast jest globalny: z Węzłów/Nadzorcy też ma otworzyć rozmowę z drawerem.
+  try { setSegment("chat"); } catch (e) { /* brak segmentu = drawer i tak */ }
+  setChatDrawerOpen(true);
 }
 
 function buildNote(text) {
@@ -2191,10 +2437,13 @@ function addCopyButton(bubble, text) {
   btn.title = "Kopiuj odpowiedź";
   btn.textContent = "Kopiuj";
   btn.addEventListener("click", async () => {
+    visualClick(0.02);
     const ok = await copyText(plainFromMarkdown(text));
-    btn.textContent = ok ? "Skopiowano" : "Nie udało się";
+    // 1.33.0: ✓ na 1,5 s (klasa .copied - kolor z tokenu --stark-ok).
+    btn.textContent = ok ? "\u2713 Skopiowano" : "Nie udało się";
     btn.classList.toggle("done", ok);
-    setTimeout(() => { btn.textContent = "Kopiuj"; btn.classList.remove("done"); }, 1600);
+    btn.classList.toggle("copied", ok);
+    setTimeout(() => { btn.textContent = "Kopiuj"; btn.classList.remove("done", "copied"); }, 1500);
   });
   bubble.classList.add("has-copy");
   bubble.appendChild(btn);
@@ -2268,16 +2517,15 @@ function setSwitchActive(id, active) {
 // w tej samej aplikacji; skrót w adresie: /#nadzorca). Ten sam przełącznik z
 // trzema ikonami w każdym segmencie (rail-/nodes-/debug-switch-*).
 function setSegment(name) {
-  const seg = name === "nodes" ? "nodes" : name === "debug" ? "debug" : "chat";
+  const SEGS = ["chat", "nodes", "debug", "zadania", "notatki"];
+  const seg = SEGS.includes(name) ? name : "chat";
   // 1.19.0 (dostępność): kliknięty przełącznik znika razem ze starym segmentem,
   // więc fokus przechodzi na przełącznik nowego segmentu, nie ginie w <body>.
   const ae = document.activeElement;
   const fromSwitch = !!(ae && ae.closest && ae.closest(".segment-switch"));
-  document.body.classList.toggle("segment-nodes", seg === "nodes");
-  document.body.classList.toggle("segment-debug", seg === "debug");
-  document.body.classList.toggle("segment-chat", seg === "chat");
-  for (const prefix of ["rail", "nodes", "debug"]) {
-    for (const s of ["chat", "nodes", "debug"]) setSwitchActive(`${prefix}-switch-${s}`, s === seg);
+  for (const s of SEGS) document.body.classList.toggle(`segment-${s}`, s === seg);
+  for (const prefix of ["rail", "nodes", "debug", "zadania", "notatki"]) {
+    for (const s of SEGS) setSwitchActive(`${prefix}-switch-${s}`, s === seg);
   }
   // Krążenie kamery w Węzłach (graph.setAutoOrbit) tylko, gdy ten segment jest
   // widoczny - pod schowanym płótnem nie ma po co liczyć klatek.
@@ -2289,13 +2537,16 @@ function setSegment(name) {
     refreshModelBadge();
   } else {
     if (seg === "debug" && window.GregaiDebug) window.GregaiDebug.show();
+    if (seg === "zadania" && window.GregaiZadania) window.GregaiZadania.show();
+    if (seg === "notatki" && window.GregaiNotatki) window.GregaiNotatki.show();
     if (fromSwitch) {
       const target = document.getElementById(`${seg}-switch-${seg}`);
       if (target) target.focus();
     }
   }
-  if (seg === "debug") { if (location.hash !== "#nadzorca") history.replaceState(null, "", "#nadzorca"); }
-  else if (location.hash === "#nadzorca") history.replaceState(null, "", location.pathname);
+  const hashFor = { debug: "#nadzorca", zadania: "#zadania", notatki: "#notatki" };
+  if (hashFor[seg]) { if (location.hash !== hashFor[seg]) history.replaceState(null, "", hashFor[seg]); }
+  else if (["#nadzorca", "#zadania", "#notatki"].includes(location.hash)) history.replaceState(null, "", location.pathname);
 }
 
 function navigateToNodesSegment() {
@@ -2307,14 +2558,15 @@ function initChat() {
   // (patrz index.html #chat-rail/.rail-top i #nodes-topbar) - tylko
   // przycisk prowadzący do DRUGIEGO widoku ma nasłuch, bo ten na aktualnym
   // widoku jest już aktywny i kliknięcie niczego by nie zmieniło.
-  for (const prefix of ["rail", "nodes", "debug"]) {
-    for (const seg of ["chat", "nodes", "debug"]) {
+  for (const prefix of ["rail", "nodes", "debug", "zadania", "notatki"]) {
+    for (const seg of ["chat", "nodes", "debug", "zadania", "notatki"]) {
       const btn = document.getElementById(`${prefix}-switch-${seg}`);
       if (btn) btn.addEventListener("click", () => setSegment(seg));
     }
   }
-  if (location.hash === "#nadzorca") setSegment("debug");
-  window.addEventListener("hashchange", () => { if (location.hash === "#nadzorca") setSegment("debug"); });
+  const hashSeg = { "#nadzorca": "debug", "#zadania": "zadania", "#notatki": "notatki" };
+  if (hashSeg[location.hash]) setSegment(hashSeg[location.hash]);
+  window.addEventListener("hashchange", () => { if (hashSeg[location.hash]) setSegment(hashSeg[location.hash]); });
   document.addEventListener("visibilitychange", () => {
     if (typeof graph !== "undefined" && graph && graph.setAutoOrbit) {
       graph.setAutoOrbit(document.body.classList.contains("segment-nodes") && document.visibilityState === "visible");
@@ -2380,10 +2632,13 @@ function initChat() {
     // 1.19.0: "Kopiuj kod" przy bloku kodu - dosłowna treść bloku.
     const codeBtn = e.target.closest(".chat-code-copy");
     if (codeBtn) {
+      visualClick(0.02);
       const code = codeBtn.closest(".chat-code");
       const ok = await copyText(code ? code.querySelector("code").textContent : "");
-      codeBtn.textContent = ok ? "Skopiowano" : "Nie udało się";
-      setTimeout(() => { codeBtn.textContent = "Kopiuj kod"; }, 1600);
+      // 1.33.0: ✓ na 1,5 s, ten sam feedback co przy kopiowaniu odpowiedzi.
+      codeBtn.textContent = ok ? "\u2713 Skopiowano" : "Nie udało się";
+      codeBtn.classList.toggle("copied", ok);
+      setTimeout(() => { codeBtn.textContent = "Kopiuj kod"; codeBtn.classList.remove("copied"); }, 1500);
     }
   });
   messagesEl.addEventListener("keydown", (e) => {
@@ -2445,12 +2700,12 @@ function initChat() {
   });
 
   // 1.19.0: skróty klawiszowe. "/" (gdy nic nie piszesz) - do pola rozmowy;
-  // Alt+Shift+1/2/3 - Rozmowa / Węzły / Nadzorca (samo Alt+cyfra przełącza karty
+  // Alt+Shift+1..5 - Rozmowa / Węzły / Nadzorca / Zadania / Notatki (samo Alt+cyfra przełącza karty
   // przeglądarki na Linuksie). e.code, bo Shift+1 daje "!" w e.key.
   document.addEventListener("keydown", (e) => {
     const t = e.target;
     const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-    const digit = { Digit1: "chat", Digit2: "nodes", Digit3: "debug" }[e.code];
+    const digit = { Digit1: "chat", Digit2: "nodes", Digit3: "debug", Digit4: "zadania", Digit5: "notatki" }[e.code];
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && digit) {
       e.preventDefault();
       setSegment(digit);
@@ -2489,6 +2744,8 @@ async function refreshModelBadge() {
     const res = await gregaiFetch("/api/status");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    const versionEl = document.getElementById("rail-version");
+    if (versionEl && data.version) versionEl.textContent = data.version;
     if (data.model_active) {
       badge.textContent = "Model na laptopie: działa";
       badge.className = "chat-model-badge active";
@@ -2546,6 +2803,142 @@ function applyNetworkHint(badge) {
   if (offline && !badge.textContent.includes("bez sieci")) badge.textContent += " · bez sieci";
 }
 
+/* --- 1.34.0 PLASTIC CRACK: błysk ekranu, strumień danych, fragmentacja ---
+   Warstwa wyglądu (ui/crack.css) robi animacje CSS; tutaj jest tylko to, czego
+   CSS nie umie: wybór trybu bootu z localStorage, generator dekoracji,
+   wstrzykiwanie odłamków w nową odpowiedź i jednoklatkowy błysk.
+
+   Zasady: zero inline <style> (CSP), tylko własności elementu; maksymalnie
+   jeden błysk na 100 ms; przy prefers-reduced-motion zero ruchu i zero błysku. */
+
+const CRACK_BOOT_KEY = "gregai.booted.v1";
+let crackFlashAt = 0;
+
+function crackMotionOff() {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
+}
+
+function visualClick(intensity = 0.03) {
+  if (crackMotionOff()) return;
+  const now = (window.performance && performance.now) ? performance.now() : Date.now();
+  if (now - crackFlashAt < 100) return;
+  crackFlashAt = now;
+  const flash = document.getElementById("vflash");
+  if (!flash) return;
+  const value = Math.max(0, Math.min(0.08, intensity));
+  flash.style.background = `rgba(255,255,255,${value})`;
+  requestAnimationFrame(() => requestAnimationFrame(() => { flash.style.background = "transparent"; }));
+}
+
+function visualError() {
+  if (crackMotionOff()) return;
+  const now = (window.performance && performance.now) ? performance.now() : Date.now();
+  if (now - crackFlashAt < 100) return;
+  crackFlashAt = now;
+  const flash = document.getElementById("vflash");
+  if (!flash) return;
+  flash.style.background = "rgba(255,34,68,0.05)";
+  setTimeout(() => { flash.style.background = "rgba(255,34,68,0.08)"; }, 16);
+  setTimeout(() => { flash.style.background = "transparent"; }, 32);
+}
+
+function crackHex(len) {
+  const chars = "0123456789abcdef";
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[(Math.random() * 16) | 0];
+  return out;
+}
+
+function startDataStream() {
+  const host = document.getElementById("data-stream");
+  if (!host) return;
+  const lines = [];
+  for (let i = 0; i < 200; i++) {
+    const r = Math.random();
+    if (r < 0.3) lines.push(crackHex(16) + " " + crackHex(16));
+    else if (r < 0.5) lines.push("tok:" + ((Math.random() * 10000) | 0) + " " + crackHex(8));
+    else if (r < 0.7) lines.push("v1.33." + ((Math.random() * 9) | 0) + " " + crackHex(4));
+    else if (r < 0.85) lines.push("ctx:" + ((Math.random() * 32000) | 0) + " " + crackHex(6));
+    else lines.push(crackHex(32));
+  }
+  const text = lines.join("\n");
+  host.innerHTML = '<div class="ds-col" aria-hidden="true"></div><div class="ds-col" aria-hidden="true"></div>';
+  for (const col of host.children) col.textContent = text;
+}
+
+let railUptime = Date.now();
+
+function startUptime() {
+  const el = document.getElementById("rail-uptime");
+  if (!el) return;
+  const tick = () => {
+    const total = Math.max(0, Math.floor((Date.now() - railUptime) / 1000));
+    const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+    const mm = String(Math.floor(total / 60) % 60).padStart(2, "0");
+    const ss = String(total % 60).padStart(2, "0");
+    el.textContent = `UPTIME ${hh}:${mm}:${ss}`;
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+// Nowa odpowiedź: 4 odłamki (na telefonie i w niskiej karcie 2), kaskada 40 ms.
+// Tylko gdy karta jest w oknie - poza nim treść ma być od razu.
+function crackFragment(el) {
+  if (!el || el.dataset.crack === "1") return;
+  el.dataset.crack = "1";
+  if (crackMotionOff()) return;
+  let rect = null;
+  try { rect = el.getBoundingClientRect(); } catch (e) { rect = null; }
+  if (rect && (rect.bottom < 0 || rect.top > (window.innerHeight || 0))) return;
+  const small = (rect && rect.height > 0 && rect.height < 100) || (window.innerWidth || 0) <= 760;
+  const order = small ? ["5", "6"] : ["1", "2", "3", "4"];
+  // Przycisk "Kopiuj" jest pozycjonowany względem dymka, nie treści - zostaje
+  // poza opakowaniem, inaczej przesunąłby się o zapas na prawą krawędź.
+  const copyBtn = Array.from(el.children).find((c) => c.classList && c.classList.contains("chat-copy")) || null;
+  const content = document.createElement("div");
+  content.className = "resp-content";
+  while (el.firstChild) content.appendChild(el.firstChild);
+  const frags = document.createElement("div");
+  frags.className = "resp-frags";
+  frags.setAttribute("aria-hidden", "true");
+  for (const n of order) {
+    const frag = document.createElement("div");
+    frag.className = "resp-frag";
+    frag.dataset.frag = n;
+    frags.appendChild(frag);
+  }
+  el.classList.add("resp-card", "cracking");
+  el.appendChild(content);
+  el.appendChild(frags);
+  if (copyBtn) el.appendChild(copyBtn);
+  visualClick(0.05);
+  for (const ms of [80, 120, 160, 200]) setTimeout(() => visualClick(0.04), ms);
+  setTimeout(() => {
+    el.classList.remove("cracking");
+    frags.remove();
+  }, 320);
+}
+
+// Karta odpowiedzi jest cięższa niż dymek - jedno cięcie z góry, bez kaskady.
+function crackAppear(el) {
+  if (!el || crackMotionOff()) return;
+  el.classList.add("crack-appear");
+  visualClick(0.04);
+}
+
+// Boot: pełna kaskada CSS leci sama; klasa "booted" (kolejna wizyta) zeruje ją.
+function crackBoot() {
+  try {
+    if (localStorage.getItem(CRACK_BOOT_KEY)) document.documentElement.classList.add("booted");
+  } catch (e) { /* tryb prywatny: pełny boot co wejście */ }
+  startDataStream();
+  startUptime();
+  setTimeout(() => {
+    try { localStorage.setItem(CRACK_BOOT_KEY, String(Date.now())); } catch (e) { /* storage zablokowany */ }
+  }, 1500);
+}
+
 function appendTypingIndicator() {
   const messages = document.getElementById("chat-messages");
   const empty = messages.querySelector(".chat-empty");
@@ -2570,12 +2963,19 @@ function appendChatBubble(role, text) {
   bubble.innerHTML = renderMarkdownLite(text);
   if (role === "assistant") addCopyButton(bubble, text);
   appendToChat(bubble, { force: role === "user" });
+  if (role === "user") {
+    bubble.classList.add("crack-user");
+    visualClick(0.02);
+  }
   return bubble;
 }
 
 function appendChatCard(card) {
   const el = buildChatCard(card);
-  if (el) appendToChat(el);
+  if (el) {
+    crackAppear(el);
+    appendToChat(el);
+  }
   return el;
 }
 
@@ -3182,6 +3582,221 @@ function formatSeconds(s) {
   return `${m}m ${String(whole % 60).padStart(2, "0")}s`;
 }
 
+// --- 1.33.0: JEDEN stan faz dla osi w dymku, panelu Postęp i steppera nad
+// composerem. Wcześniej pętla po zdarzeniach żyła tylko w renderNamyslLive;
+// teraz oba renderery dostają ten sam wynik, więc nie mogą się rozjechać.
+function namyslState(events) {
+  const first = events && events[0];
+  const phases = (first && Array.isArray(first.fazy) && first.fazy.length) ? first.fazy : NAMYSL_PHASES;
+  const labels = Object.assign({}, NAMYSL_PHASE_LABELS, (first && first.labels) || {});
+  const state = {}, sub = {}, secs = {}, who = {}, acts = {}, startedAt = {}, err = {};
+  let current = null, last = null;
+  for (const ev of events || []) {
+    if (!ev || !ev.faza) continue;
+    last = ev;
+    if (ev.faza === "namysl") continue;
+    if (ev.kto) who[ev.faza] = ev.kto;
+    if (ev.etap === "start") {
+      state[ev.faza] = "active"; current = ev.faza; sub[ev.faza] = ev.label;
+      startedAt[ev.faza] = Number(ev._at) || null;
+    } else if (ev.etap === "koniec") {
+      state[ev.faza] = "done"; sub[ev.faza] = ev.label; secs[ev.faza] = ev.sekund;
+      if (current === ev.faza) current = null;
+    } else if (ev.etap === "pominieta") {
+      state[ev.faza] = "skipped"; sub[ev.faza] = ev.detail;
+    } else if (ev.etap === "info") {
+      sub[ev.faza] = ev.label;
+      if (ev.label) (acts[ev.faza] = acts[ev.faza] || []).push(ev.label);
+      // 1.33.0: faza, której nie uratował nawet lokalny model, dostaje ✗ i powód
+      // (np. „HTTP 413”) - zamiast wyglądać na zwykłe zakończenie.
+      if (/^Model nie odpowiedzia\u0142/i.test(String(ev.label || ""))) err[ev.faza] = ev.detail || ev.label;
+    }
+  }
+  const finished = !!(last && last.faza === "namysl" && last.etap === "koniec");
+  // 1.30.13: dla fazy AKTYWNEJ pokazujemy bogatszy, bieżący opis (last.detail).
+  if (current && last && last.detail && last.faza === current) sub[current] = last.detail;
+  return { phases, labels, state, sub, secs, who, acts, startedAt, err, current, last, finished };
+}
+
+// --- 1.33.0: stepper 6 faz nad composerem ---------------------------------
+const NT_ETA_KEY = "gregai.fazeTimes";
+const NT_ETA_SAMPLES = 8;
+
+function ntSamples() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NT_ETA_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch (e) { return {}; }
+}
+
+function ntRecordSample(faza, kto, sekund) {
+  const sec = Number(sekund);
+  if (!faza || !(sec > 0.2)) return;
+  const all = ntSamples();
+  const key = `${kto || "?"}|${faza}`;
+  const arr = Array.isArray(all[key]) ? all[key].slice(-(NT_ETA_SAMPLES - 1)) : [];
+  arr.push(Math.round(sec * 10) / 10);
+  all[key] = arr;
+  try { localStorage.setItem(NT_ETA_KEY, JSON.stringify(all)); } catch (e) { /* tryb prywatny */ }
+}
+
+function ntMedian(values) {
+  const s = values.map(Number).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!s.length) return null;
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function phaseEta(faza, kto) {
+  const all = ntSamples();
+  const own = all[`${kto || "?"}|${faza}`];
+  if (Array.isArray(own) && own.length >= 3) return ntMedian(own);
+  // Ten sam model bywa nieznany dla aktywnej fazy (kto przychodzi na końcu) -
+  // wtedy mediana po wszystkich dostawcach dla TEJ fazy, nadal min. 3 próby.
+  const pooled = [];
+  for (const key of Object.keys(all)) {
+    if (key.endsWith(`|${faza}`) && Array.isArray(all[key])) pooled.push(...all[key]);
+  }
+  return pooled.length >= 3 ? ntMedian(pooled) : null;
+}
+
+function ntSecs(s) {
+  const n = Math.max(0, Number(s) || 0);
+  if (n < 9.95) return `${n.toFixed(1).replace(".", ",")}s`;
+  return `${Math.round(n)}s`;
+}
+
+function ntErrReason(text) {
+  const m = String(text || "").match(/HTTP\s*(\d{3})/i);
+  if (m) return `HTTP ${m[1]}`;
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  return t ? t.slice(0, 18) : "\u2717";
+}
+
+function ntRecordPhases(fresh) {
+  for (const ev of fresh || []) {
+    if (!ev || ev.faza === "namysl" || ev.etap !== "koniec") continue;
+    ntRecordSample(ev.faza, ev.kto || "", ev.sekund);
+  }
+}
+
+let ntLast = { events: [], finished: false };
+let ntPrevPhase = "";
+let ntTickTimer = null;
+
+function ntStopTick() {
+  if (ntTickTimer) { clearInterval(ntTickTimer); ntTickTimer = null; }
+}
+
+function resetNamyslTrack() {
+  ntStopTick();
+  ntLast = { events: [], finished: false };
+  ntPrevPhase = "";
+  const track = document.getElementById("namysl-track");
+  if (track) track.classList.add("hidden");
+  const guide = document.getElementById("chat-guide");
+  if (guide) guide.classList.remove("hidden");
+}
+
+function renderNamyslTrack(events, finished = false) {
+  const track = document.getElementById("namysl-track");
+  if (!track) return;
+  if (!events || !events.length) { resetNamyslTrack(); return; }
+  const st = namyslState(events);
+  const done = !!finished || st.finished;
+  ntLast = { events, finished: done };
+  track.classList.remove("hidden");
+  track.classList.toggle("done", done);
+  // W trakcie myślenia stepper zastępuje pojedyncze zdanie prowadzenia;
+  // po zakończeniu wraca ono, a stepper zostaje jako metryka.
+  const guide = document.getElementById("chat-guide");
+  if (guide) guide.classList.toggle("hidden", !done);
+
+  // Czas całkowity: ostatnie zdarzenie ma t (sekundy od startu Namysłu);
+  // doliczamy czas od jego odebrania, żeby licznik rósł między odczytami.
+  const last = st.last || {};
+  let total = Number(last.t) || 0;
+  if (!done && last._at) total += (Date.now() - last._at) / 1000;
+  const totalEl = track.querySelector(".nt-track-timer");
+  if (totalEl) totalEl.textContent = done ? "" : ntSecs(total);
+  const titleEl = track.querySelector(".nt-track-title");
+  if (titleEl) titleEl.textContent = done ? `Namysł \u2014 ${ntSecs(total)}` : "Namysł";
+  // Jeden timer w całym UI: gdy stepper jest widoczny, pigułka w nagłówku
+  // chowa się (jej funkcję otwierania panelu przejmuje klik w stepper).
+  const pill = document.getElementById("progress-pill");
+  if (pill) {
+    pill.classList.add("hidden");
+    if (pillHideTimer) { clearTimeout(pillHideTimer); pillHideTimer = null; }
+    stopPillTick();
+  }
+  if (!track.dataset.clickable) {
+    track.dataset.clickable = "1";
+    track.classList.add("nt-track-clickable");
+    track.title = "Zobacz pełny przebieg w panelu „Ta rozmowa”";
+    track.addEventListener("click", () => {
+      setChatDrawerOpen(true);
+      const section = document.getElementById("drawer-progress");
+      if (section) { section.classList.remove("hidden"); section.open = true; }
+    });
+  }
+
+  // Szacunek z historii (mediana); <3 prób = ukryty, żeby nie zgadywać.
+  const lastWho = Object.values(st.who).filter(Boolean).pop() || "";
+  const eta = st.current ? phaseEta(st.current, st.who[st.current] || lastWho) : null;
+  const etaEl = track.querySelector(".nt-track-eta");
+  if (etaEl) {
+    if (eta != null && !done) {
+      etaEl.textContent = `\u2248 ${ntSecs(eta)}`;
+      etaEl.classList.remove("hidden");
+    } else {
+      etaEl.textContent = "";
+      etaEl.classList.add("hidden");
+    }
+  }
+
+  let activeIndex = 0;
+  for (let i = 0; i < st.phases.length; i++) {
+    const s = st.state[st.phases[i]];
+    if (s === "active" || s === "done" || s === "skipped") activeIndex = i + 1;
+  }
+  track.setAttribute("aria-valuenow", String(activeIndex));
+  track.setAttribute("aria-valuetext", done ? "Namysł zakończony"
+    : (st.current ? `Namysł: ${st.labels[st.current] || st.current}` : "Namysł w toku"));
+
+  for (const step of track.querySelectorAll(".nt-track-step")) {
+    const f = step.dataset.faza;
+    const state = st.state[f] || "";
+    const isErr = !!st.err[f];
+    if (state === "active" && !isErr && ntPrevPhase !== f) {
+      ntPrevPhase = f;
+      visualClick(0.03);
+    }
+    step.classList.toggle("active", state === "active" && !isErr);
+    step.classList.toggle("done", state === "done" && !isErr);
+    step.classList.toggle("skip", state === "skipped");
+    step.classList.toggle("err", isErr);
+    const timeEl = step.querySelector(".nt-track-time");
+    if (timeEl) {
+      if (isErr) timeEl.textContent = ntErrReason(st.err[f]);
+      else if (state === "active") {
+        const start = st.startedAt[f];
+        timeEl.textContent = start ? ntSecs((Date.now() - start) / 1000) : "\u2026";
+      } else if (state === "done") timeEl.textContent = st.secs[f] != null ? ntSecs(st.secs[f]) : "";
+      else if (state === "skipped") timeEl.textContent = "\u2014";
+      else timeEl.textContent = "";
+    }
+    step.title = isErr ? String(st.err[f] || "") : (st.sub[f] || "");
+  }
+
+  if (done) ntStopTick();
+  else if (!ntTickTimer) {
+    ntTickTimer = setInterval(() => {
+      if (!ntLast.events.length) { ntStopTick(); return; }
+      renderNamyslTrack(ntLast.events, false);
+    }, 1000);
+  }
+}
+
 // Karta "Jak myślałem" pod odpowiedzią: ten sam zapis, który leciał na żywo,
 // tylko już kompletny - fazy (kto, ile), źródła, uwagi recenzenta i
 // sprawdzenia. Zwinięta, żeby nie przykrywać odpowiedzi; rozwijana klikiem.
@@ -3257,43 +3872,33 @@ function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
     live.className = "namysl-live";
     container.appendChild(live);
   }
-  const first = events[0];
-  const phases = (first && Array.isArray(first.fazy) && first.fazy.length) ? first.fazy : NAMYSL_PHASES;
-  const labels = Object.assign({}, NAMYSL_PHASE_LABELS, (first && first.labels) || {});
-  const state = {};
-  const sub = {};
-  const secs = {};
-  const who = {};  // 1.30.13: kto (dostawca) robił fazę - do ramki "kto" i nagłówka
-  const acts = {}; // 1.30.15: konkretne podkroki fazy (etykiety zdarzeń "info") - oś na żywo
-  let current = null;
-  let last = null;
-  for (const ev of events) {
-    if (!ev || !ev.faza) continue;
-    last = ev;
-    if (ev.faza === "namysl") continue;
-    if (ev.kto) who[ev.faza] = ev.kto;
-    if (ev.etap === "start") { state[ev.faza] = "active"; current = ev.faza; sub[ev.faza] = ev.label; }
-    else if (ev.etap === "koniec") { state[ev.faza] = "done"; sub[ev.faza] = ev.label; secs[ev.faza] = ev.sekund; if (current === ev.faza) current = null; }
-    else if (ev.etap === "pominieta") { state[ev.faza] = "skipped"; sub[ev.faza] = ev.detail; }
-    else if (ev.etap === "info") { sub[ev.faza] = ev.label; if (ev.label) (acts[ev.faza] = acts[ev.faza] || []).push(ev.label); }
-  }
+  const st = namyslState(events);
+  const { phases, labels, state, sub, secs, who, acts, startedAt, err, current, last } = st;
   // 1.18.0: "zakończony" także wtedy, gdy wywołujący WIE, że odpowiedź już
   // przyszła (forceFinished), a ostatnie zdarzenie "namysl/koniec" jeszcze nie
   // dotarło - inaczej panel "Postęp" zostawał na zawsze "w toku".
-  const finished = forceFinished || (last && last.faza === "namysl" && last.etap === "koniec");
-  // 1.30.13: dla fazy AKTYWNEJ pokazujemy bogatszy, bieżący opis (last.detail),
-  // a nie samą etykietę - to on jest "podarunkiem", zdaniami.
-  if (current && last && last.detail && last.faza === current) sub[current] = last.detail;
+  const finished = forceFinished || st.finished;
+  // 1.33.0: heartbeat narracji - co 5 s przy aktywnej fazie dopisujemy
+  // "…przetwarzam (Ns)", żeby tekst nie wyglądał na zamrożony. Wartość
+  // zaokrąglana do 5 s, więc zmienia się co 5 s mimo odczytu co 1,5 s.
+  let heartbeat = "";
+  if (current && startedAt[current]) {
+    const since = Math.floor((Date.now() - startedAt[current]) / 1000);
+    if (since >= 5) heartbeat = `\u2026przetwarzam (${Math.floor(since / 5) * 5} s)`;
+  }
   // Kto brał udział (do nagłówka), w kolejności pojawiania się.
   const whoSeen = [];
   for (const f of phases) { if (who[f] && !whoSeen.includes(who[f])) whoSeen.push(who[f]); }
-  const head = `<div class="ntl-head"><span class="ntl-title">${finished ? "Namysł zakończony" : "Namysł w toku"}</span>` +
-    (whoSeen.length ? `<span class="ntl-meta">${escapeHtml(whoSeen.join(", "))}</span>` : "") +
-    `<span class="ntl-timer">${escapeHtml(formatSeconds(elapsedMs / 1000))}</span></div>`;
+  // 1.33.3 (audyt #18): po zakończeniu JEDEN wiersz "Namysł — 34s"; w trakcie
+  // tytuł + dostawcy, ale bez drugiego timera - ten jest tylko w stepperze.
+  const head = `<div class="ntl-head"><span class="ntl-title">${finished
+    ? `Namysł \u2014 ${escapeHtml(formatSeconds(elapsedMs / 1000))}`
+    : "Namysł w toku"}</span>` +
+    (!finished && whoSeen.length ? `<span class="ntl-meta">${escapeHtml(whoSeen.join(", "))}</span>` : "") + `</div>`;
   // 1.30.13 (zgłoszenie Grzegorza): oś "rośnie" z postępem - pokazujemy TYLKO fazy,
   // które już się zaczęły (active/done/skipped). Dalsze są schowane, aż ruszą.
   const list = `<ol class="ntl-steps">` + phases.filter((f) => state[f]).map((f) => {
-    const st = state[f] === "active" ? "active" : state[f] === "skipped" ? "skip" : "done";
+    const stepState = err[f] ? "err" : (state[f] === "active" ? "active" : state[f] === "skipped" ? "skip" : "done");
     // 1.30.15: jeśli faza ma konkretne podkroki (np. zbieranie: "Szukam w sieci: …",
     // "Sprawdzam notowanie: …"), pokaż je rozpisane; inaczej jedno-liniowy opis fazy.
     const a = acts[f];
@@ -3301,14 +3906,18 @@ function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
     if (a && a.length) {
       const shown = a.slice(-8);
       detail = `<div class="ntl-acts">` + shown.map((x, i) =>
-        `<div class="ntl-act${st === "active" && i === shown.length - 1 ? " now" : ""}">${escapeHtml(x)}</div>`).join("") + `</div>`;
+        `<div class="ntl-act${stepState === "active" && i === shown.length - 1 ? " now" : ""}">${escapeHtml(x)}</div>`).join("") + `</div>`;
     } else {
       detail = sub[f] ? `<div class="ntl-sub">${escapeHtml(sub[f])}</div>` : "";
     }
+    if (f === current && heartbeat) {
+      detail += `<div class="ntl-sub ntl-hb">${escapeHtml(heartbeat)}</div>`;
+    }
     const whoTag = who[f] ? `<span class="ntl-who">${escapeHtml(who[f])}</span>` : "";
     const t = secs[f] != null ? `<span class="ntl-time">${escapeHtml(formatSeconds(secs[f]))}</span>`
-            : (st === "active" ? `<span class="ntl-time">…</span>` : `<span class="ntl-time"></span>`);
-    return `<li class="ntl-step ${st}"><span class="ntl-dot"></span>` +
+            : (stepState === "active" ? `<span class="ntl-time">…</span>` : `<span class="ntl-time"></span>`);
+    const errTitle = err[f] ? ` title="${escapeHtml(String(err[f]).slice(0, 300))}"` : "";
+    return `<li class="ntl-step ${stepState}"${errTitle}><span class="ntl-dot"></span>` +
       `<div class="ntl-body"><div class="ntl-name">${escapeHtml(labels[f] || f)}</div>${detail}${whoTag}</div>${t}</li>`;
   }).join("") + `</ol>`;
   // 1.17.16 (zgłoszenie Grzegorza): oś faz odświeża się co ~1,5 s i za każdym
@@ -3348,6 +3957,8 @@ function tickPillTimers() {
 function resetProgressPanel() {
   if (pillHideTimer) { clearTimeout(pillHideTimer); pillHideTimer = null; }
   stopPillTick();
+  // 1.33.0: nowa wiadomość/rozmowa zaczyna stepper od zera (guide wraca).
+  resetNamyslTrack();
   const live = document.getElementById("drawer-progress-live");
   if (live) live.innerHTML = "";
   const empty = document.getElementById("drawer-progress-empty");
@@ -3366,6 +3977,8 @@ function restoreProgressFor(conv) {
   const p = conv && conv.progress;
   if (!p || !p.events || !p.events.length) return;
   const elapsed = p.finished ? p.elapsedMs : Date.now() - p.startedAt;
+  // 1.33.3: stepper pierwszy (chowa pigułkę), potem panel.
+  renderNamyslTrack(p.events, !!p.finished);
   renderProgressPanel(p.events, elapsed, !!p.finished);
   if (p.finished) {
     const pill = document.getElementById("progress-pill");
@@ -3387,7 +4000,9 @@ function renderProgressPanel(events, elapsedMs, finished) {
   const pill = document.getElementById("progress-pill");
   const label = document.getElementById("progress-pill-label");
   const timer = document.getElementById("progress-pill-timer");
-  if (pill && label && timer) {
+  const trackEl = document.getElementById("namysl-track");
+  const trackVisible = !!(trackEl && !trackEl.classList.contains("hidden"));
+  if (pill && label && timer && !trackVisible) {
     pill.classList.remove("hidden");
     pill.classList.toggle("done", !!finished);
     // 1.18.0: plakietka mówi, KTÓRA faza trwa, nie tylko że coś trwa.
@@ -3548,6 +4163,10 @@ async function saveNamyslSettings(patch) {
     if (status) status.textContent = "Zapisane.";
     setTimeout(() => { if (status && status.textContent === "Zapisane.") status.textContent = ""; }, 2500);
   } catch (e) {
+    // 1.33.2 (audyt #14): checkbox nie może zostać w stanie, którego serwer
+    // nie przyjął - wracamy do ostatniej potwierdzonej wartości.
+    const consent = document.getElementById("namysl-consent");
+    if (consent) consent.checked = !!namyslSettings.material_do_sieci;
     if (status) status.textContent = "Nie udało się zapisać: " + (e && e.message ? e.message : "błąd");
   }
 }
@@ -4079,14 +4698,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   // go migać.
   const STAGE_DELAYS = [20000, 55000, 150000];
   const requestStart = Date.now();
-  const formatElapsed = (ms) => {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return `${m}m ${String(s).padStart(2, "0")}s`;
-  };
-  let statusEl = null, labelEl = null, timerEl = null, detailEl = null;
-  let tickInterval = null;
+  let statusEl = null, labelEl = null, detailEl = null;
   let pendingStageIndex = -1;
   let expanded = false;
   // Najświeższy odczyt /api/system_info (null, dopóki żaden się nie udał):
@@ -4111,10 +4723,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   // tu przebieg Namysłu z POPRZEDNIEJ wiadomości, nawet gdy ta nowa w ogóle
   // nie wejdzie w Namysł.
   resetProgressPanel();
-
-  const updateTimer = () => {
-    if (timerEl) timerEl.textContent = formatElapsed(Date.now() - requestStart);
-  };
 
   async function fetchNetworkState() {
     try {
@@ -4151,30 +4759,40 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
         detail: `Internet jest teraz zablokowany (${warpReason}) - z zasady bezpieczeństwa GREGAI nigdy nie wychodzi do sieci bez połączonego WARP, więc to pytanie liczy od początku do końca lokalny model na tym laptopie, bez karty graficznej. To jedyny powód, dla którego GREGAI w ogóle liczy lokalnie: gdy internet/WARP wróci, następne pytanie znowu najpierw spróbuje sieci.`,
       };
     }
-    // Koryto (1.17.0, agent/koryto.py): kolejność etapów z serwera, tylko te,
-    // które faktycznie mają czym odpowiedzieć (klucz, limit, WARP).
-    const kolejnosc = (info.koryto && Array.isArray(info.koryto.kolejnosc)) ? info.koryto.kolejnosc : ["anthropic", "darmowe", "lokalnie"];
+    // Koryto (1.17.0, agent/koryto.py; 1.32.30): kolejność efektywna dla wagi
+    // uwagi z /api/system_info (rozdzielnica), nie sama lista z .env. Przy
+    // wadze 1-2 Claude bywa pominięty, więc "Pyta Claude" byłoby nieprawdą.
+    const koryto = info.koryto || {};
+    const efektywna = koryto.efektywna || {};
+    const poziom = koryto.poziom_domyslny || 2;
+    const kolejnosc = Array.isArray(efektywna[String(poziom)])
+      ? efektywna[String(poziom)]
+      : (Array.isArray(koryto.kolejnosc) ? koryto.kolejnosc : ["anthropic", "darmowe", "lokalnie"]);
     const etapy = kolejnosc.filter((e) => (e === "anthropic" && cloudOn) || (e === "darmowe" && jugglerOn) || e === "lokalnie");
     const pierwszy = etapy[0];
+    const wyzsza = Array.isArray(efektywna["3"]) ? efektywna["3"] : [];
+    const claudeEskalacja = wyzsza.includes("anthropic") && !kolejnosc.includes("anthropic")
+      ? " Przy ważnych pytaniach (waga 3-4) dołącza Claude jako eskalacja, gdy darmowa pula zawiedzie."
+      : "";
     if (pierwszy === "anthropic") {
       return {
         network: true,
         label: "Pyta Claude",
-        detail: `Internet działa (WARP połączony), więc to pytanie najpierw dostaje Claude (${(info.cloud && info.cloud.model) || "Anthropic"}) - zwykle to kilka sekund. Dalej w korycie: ${etapy.slice(1).map((e) => e === "darmowe" ? `darmowa pula (${jugglerPool.join(", ")})` : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.`,
+        detail: `Internet działa (WARP połączony), a przy tej wadze pytania Claude (${(info.cloud && info.cloud.model) || "Anthropic"}) jest pierwszy w kolejce - zwykle to kilka sekund. Dalej: ${etapy.slice(1).map((e) => e === "darmowe" ? `darmowa pula (${jugglerPool.join(", ")})` : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.`,
       };
     }
     if (pierwszy === "darmowe") {
       return {
         network: true,
         label: "Pyta darmowe modele w sieci",
-        detail: `Internet działa (WARP połączony), więc to pytanie najpierw dostają darmowi dostawcy w sieci: ${jugglerPool.join(", ")} - zwykle to kwestia sekund. Dalej w korycie: ${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.`,
+        detail: `Internet działa (WARP połączony), więc to pytanie najpierw dostają darmowi dostawcy w sieci: ${jugglerPool.join(", ")} - zwykle to kwestia sekund. Dalej: ${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.${claudeEskalacja}`,
       };
     }
     if (pierwszy === "lokalnie" && etapy.length > 1) {
       return {
         network: false,
         label: "Liczy lokalnie (z wyboru)",
-        detail: `W korycie (KORYTO w .env) lokalny model stoi przed etapami sieciowymi, więc to pytanie najpierw liczy ten komputer; sieć (${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "darmowa pula").join(", ")}) dopiero gdyby zawiódł.`,
+        detail: `W efektywnej kolejności (KORYTO w .env + waga uwagi) lokalny model stoi przed etapami sieciowymi, więc to pytanie najpierw liczy ten komputer; sieć (${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "darmowa pula").join(", ")}) dopiero gdyby zawiódł.`,
       };
     }
     return {
@@ -4206,7 +4824,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
         ...route,
         label: stageIndex === 1 ? "Wciąż czeka na sieć" : "Pewnie już lokalnie",
         detail: route.detail + (stageIndex === 1
-          ? " To już dłużej niż typowa odpowiedź z sieci (kilka sekund) - pewnie właśnie próbuje kolejnego dostawcy z listy (po Claude darmowa pula)."
+          ? " To już dłużej niż typowa odpowiedź z sieci (kilka sekund) - pewnie właśnie próbuje kolejnego dostawcy z efektywnej listy (darmowa pula, a przy wyższej wadze też Claude)."
           : (localAlways(info)
             ? " Po tak długim czekaniu sieciowi dostawcy najpewniej zawiedli i w tle liczy to teraz lokalny model jako ostatnia rezerwa - na tym procesorze, bez karty graficznej, to może potrwać kilka minut."
             : " Po tak długim czekaniu sieć odpowiada wyjątkowo wolno albo kolejni dostawcy odmawiają. Lokalny model wkracza tylko bez internetu, więc przy działającej sieci to wciąż czekanie na odpowiedź z sieci.")),
@@ -4238,13 +4856,13 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     statusEl.setAttribute("role", "button");
     statusEl.setAttribute("tabindex", "0");
     statusEl.setAttribute("aria-expanded", "false");
+    // 1.33.3 (audyt #18): JEDEN timer - w stepperze nad composerem. Pasek
+    // czekania pokazuje tylko, co dzieje się teraz, bez duplikatu czasu.
     statusEl.innerHTML =
       '<span class="pending-status-dot"></span>' +
       '<span class="pending-status-label"></span>' +
-      '<span class="pending-status-timer"></span>' +
       '<span class="pending-status-chevron">›</span>';
     labelEl = statusEl.querySelector(".pending-status-label");
-    timerEl = statusEl.querySelector(".pending-status-timer");
     detailEl = document.createElement("div");
     detailEl.className = "pending-status-detail";
     detailEl.hidden = true;
@@ -4261,8 +4879,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     });
     pending.appendChild(statusEl);
     pending.appendChild(detailEl);
-    tickInterval = setInterval(updateTimer, 1000);
-    updateTimer();
   };
 
   const applyNarration = (stageIndex, info) => {
@@ -4297,7 +4913,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   );
   const clearPendingTimers = () => {
     pendingTimers.forEach(clearTimeout);
-    if (tickInterval) clearInterval(tickInterval);
   };
 
   try {
@@ -4336,7 +4951,12 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       const elapsed = Date.now() - requestStart;
       conv.progress.events = progressEvents;
       if (!finished) renderNamyslLive(pending, progressEvents, elapsed);
-      if (shown()) renderProgressPanel(progressEvents, elapsed, finished);
+      if (shown()) {
+        // 1.33.3: najpierw stepper (chowa pigułkę), potem panel - inaczej
+        // pigułka mignie z drugim timerem przed schowaniem.
+        renderNamyslTrack(progressEvents, !!finished);
+        renderProgressPanel(progressEvents, elapsed, finished);
+      }
     };
     // Jeden odczyt: since = ile już mamy; doklejamy tylko to, czego jeszcze
     // nie ma (gdyby serwer oddał coś drugi raz, nie zdubluje się na osi).
@@ -4348,7 +4968,15 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       if (progressFinished && !final) return d;
       if (Array.isArray(d.events) && d.events.length) {
         const fresh = d.events.slice(Math.max(0, progressEvents.length - since));
-        if (fresh.length) progressEvents = progressEvents.concat(fresh);
+        if (fresh.length) {
+          // 1.33.0: znacznik odbioru (do liczników per faza i heartbeatu) oraz
+          // próbka do mediany "≈ Ns" - tylko dla FAKTYCZNIE nowych zdarzeń,
+          // więc odświeżenie panelu nie dubluje próbek.
+          const at = Date.now();
+          for (const ev of fresh) { if (ev && !ev._at) ev._at = at; }
+          progressEvents = progressEvents.concat(fresh);
+          ntRecordPhases(fresh);
+        }
         // Backend melduje fazy: stary narrator (zgadywanie z zegara) schodzi
         // z drogi, żeby nie mówić dwóch rzeczy naraz.
         if (statusEl) { statusEl.hidden = true; detailEl.hidden = true; }
@@ -4397,7 +5025,12 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       // może dostać faz tej (1.23.0: sprawdzenie PRZED nadpisaniem postępu).
       if (conv.run && conv.run !== run) return;
       conv.progress = { events: progressEvents, startedAt: requestStart, finished: true, elapsedMs: elapsed };
-      if (progressEvents.length && shown()) renderProgressPanel(progressEvents, elapsed, true);
+      if (progressEvents.length && shown()) {
+        // 1.33.3: stepper pierwszy (chowa pigułkę i pokazuje "Namysł — Ns"),
+        // panel Postęp dostaje ten sam komplet faz.
+        renderNamyslTrack(progressEvents, true);
+        renderProgressPanel(progressEvents, elapsed, true);
+      }
     };
     while (data && data.pending_job) {
       run.jobId = data.pending_job;
@@ -4484,8 +5117,13 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     // porównania, gdy się różni (patrz renderNamyslCard).
     if (data.card && data.card.type === "namysl") data.card.klient_s = Math.round((Date.now() - requestStart) / 100) / 10;
     const lateNote = arrivedBeforeStop ? "Ta odpowiedź przyszła, zanim zatrzymanie zadziałało - została zapisana." : undefined;
-    const speech = data.speech || "(brak odpowiedzi)";
-    const answerMsg = { role: "assistant", text: speech, card: data.card || null, node: data.suggested_node || null, note: lateNote };
+    // 1.33.1: alert Straży nie idzie inline do dymka - wyjmujemy go i pokazujemy
+    // toast (pełny tekst w szufladzie „Ta rozmowa”). Inne alerty (zadania stałe)
+    // zostają w treści, żeby nic nie zniknęło.
+    const parsedSpeech = extractStrazAlerts(data.speech || "");
+    const speech = parsedSpeech.text || (parsedSpeech.alerts.length ? "" : "(brak odpowiedzi)");
+    for (const alert of parsedSpeech.alerts) showStrazToast(alert);
+    const answerMsg = { role: "assistant", text: speech || "(brak odpowiedzi)", card: data.card || null, node: data.suggested_node || null, note: lateNote };
     // 1.32.14: pytanie ma już odpowiedź - numer zadania nie jest potrzebny (przycisk "Sprawdź" po
     // odświeżeniu nie odbierze jej drugi raz pod późniejszą rozmową).
     try {
@@ -4494,7 +5132,12 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     } catch (e) { /* bez znaczenia dla odpowiedzi */ }
     convPush(conv, answerMsg);
     if (shown()) {
-      appendChatBubble("assistant", speech);
+      // Pusty dymek przy odpowiedzi złożonej z samego alertu wyglądałby na błąd;
+      // karta i następne kroki i tak mają swoje miejsce.
+      if (speech) {
+        const answerBubble = appendChatBubble("assistant", speech);
+        crackFragment(answerBubble);
+      }
       try { appendChatCard(data.card); } catch (e) { console.error("karta:", e); }
       // Propozycja nowego węzła (tylko rozmowa przypisana do projektu, patrz
       // agent/main.py: _extract_suggested_node) - nigdy zapisywana sama, zawsze
@@ -4610,3 +5253,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     populateProjectList();
   }
 }
+
+// 1.34.0: boot startuje od razu po sparsowaniu (skrypty są na końcu body),
+// zanim DOMContentLoaded zdąży wywołać initChat. Nie czeka na żadne API.
+crackBoot();

@@ -72,13 +72,12 @@ prywatny materiał jest POMIJANY, a narracja mówi to wprost. Sieć, Wikipedia
 i notowania nie są prywatne. Rozpoznanie (faza 0) widzi tylko wiadomość i
 historię rozmowy - to samo, co i tak idzie siecią w zwykłej rozmowie.
 
-KIEDY (wants): od 1.32.7 zawsze (jedyny tryb); "auto"/"wylaczony" zostały tylko w testach (data/namysl.json,
-ustawiane z interfejsu) + jawny prefiks ("przemyśl:", "zastanów się:",
-"namysł:", "dokładnie:") + załączone pliki (zawsze Namysł, bo plik trzeba
-najpierw przeczytać). W "auto": zwykła wymiana zdań (powitanie, "dzięki",
-krótkie bez pytajnika) idzie jak dotąd jednym przebiegiem; pytanie z
-decyzją, pieniędzmi, planem, porównaniem, analizą, "dlaczego/jak/czy
-warto", dłuższa wiadomość - Namysłem. Powód decyzji jest w narracji.
+KIEDY (wants): od 1.32.7 zawsze (jedyny tryb; w 1.33.2 usunięte zostały
+ostatnie martwe gałęzie "auto"/"wylaczony") + jawny prefiks ("przemyśl:",
+"zastanów się:", "namysł:", "dokładnie:") + załączone pliki (zawsze Namysł,
+bo plik trzeba najpierw przeczytać). Krótkie powitanie, podziękowanie albo
+luźna reakcja bez realnej prośby dostaje zwykłą odpowiedź; wszystko inne -
+pełny Namysł. Powód decyzji jest w narracji.
 
 NARRACJA NA ŻYWO: każda faza wysyła zdarzenia (progress) z etykietą i
 starannym opisem: co dokładnie się dzieje, KTÓRY model to robi i DLACZEGO
@@ -94,8 +93,11 @@ minut. Budżet czasu (NAMYSL_TIME_BUDGET) jest twardy: po jego przekroczeniu
 dalsze fazy są pomijane z informacją, a odpowiedź i tak wychodzi.
 
 DEGRADACJA: Namysł nigdy nie zostawia bez odpowiedzi. Każda faza, która
-zawiedzie, jest pomijana z zapisem w karcie; gdy nie uda się nawet szkic
-(żaden model nie odpowiedział), run() zwraca None i router idzie dawną
+zawiedzie, jest pomijana z zapisem w karcie. Od 1.32.31 fazy Namysłu mają
+GWARANCJĘ modelu: po porażce chmury (limit, HTTP 413 "Request too large",
+awaria) faza spada na lokalny model - także przy KORYTO_LOKALNIE=bez_internetu,
+bo to rezerwa awaryjna, a nie zmiana kolejności. Gdy nie ma ani chmury, ani
+lokalnego modelu (Ollama nie działa), run() zwraca None i router idzie dawną
 ścieżką (koryto: etapy sieciowe, a lokalny model tylko wg KORYTO_LOKALNIE).
 
 PROPORCJA (1.18.0, audyt rdzenia; transkrypty: 33-76 s na proste pytanie
@@ -120,6 +122,7 @@ _TERAZ_MARK = "## Teraz ("  # nagłówek bloku awareness.HEADER (bez importu: aw
 import data as data_mod
 import fsutil
 import koryto as koryto_mod
+import netguard as netguard_mod
 import persona as persona_mod
 import sources as sources_mod
 import symbols as symbols_mod
@@ -161,29 +164,25 @@ MAX_PROGRESS_EVENTS = 200
 
 _PREFIX_RE = re.compile(r"\A\s*(przemy[śs]l(?:\s+to)?|zastan[oó]w\s+si[eę]|namys[łl]|dok[łl]adnie|g[łl][eę]boko)\s*[:,\-–]\s*", re.IGNORECASE)
 _GREETING_RE = re.compile(r"\A\s*(cze[śs][ćc]|hej|siema|witaj|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r|dzi[eę]k\w*|ok(?:ej)?|dobra|jasne|super|tak|nie|no)\b[\s!.,]*\Z", re.IGNORECASE)
-# 1.32.2 (audyt tura 7): powitanie na początku pierwszej wiadomości ("hej, co tam u ciebie
-# słychać?") to nie zadanie do namysłu - dalsze pytanie i tak łapie _DEEP_RE.
+# 1.32.2 (audyt tura 7): powitanie na początku krótkiej wiadomości ("hej, co tam u ciebie?") to nie zadanie do namysłu.
 _GREETING_HEAD_RE = re.compile(r"\A\W*(?:cze[śs][ćc]|hej\w*|siema\w*|elo\b|witaj|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)", re.IGNORECASE)
 # 1.32.7: grzecznościowe "co tam u Ciebie?" to rozmowa, nie zadanie do sześciu faz - także w
 # jedynym trybie "zawsze". Tylko cała, krótka wiadomość (bez dalszej prośby).
 # 1.32.8 (audyt tura 12): "super, zrób to", "elo, plan na dziś" to prośby, nie grzeczności.
 _ACTION_WORD_RE = re.compile(r"(?i)(?<!\w)(?:zr[oó]b\w*|usu[nń]\w*|dawaj|zapami[eę]taj|sprawd[zź]\w*|plan\w*|napisz|poka[zż]\w*|"
-                             r"przypomnij|dodaj|wy[sś]lij|policz|znajd[zź]|co\s+nowego|wszystko\s+ok\?|"
+                             r"przypomnij|dodaj\w*|wy[sś]lij|policz|znajd[zź]\w*|co\s+nowego|wszystko\s+ok\?|"
                              # 1.32.17 (audyt tura 19): "dzięki, wyłącz to"/"dobra, kup to"/"ok, anuluj to"
                              # itd. kończyły się jako czysto społeczne (is_social) i Namysł się nie
                              # włączał, bo czasownik realnej prośby nie był na tej liście.
                              r"wy[łl][aą]cz\w*|w[łl][aą]cz\w*|kup\w*|sprzeda\w*|anuluj\w*|zresetuj\w*|"
-                             r"zrestartuj\w*|zmie[nń]\w*|ustaw\w*|skasuj\w*|zablokuj\w*)")
+                             r"zrestartuj\w*|zmie[nń]\w*|ustaw\w*|skasuj\w*|zablokuj\w*|"
+                             # 1.33.2 (audyt #6): powitanie + krótka REALNA prośba nie może
+                             # omijać Namysłu, gdy czasownika brakowało na liście.
+                             r"przeczytaj\w*|wyja[sś]nij\w*|otw[oó]rz\w*|uruchom\w*|zainstaluj\w*|"
+                             r"stre[sś][cć]\w*|przeanalizuj\w*|opowiedz\w*|por[oó]wnaj\w*)")
 _SMALLTALK_RE = re.compile(r"\A\W*(?:(?:cze[śs][ćc]|hej\w*|siema\w*|elo|witaj|heja)\W+)?(?:gregai\W+)?(?:a\s+)?(?:co\s+tam(?:\s+u\s+ciebie)?|co\s+s[łl]ycha[ćc]|"
                            r"jak\s+si[eę]\s+masz|jak\s+leci|co\s+u\s+ciebie|wszystko\s+(?:w\s+porz[aą]dku|ok)(?:\s+u\s+(?:mnie|ciebie))?)"
                            r"(?:\s+(?:u\s+ciebie|dzi[śs]|dzisiaj|s[łl]ycha[ćc]|a\s+u\s+ciebie))*\W*\Z", re.IGNORECASE)
-_DEEP_RE = re.compile(
-    r"\b(dlaczego|czemu|jak\s+(?:mam|mog[eę]|to|najlepiej|powinienem)|czy\s+(?:warto|powinienem|op[łl]aca|lepiej|to\s+dobry)"
-    r"|co\s+(?:s[ąa]dzisz|my[śs]lisz|radzisz|o\s+tym)|por[oó]wnaj|oce[nń]|przeanalizuj|analiz\w*|zaplanuj|plan\b|strategi\w*"
-    r"|decyzj\w*|zdecydowa\w*|pieni[ąa]dz\w*|koszt\w*|bud[żz]et\w*|ryzyk\w*|inwest\w*|op[łl]acaln\w*|doradz\w*|pom[oó][żz]\s+mi"
-    r"|rozwa[żz]\w*|wady\s+i\s+zalety|za\s+i\s+przeciw|plik\w*|dokument\w*|umow\w*|faktur\w*|raport\w*|przeczytaj)\b",
-    re.IGNORECASE,
-)
 # 1.26.0 (audyt): długość ścieżki ograniczona ({1,300}) - bez tego każdy "/" w
 # wklejonym logu skanował do końca wiadomości (20k znaków: ok. 1,6 s, kilka razy).
 # 1.30.16: pytanie jawnie o rynek/giełdę/notowania - siatka bezpieczeństwa dociąga
@@ -363,42 +362,25 @@ def strip_helper_questions(text: str, pytania: list[str]) -> str:
 
 def wants(message: str, files: list[str] | None = None, settings: dict | None = None,
           first_turn: bool = False) -> tuple[bool, str]:
-    """(czy Namysł, powód po polsku - do narracji i śladu). `first_turn`:
-    pierwsza wiadomość rozmowy (pusta historia) - w trybie auto zawsze z
-    namysłem (wzorzec smart-routing OpenClaude: "first turn of a session ->
-    strong"; to tam ustawia się zadanie), chyba że to powitanie."""
+    """(czy Namysł, powód po polsku - do narracji i śladu).
+
+    1.33.2 (audyt #16): jedyny tryb to "zawsze" (TRYBY), a load_settings()
+    zawsze go zwraca - usunięte martwe gałęzie "auto"/"wylaczony". `settings`
+    i `first_turn` zostają w sygnaturze dla zgodności wywołań (router przekazuje
+    historię), ale nie zmieniają już decyzji."""
     settings = settings or load_settings()
     text = (message or "").strip()
     if files:
         return True, "do wiadomości dołączono plik, a plik trzeba najpierw przeczytać ze zrozumieniem"
     if _PREFIX_RE.match(text):
         return True, "poprosiłeś wprost o namysł (prefiks w wiadomości)"
-    if settings["tryb"] == "wylaczony":
-        return False, "Namysł wyłączony w ustawieniach"
-    if settings["tryb"] == "zawsze":
-        # 1.30.31 (zgłoszenie Grzegorza): przy „zawsze” także „Wystarczy, dziękuję że jesteś”
-        # i „Na luzieeee” szły przez sześć faz - i dostawały od nowa odpowiedź na POPRZEDNIE
-        # pytanie. Podziękowanie, pożegnanie albo luźna reakcja to nie pytanie do namysłu.
-        if not _ACTION_WORD_RE.search(text) and (is_social(text) or _SMALLTALK_RE.search(text) or ("?" not in text and (
-                _GREETING_RE.match(text) or (_GREETING_HEAD_RE.match(text) and len(text.split()) <= 4)))):
-            return False, "powitanie, podziękowanie albo luźna reakcja - tu nie ma czego rozważać"
-        return True, "Namysł ustawiony na „zawsze”"
-    words = len(text.split())
-    if _GREETING_RE.match(text):
-        return False, "zwykła wymiana zdań"
-    if _FILE_REF_RE.search(text):
-        return True, "wiadomość wspomina plik"
-    if words <= 4 and "?" not in text:
-        return False, "krótka wiadomość bez pytania"
-    if first_turn and words >= 6 and not _GREETING_HEAD_RE.match(text):
-        return True, "pierwsza wiadomość w tej rozmowie - tu ustawia się zadanie, więc warto zacząć od namysłu"
-    if _DEEP_RE.search(text):
-        return True, "pytanie o decyzję, ocenę, plan albo wyjaśnienie - to wymaga namysłu, nie jednej pierwszej myśli"
-    if len(text) > 240:
-        return True, "dłuższa wiadomość z kontekstem"
-    if "?" in text and words >= 8:
-        return True, "rozbudowane pytanie"
-    return False, "proste pytanie, jeden przebieg wystarczy"
+    # 1.30.31 (zgłoszenie Grzegorza): przy „zawsze” także „Wystarczy, dziękuję że jesteś”
+    # i „Na luzieeee” szły przez sześć faz - i dostawały od nowa odpowiedź na POPRZEDNIE
+    # pytanie. Podziękowanie, pożegnanie albo luźna reakcja to nie pytanie do namysłu.
+    if not _ACTION_WORD_RE.search(text) and (is_social(text) or _SMALLTALK_RE.search(text) or ("?" not in text and (
+            _GREETING_RE.match(text) or (_GREETING_HEAD_RE.match(text) and len(text.split()) <= 4)))):
+        return False, "powitanie, podziękowanie albo luźna reakcja - tu nie ma czego rozważać"
+    return True, "Namysł ustawiony na „zawsze”"
 
 
 # --- Narracja --------------------------------------------------------------------
@@ -727,6 +709,17 @@ class Context:
     progress: Callable[[dict], None] | None = None
     chat: str | None = None   # id rozmowy (sources.chat_id): jej własne foldery i wgrane
     skupienie: int = 2        # waga uwagi 1-4 (agent/skupienie.py); 4 = wzmożone sprawdzenie
+    # 1.33.3 (audyt #18): snapshot.local_up bywa nieaktualny (Ollama zawiodła
+    # chwilę wcześniej albo właśnie wróciła). Świeże sprawdzenie decyduje, czy
+    # lokalny etap może zejść z warstwy i czy plik ma być czytany.
+    local_recheck: Callable[[], bool] | None = None
+
+    def local_available(self) -> bool:
+        """Czy model lokalny odpowiada TERAZ (snapshot albo świeże sprawdzenie).
+        Używane zarówno przez _Models, jak i przez fazę Zbierania przy plikach
+        (1.33.4, #19b) - decyzja o czytaniu pliku nie może zależeć tylko od
+        snapshotu z początku wiadomości."""
+        return bool(self.local_up) or bool(self.local_recheck is not None and self.local_recheck())
 
 
 class _Models:
@@ -749,6 +742,9 @@ class _Models:
         except Exception:
             internet_ok = False
         self.local_allowed = bool(ctx.local_up) and koryto_mod.local_allowed(self.cloud_ok, internet_ok)
+        # 1.32.30 (audyt #4): WARP padł w trakcie Namysłu - od tej chwili nie
+        # pytamy chmury (i tak nie wyjdzie), a lokalny jest dozwolony.
+        self.warp_blocked = False
 
     def may_use_cloud(self, private: bool) -> bool:
         if not self.cloud_ok:
@@ -757,22 +753,38 @@ class _Models:
             return False
         return True
 
+    def local_up_now(self) -> bool:
+        """Czy model lokalny może TERAZ liczyć (patrz Context.local_available;
+        1.33.4: ta sama metoda decyduje o plikach w Zbieraniu)."""
+        return self.ctx.local_available()
+
     def ask(self, faza: str, system_local: str, system_cloud: str, user: str, private: bool,
-            history: bool = True, exclude: str | None = None, prefer: str | None = None) -> tuple[str, str]:
+            history: bool = True, exclude: str | None = None, prefer: str | None = None,
+            user_local: str | None = None) -> tuple[str, str]:
         """(tekst, kto). Chmura, gdy wolno; inaczej lokalnie; każdy błąd = próba
-        drugiej drogi; obie zawiodły = ("", "")."""
+        drugiej drogi; obie zawiodły = ("", "").
+
+        `user_local` (1.32.31): wariant promptu NAPISANY dla modelu lokalnego
+        (krótszy materiał). Gdy chmura zawiedzie i faza spada na lokalny,
+        lokalny dostaje ten wariant, a nie materiał 16k.
+        """
         ctx = self.ctx
+        # 1.32.30 (audyt #4): po NetGuardBlocked w TEJ fazie (lub wcześniejszej)
+        # internet już nie działa - nie próbuj chmury w kolejnych fazach, a lokalny
+        # traktuj jako dozwolony (na starcie liczyło się "internet działa").
+        if self.warp_blocked and self.local_up_now():
+            self.local_allowed = True
         # Kolejność z koryta (1.17.0, agent/koryto.py): domyślnie sieć (Claude ->
         # darmowi, w jednym łańcuchu ctx.cloud_chat) przed lokalnym; przy
         # KORYTO=lokalnie,... odwrotnie. Zgoda na materiał prywatny
         # (may_use_cloud) i dostępność Ollamy (local_up) decydują, które etapy
         # w ogóle wchodzą do gry - nie kolejność.
         order = []
-        if self.may_use_cloud(private):
+        if self.may_use_cloud(private) and not self.warp_blocked:
             order.append("cloud")
         if self.local_allowed:
             order.insert(0, "local") if koryto_mod.local_before_network() else order.append("local")
-        elif ctx.local_up and not order:
+        elif self.local_up_now() and not order:
             order.append("local")  # bez zgody na materiał w sieci lokalny jest jedyną drogą
         if not order:
             return "", ""
@@ -783,28 +795,39 @@ class _Models:
                     text, provider = ctx.cloud_chat(system_cloud, ctx.history_cloud if history else [], user, exclude=exclude, prefer=prefer)
                     self.last_provider = provider
                     return (text or "").strip(), provider
-                text = ctx.local_chat(system_local, ctx.history_local if history else [], user)
+                text = ctx.local_chat(system_local, ctx.history_local if history else [],
+                                      user_local if user_local is not None else user)
                 return (text or "").strip(), "lokalnie"
             except Exception as e:
                 errors.append(f"{route}: {type(e).__name__}: {e}"[:200])
-                # Narracja na żywo (1.17.3): kto zawiódł i co dalej - zamiast
-                # milczącego przejścia na model lokalny liczący kilka minut.
+                if isinstance(e, netguard_mod.NetGuardBlocked) and self.local_up_now():
+                    self.warp_blocked = True
+                # 1.32.31: Namysł ma GWARANCJĘ odpowiedzi. Porażka chmury (limit,
+                # HTTP 413 "Request too large", awaria) nie kończy fazy - lokalny
+                # etap `_namysl_local_chat` dołącza do kolejki TEJ fazy, także przy
+                # KORYTO_LOKALNIE=bez_internetu (to rezerwa awaryjna, nie zmiana
+                # kolejności; `local_chat` nie idzie ani przez koryto, ani przez
+                # rozdzielnicę). Bez tego szkic z za dużym promptem skończył się
+                # "Model nie odpowiedział" w 0,3 s i całą odpowiedzią z rutynowej
+                # ścieżki, bez Namysłu.
+                if self.local_up_now() and "local" not in order:
+                    order.append("local")
+                # Narracja na żywo: kto zawiódł i co dalej.
                 nxt = order[i + 1] if i + 1 < len(order) else None
                 if nxt == "local":
                     self.narr.info(faza, "Sieć nie odpowiedziała - liczę lokalnie",
-                                   f"{errors[-1]}. Lokalny model na tym komputerze liczy to teraz sam - to może potrwać kilka minut.")
+                                   f"{errors[-1]}. Lokalny model na tym komputerze liczy to teraz sam - "
+                                   "na tym sprzęcie zwykle 30-90 s.")
                 elif nxt == "cloud":
                     self.narr.info(faza, "Lokalny model nie odpowiedział - pytam sieć", errors[-1])
                 continue
-        if ctx.local_up and not self.local_allowed and "local" not in order:
-            self.narr.info(faza, "Model nie odpowiedział", "; ".join(errors)[:300]
-                           + " - lokalnego modelu nie używam, bo internet działa (KORYTO_LOKALNIE=bez_internetu).")
-        else:
-            self.narr.info(faza, "Model nie odpowiedział", "; ".join(errors)[:300])
+        # 1.32.31: lokalny model wchodzi zawsze, gdy jest na maszynie, więc ten
+        # wariant "nie używam lokalnego z wyboru" już nie zachodzi.
+        self.narr.info(faza, "Model nie odpowiedział", "; ".join(errors)[:300])
         return "", ""
 
     def describe_choice(self, private: bool, exclude: str | None = None) -> str:
-        if self.may_use_cloud(private) and not (self.ctx.local_up and koryto_mod.local_before_network()):
+        if self.may_use_cloud(private) and not (self.local_up_now() and koryto_mod.local_before_network()):
             who = [p for p in self.pool if p != exclude] or self.pool
             base = "model sieciowy z koryta (" + ", ".join(who) + ")"
             if private:
@@ -813,7 +836,7 @@ class _Models:
         if private and self.cloud_ok and not self.ctx.settings.get("material_do_sieci"):
             return ("model lokalny (Ollama), bo materiał zawiera Twoje notatki/pliki, a w ustawieniach Namysłu nie "
                     "pozwoliłeś wysyłać ich do sieciowych AI")
-        if self.ctx.local_up:
+        if self.local_up_now():
             if self.may_use_cloud(private):
                 return "model lokalny (Ollama) - w KORYTO stoi przed etapami sieciowymi"
             return "model lokalny (Ollama) - sieciowe AI są niedostępne (brak kluczy, WARP albo limity)"
@@ -1007,7 +1030,16 @@ def run(ctx: Context) -> dict | None:
             roots = sources_mod.chat_roots(ctx.chat)
         except Exception:
             roots = []
-        private_blocked = not ctx.local_up and not models.may_use_cloud(private=True)
+        # 1.33.3 (audyt #18): prywatny plik wchodzi, gdy ma którędy przejść -
+        # chmura (za zgodą) ALBO model lokalny TERAZ (snapshot albo świeże
+        # sprawdzenie). Dawniej decydował tylko snapshot z momentu wiadomości,
+        # więc plik mógł zostać pominięty, mimo że kolejne fazy Namysłu szły
+        # na lokalny model (rezerwa).
+        # 1.33.4 (#19b): recheck TU, w Zbieraniu - material_do_sieci=false ma
+        # czytać plik przez lokalny model, nawet jeśli snapshot local_up był
+        # nieaktualny. "Pominięty" tylko bez chmury (zgody) I bez lokalnego.
+        local_now = ctx.local_available()
+        private_blocked = not models.may_use_cloud(private=True) and not local_now
         if private_blocked:
             narr.info("zbieranie", "Pliki: nie mogę przeczytać",
                       "Model lokalny nie odpowiada, a treść plików nie może iść do sieciowych AI bez Twojej zgody w "
@@ -1036,7 +1068,7 @@ def run(ctx: Context) -> dict | None:
             long = len(doc["text"]) > analiza_mod.VERBATIM_CHARS
             if long:
                 n_parts = len(analiza_mod.split_chunks(doc["text"]))
-                narr.info("zbieranie", f"Czytam plik {doc['name']}",
+                narr.info("zbieranie", f"Czytam plik {doc['name']}: część 1/{n_parts}",
                           f"{desc}. To za dużo na jedno okno modelu, więc dzielę na {n_parts} części po akapitach i każdą "
                           f"streszczam osobno, skupiając się na celu („{plan.cel[:120]}”). Dzięki temu fakty z końca pliku "
                           "nie giną. Streszcza " + models.describe_choice(private=True) + ".")
@@ -1053,6 +1085,15 @@ def run(ctx: Context) -> dict | None:
             und = analiza_mod.understand(doc, plan.cel or message, _ask_chunk, progress=_prog if long else None,
                                          should_stop=lambda _n=narr, _d=files_deadline: _n.elapsed() > _d)
             if not und["digest"].strip():
+                # 1.33.3 (audyt #18): streszczenie padło (np. wszystkie chunk-i
+                # odbiły się od chmury), ale lokalny model JEST - lepiej dać mu
+                # surowy wycinek niż zgubić plik. "Pominięty" tylko bez obu.
+                raw = (doc.get("text") or "").strip()
+                if raw and models.local_up_now():
+                    material.append(Material(f"plik: {doc['name']} ({doc['kind'].upper()}, fragment surowy)", raw[:4000], True, "plik"))
+                    zrodla.append(f"plik: {doc['name']}")
+                    uwagi.append(f"plik {doc['name']}: bez streszczenia - lokalny model dostaje surowy fragment")
+                    continue
                 uwagi.append(f"plik {doc['name']}: pusty digest")
                 continue
             label = f"plik: {doc['name']} ({doc['kind'].upper()}, {doc['chars']} znaków" + (
@@ -1266,9 +1307,16 @@ def run(ctx: Context) -> dict | None:
     use_cloud_draft = models.may_use_cloud(private)
     # 1.32.14 (rozmowa 25.10): szkic widzi całą historię - bez tej linii potrafił od nowa odpowiadać
     # na POPRZEDNIE pytanie (druga odpowiedź o Ethereum pod pytaniem o 5 pytań rekrutacyjnych).
-    user_draft = (head + "\nMATERIAŁ:\n" + (mat_cloud if use_cloud_draft else mat_local)
-                  + f"\n\nWIADOMOŚĆ GRZEGORZA (odpowiadasz TYLKO na nią; wcześniejsze tury to kontekst, nie zadanie): {message}")
-    draft, who_draft = models.ask("szkic", ctx.sys_local + _SZKIC_SUFFIX, ctx.sys_cloud + _SZKIC_SUFFIX, user_draft, private=private)
+    # 1.32.31: dwa warianty promptu - chmurowy (materiał do 16k) i lokalny (do 7k).
+    # Gdy chmura zawiedzie i faza spada na lokalny (rezerwa awaryjna), lokalny
+    # dostaje swój wariant, zamiast materiału 16k (+413 "Request too large" u Groqa).
+    def _szkic_prompt(mat: str) -> str:
+        return (head + "\nMATERIAŁ:\n" + mat
+                + f"\n\nWIADOMOŚĆ GRZEGORZA (odpowiadasz TYLKO na nią; wcześniejsze tury to kontekst, nie zadanie): {message}")
+    user_draft = _szkic_prompt(mat_cloud if use_cloud_draft else mat_local)
+    user_draft_local = _szkic_prompt(mat_local)
+    draft, who_draft = models.ask("szkic", ctx.sys_local + _SZKIC_SUFFIX, ctx.sys_cloud + _SZKIC_SUFFIX,
+                                  user_draft, private=private, user_local=user_draft_local)
     # 1.32.12 (audyt tura 16): szkic po angielsku (dryf małego modelu) to nie odpowiedź - jak pusty.
     if draft and re.search(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", draft) is None and len(re.findall(r"(?i)\b(?:the|is|and|of|with|you|here)\b", draft)) > 3:
         narr.info("szkic", "Szkic po angielsku", "Model napisał po angielsku - odrzucam, odpowiedź pójdzie dawną drogą.")
@@ -1313,6 +1361,9 @@ def run(ctx: Context) -> dict | None:
                              for t in _hist[-4:] if isinstance(t, dict) and str(t.get("content") or "").strip())
         user_crit = (head + ("KONTEKST ROZMOWY (ostatnie tury):\n" + _ctx_txt + "\n" if _ctx_txt else "") + "\nMATERIAŁ:\n" + (mat_cloud if models.may_use_cloud(private) else mat_local)
                      + f"\n\nWIADOMOŚĆ GRZEGORZA: {message}\n\nSZKIC ODPOWIEDZI:\n<<<\n{draft}\n>>>")
+        # 1.32.31: wariant lokalny recenzji - bez materiału 16k (rezerwa awaryjna).
+        user_crit_local = (head + ("KONTEKST ROZMOWY (ostatnie tury):\n" + _ctx_txt + "\n" if _ctx_txt else "") + "\nMATERIAŁ:\n" + mat_local
+                           + f"\n\nWIADOMOŚĆ GRZEGORZA: {message}\n\nSZKIC ODPOWIEDZI:\n<<<\n{draft}\n>>>")
         # Skupienie 4/4 (krytyczne: pieniądze, zdrowie, nieodwracalne): recenzent
         # dostaje twardszą instrukcję - PRZELICZ każdy procent i każdą liczbę
         # wobec materiału, a przy niepewności każ podać ją jako niepewną. To
@@ -1323,7 +1374,8 @@ def run(ctx: Context) -> dict | None:
             "każde twierdzenie bez pokrycia w materiale oznacz jako wymagające weryfikacji. Bądź szczególnie "
             "surowy - lepiej wytknąć za dużo niż przepuścić błąd, na którym ktoś oprze decyzję."
             if _poziom >= 4 else "")
-        crit, who_crit = models.ask("krytyka", krytyka_system, krytyka_system, user_crit, private=private, history=False, exclude=exclude)
+        crit, who_crit = models.ask("krytyka", krytyka_system, krytyka_system, user_crit, private=private, history=False, exclude=exclude,
+                                    user_local=user_crit_local)
         verdict_ok = bool(re.search(r"WERDYKT\s*:\s*ok\b", crit or "", re.IGNORECASE))
         # 1.32.9: problemy także jako "1. ...", "* ...", "• ..."; "popraw" bez listy = cała reszta to uwaga.
         _crit_lines = [ln.strip() for ln in (crit or "").splitlines() if ln.strip() and not re.match(r"(?i)WERDYKT\s*:", ln.strip())]
@@ -1349,10 +1401,15 @@ def run(ctx: Context) -> dict | None:
                 user_fix = (head + "\nMATERIAŁ:\n" + (mat_cloud if models.may_use_cloud(private) else mat_local)
                             + f"\n\nWIADOMOŚĆ GRZEGORZA: {message}\n\nSZKIC:\n<<<\n{draft}\n>>>\n\nPROBLEMY OD RECENZENTA:\n"
                             + "\n".join(f"- {p}" for p in problems))
+                # 1.32.31: wariant lokalny poprawy - bez materiału 16k (rezerwa awaryjna).
+                user_fix_local = (head + "\nMATERIAŁ:\n" + mat_local
+                                  + f"\n\nWIADOMOŚĆ GRZEGORZA: {message}\n\nSZKIC:\n<<<\n{draft}\n>>>\n\nPROBLEMY OD RECENZENTA:\n"
+                                  + "\n".join(f"- {p}" for p in problems))
                 # 1.17.6: ostateczną wersję pisze AUTOR szkicu (prefer=who_draft): to on zna
                 # ton i język tej odpowiedzi; recenzent (inny model) tylko wskazał problemy.
                 fixed, who_fix = models.ask("poprawa", ctx.sys_local + _POPRAWA_SUFFIX, ctx.sys_cloud + _POPRAWA_SUFFIX, user_fix, private=private,
-                                            prefer=who_draft if who_draft and who_draft != "lokalnie" else None)
+                                            prefer=who_draft if who_draft and who_draft != "lokalnie" else None,
+                                            user_local=user_fix_local)
                 _pl = re.compile(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]")
                 _en = len(re.findall(r"(?i)\b(?:the|is|and|of|currently|with|you)\b", fixed or ""))
                 _short_q = len(message.split()) <= 4

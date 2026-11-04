@@ -10,8 +10,10 @@
 #     gregai check           kontrole na tym laptopie (to check.sh)
 #     gregai diagnoza        internet GREGAI warstwa po warstwie (WARP, tunel, DNS, wyszukiwarki, dostawcy AI)
 #                            i co naprawić; liczone W USŁUDZE (ta sama zapora co prawdziwe zapytania)
-#     gregai eval [--zywo] [--k N]   testy regresji GREGAI: szybkie bez sieci, --zywo pyta prawdziwe modele
-#                            (pass@k / pass^k, porównanie z poprzednim przebiegiem; --zywo kosztuje tokeny)
+#     gregai eval [--zywo] [--k N] [--id ID]   testy regresji: szybkie bez sieci; --zywo pyta prawdziwe modele
+#                            (pass@k / pass^k; --id wybiera jeden przypadek i nie zapisuje historii)
+#     gregai weryfikuj     składnia + szybki eval na czystej kopii, bez sudo i usług
+#     gregai wydaj         zbuduj i sprawdź paczkę bieżącego VERSION (bez zmian w git)
 #     gregai start|stop|restart   usługa systemd gregai
 #     gregai status          wersja, usługa, port, WARP, Ollama, koryto (Claude/darmowi), SYSOP - w jednej tabelce
 #     gregai logs [N]        ostatnie N linii dziennika usługi (domyślnie 50), potem na żywo
@@ -126,7 +128,9 @@ cmd_diagnoza() {
          | python3 -c 'import sys, json; print(json.load(sys.stdin).get("tekst", ""))' 2>/dev/null || true)"
   if [ -n "$out" ]; then printf '\n%s\n\n' "$out"; return 0; fi
   echo "Usługa gregai nie odpowiada - diagnoza poza usługą (bez jej zapory jądra):"
-  python3 "$ROOT/agent/diagnoza.py"
+  local px
+  if [ -x "$ROOT/.venv/bin/python" ]; then px="$ROOT/.venv/bin/python"; else px=python3; fi
+  "$px" "$ROOT/agent/diagnoza.py"
 }
 
 cmd_eval() { python3 "$ROOT/agent/ewaluacja.py" "$@"; }
@@ -147,5 +151,7 @@ case "$cmd" in
   open|otworz|otwórz) cmd_open ;;
   diagnoza|diagnose|internet) cmd_diagnoza ;;
   eval|ewaluacja|testy) cmd_eval "$@" ;;
+  weryfikuj|verify) exec bash "$ROOT/weryfikuj.sh" ;;
+  wydaj|release) exec bash "$ROOT/wydaj.sh" ;;
   *) printf 'gregai: nieznane polecenie "%s"\n\n' "$cmd" >&2; cmd_help >&2; exit 2 ;;
 esac
