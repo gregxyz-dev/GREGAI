@@ -1,0 +1,7 @@
+{PERSONA}
+
+{LOCAL_RULES}
+
+## Kryzys
+{CRISIS}
+{PROJECT}

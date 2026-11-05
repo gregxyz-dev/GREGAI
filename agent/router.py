@@ -77,6 +77,7 @@ import agentloop as agentloop_mod
 import sources as sources_mod
 import awareness as awareness_mod
 import capabilities as cap_mod
+import config_loader as config_mod
 import namysl as namysl_mod
 import fsutil
 import slowa as slowa_mod
@@ -126,17 +127,19 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "qwen2.5:3b"  # pus
 # bezpieczny, konserwatywny wybór, nie granica modelu.
 # Te same 16384 ustawia install.sh w Ollamie (OLLAMA_CONTEXT_LENGTH), żeby
 # `ollama run` w terminalu nie przeładowywał modelu z innym oknem.
-OLLAMA_TEMPERATURE = env_float("OLLAMA_TEMPERATURE", 0.2, 0.0, 2.0)
+OLLAMA_TEMPERATURE = env_float("LOCAL_TEMP", env_float("OLLAMA_TEMPERATURE", 0.2, 0.0, 2.0), 0.0, 2.0)
 # 1.37.0: parametry pod 3B na CPU. Niskie top_p/top_k i repeat_penalty 1.2
 # ograniczają zmyślanie i pętle powtórzeń; wszystkie są nadpisywalne w .env,
 # a kontrola 82 w check.sh pilnuje, żeby nie wróciły wartości "kreatywne".
-OLLAMA_TOP_P = env_float("OLLAMA_TOP_P", 0.85, 0.0, 1.0)
-OLLAMA_TOP_K = env_int("OLLAMA_TOP_K", 40, 1, 200)
-OLLAMA_REPEAT_PENALTY = env_float("OLLAMA_REPEAT_PENALTY", 1.2, 1.0, 2.0)
+# 1.38.9: LOCAL_* to wygodne aliasy; OLLAMA_* pozostaje źródłem prawdy,
+# gdy aliasu nie ma w .env.
+OLLAMA_TOP_P = env_float("LOCAL_TOP_P", env_float("OLLAMA_TOP_P", 0.85, 0.0, 1.0), 0.0, 1.0)
+OLLAMA_TOP_K = env_int("LOCAL_TOP_K", env_int("OLLAMA_TOP_K", 40, 1, 200), 1, 200)
+OLLAMA_REPEAT_PENALTY = env_float("LOCAL_REPEAT_PEN", env_float("OLLAMA_REPEAT_PENALTY", 1.2, 1.0, 2.0), 1.0, 2.0)
 # Domyślna długość odpowiedzi rozmowy (1.37.0: 400 -> 1024). Router, planer,
 # uczeń i sędzia straż podają własne, małe num_predict - 1024 tam tylko by
 # wydłużało odpowiedź i zwiększało ryzyko wyjścia poza format.
-OLLAMA_NUM_PREDICT = env_int("OLLAMA_NUM_PREDICT", 1024, 1, 8192)
+OLLAMA_NUM_PREDICT = env_int("LOCAL_NUM_PREDICT", env_int("OLLAMA_NUM_PREDICT", 1024, 1, 8192), 1, 8192)
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX", 16384, 1024, 131072)
 # Stop dla dużego modelu rozmowy: 3B potrafi dopisać "User:" i dalej
 # symulować rozmowę. Małe wytrenowane modele dostają własny stop (np. "\n").
@@ -381,13 +384,13 @@ def _est_tokens(text: str) -> int:
 # instrukcje i zmyśla. Twarde limity: system 800, wiadomość użytkownika
 # 2000, całość 3000 tokenów. Nadmiar tniemy od KOŃCA (najstarsze notatki),
 # nigdy od początku (instrukcje).
-LOCAL_SYSTEM_MAX_TOKENS = 800
-LOCAL_USER_MAX_TOKENS = 2000
+LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 800, 200, 4000)
+LOCAL_USER_MAX_TOKENS = env_int("LOCAL_USER_MAX", 2000, 200, 8000)
 LOCAL_PROMPT_MAX_TOKENS = 3000
-# 1.38.4 (#26): bezpiecznik przed Ollamą. 12000 tokenów (system+user) to
-# margines pod num_ctx=16384; wcześniejsze 14000 przepuszczało np. 786+13000
-# i kończyło się pustym stringiem.
-LOCAL_PROMPT_SAFE_TOKENS = 12000
+# 1.38.4 (#26), alias od 1.38.9: bezpiecznik przed Ollamą. 12000 tokenów
+# (system+user) to margines pod num_ctx=16384; wcześniejsze 14000
+# przepuszczało np. 786+13000 i kończyło się pustym stringiem.
+LOCAL_PROMPT_SAFE_TOKENS = env_int("LOCAL_CTX_SAFE", 12000, 2000, 16000)
 LOCAL_PROMPT_TRIM_MARKER = " [materiał ucięty - za długi dla kontekstu]"
 # Notatka > 500 tokenów jest skracana; plik > 1500 tokenów redukujemy do
 # 500 z odesłaniem do pełnej treści na dysku.
@@ -1421,28 +1424,53 @@ _END_OK_CHARS = ".!?…:;\"'”’)»]`"
 _LAST_LOCAL_QUALITY: dict = {"powod": "", "model": ""}
 
 
+def _vcfg(section: str, key: str, default):
+    try:
+        value = config_mod.get(f"validation.{section}.{key}", default)
+        if isinstance(default, int) and not isinstance(default, bool):
+            return int(value)
+        return value
+    except Exception:
+        return default
+
+
+def _vaction(section: str, default: str) -> str:
+    value = str(_vcfg(section, "akcja", default) or default).strip().lower()
+    return value if value in ("stop", "retry", "oznacz") else default
+
+
 def _validate_local_response(response: str, prompt: str = "") -> tuple[bool, str, bool]:
     """(ok, powód, czy_ponowic) dla odpowiedzi dużego modelu lokalnego.
 
     Sprawdza cztery znane wpadki qwen2.5:3b: pusty tekst, powtórzenie
     promptu, odpowiedź po angielsku i urwanie w połowie zdania. Halucynacji
     (ceny, daty) nie da się wykryć automatycznie - pilnuje jej instrukcja
-    w awareness._local_rules („NIE zgaduj...”)."""
+    w awareness._local_rules („NIE zgaduj...”).
+
+    1.38.9: progi i akcje pochodzą z config/validation.json (fallback =
+    dotychczasowe wartości)."""
     text = (response or "").strip()
     if not text:
         # 1.38.3 (#25b): pusty tekst to zwykle przekroczony kontekst - retry z
         # tym samym promptem dałby ten sam błąd i podwoił ciszę.
-        return False, "pusty", False
+        action = _vaction("pusty", "stop")
+        return (action == "oznacz"), "pusty", action == "retry"
     if prompt:
-        head = " ".join(text[:50].split()).lower()
-        asked = " ".join((prompt or "")[:50].split()).lower()
-        if len(asked) >= 40 and head == asked:
-            return False, "powtorzenie promptu", True
-    if (len(text) > 60 and not re.search(f"[{_PL_DIACRITICS}]", text)
-            and len(_EN_WORDS_RE.findall(text)) > 3):
-        return False, "angielski", True
-    if len(text) > 500 and text[-1] not in _END_OK_CHARS:
-        return True, "urwane", False
+        compare = _vcfg("echo", "dlugosc_porownania", 50)
+        min_prompt = _vcfg("echo", "min_dlugosc_promptu", 40)
+        head = " ".join(text[:compare].split()).lower()
+        asked = " ".join((prompt or "")[:compare].split()).lower()
+        if len(asked) >= min_prompt and head == asked:
+            action = _vaction("echo", "retry")
+            return (action == "oznacz"), "powtorzenie promptu", action == "retry"
+    if (len(text) > _vcfg("angielski", "min_dlugosc", 60)
+            and not re.search(f"[{_PL_DIACRITICS}]", text)
+            and len(_EN_WORDS_RE.findall(text)) > _vcfg("angielski", "prog_slow", 3)):
+        action = _vaction("angielski", "retry")
+        return (action == "oznacz"), "angielski", action == "retry"
+    if len(text) > _vcfg("urwane", "min_dlugosc", 500) and text[-1] not in _END_OK_CHARS:
+        action = _vaction("urwane", "oznacz")
+        return (action == "oznacz"), "urwane", action == "retry"
     return True, "", False
 
 
@@ -2352,6 +2380,36 @@ _SAFE_TICKER_RE = re.compile(r"^[A-Za-z0-9.^_-]{1,20}$")
 _SOCIAL_THANKS_RE = re.compile(r"(?i)\b(?:dzi[eę]k\w*|dziek\w*|thx|thanks|dzi[eę]ks|dzieks)\b")
 _SOCIAL_GREETING_RE = re.compile(
     r"(?i)^\s*(?:hej(?:ka)?|cze[sś][cć]|witaj|witam|siema|elo|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)\b")
+_SOCIAL_CACHE: dict = {"key": None, "thanks": _SOCIAL_THANKS_RE, "greet": _SOCIAL_GREETING_RE}
+
+
+def _social_patterns():
+    """Wzorce podziękowań/powitań z config/social.json (fallback: kod).
+
+    1.38.9: hot-reload obejmuje ten plik; wzorce kompilują się od nowa tylko
+    po zmianie treści (klucz = serializowany JSON)."""
+    data = config_mod.get("social", {}) or {}
+    try:
+        key = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        key = repr(data)
+    if key == _SOCIAL_CACHE["key"]:
+        return _SOCIAL_CACHE["thanks"], _SOCIAL_CACHE["greet"]
+
+    def _compile(name, fallback):
+        raw = data.get(name) if isinstance(data, dict) else None
+        out = []
+        for pattern in raw or []:
+            try:
+                out.append(re.compile(str(pattern), re.IGNORECASE))
+            except re.error:
+                continue
+        return out or [fallback]
+
+    thanks = _compile("dziekuje", _SOCIAL_THANKS_RE)
+    greet = _compile("powitania", _SOCIAL_GREETING_RE)
+    _SOCIAL_CACHE.update(key=key, thanks=thanks, greet=greet)
+    return thanks, greet
 
 
 def _social_reply(message: str, settings: dict | None = None, files=None,
@@ -2368,9 +2426,10 @@ def _social_reply(message: str, settings: dict | None = None, files=None,
             return None
     except Exception:
         return None
-    if _SOCIAL_THANKS_RE.search(text):
+    thanks, greet = _social_patterns()
+    if any(pattern.search(text) for pattern in thanks):
         return "Nie ma za co!"
-    if _SOCIAL_GREETING_RE.match(text):
+    if any(pattern.match(text) for pattern in greet):
         return "Cześć! W czym mogę pomóc?"
     return None
 
@@ -2397,20 +2456,55 @@ _TIME_NOT_NOW = ("w dniu", "w tygodniu", "w roku", "w miesiacu", "otwarte", "otw
                  "stref", "strefie", "odleglosc", "podroz", "lot")
 
 
+_FAST_CACHE: dict = {"key": None, "time": [], "date": [], "zakaz": ()}
+
+
+def _fast_config():
+    """Skompilowane wzorce zegara z config/fastpaths.json (fallback: kod)."""
+    data = config_mod.get("fastpaths", {}) or {}
+    try:
+        key = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        key = repr(data)
+    if key == _FAST_CACHE["key"]:
+        return _FAST_CACHE
+    czas = data.get("czas") if isinstance(data, dict) else {}
+    date = data.get("data") if isinstance(data, dict) else {}
+    def _compile(section, fallback):
+        raw = (section or {}).get("wzorce") if isinstance(section, dict) else None
+        out = []
+        for pattern in raw or []:
+            try:
+                out.append(re.compile(str(pattern), re.IGNORECASE))
+            except re.error:
+                continue
+        return out or [fallback]
+    _FAST_CACHE.update({
+        "key": key,
+        "time": _compile(czas, _TIME_Q_RE),
+        "date": _compile(date, _DATE_Q_RE),
+        "zakaz": tuple((czas or {}).get("zakaz") or _TIME_NOT_NOW) if isinstance(czas, dict) else _TIME_NOT_NOW,
+    })
+    return _FAST_CACHE
+
+
 def _time_answer(message: str) -> str | None:
     """Odpowiedź na pytanie o aktualną godzinę/datę - albo None.
 
     Nie odpowiada na pytania o godziny otwarcia, strefy czasowe ani odległości
-    w czasie; tylko krótkie "która godzina / jaka data / jaki dziś dzień"."""
+    w czasie; tylko krótkie "która godzina / jaka data / jaki dziś dzień".
+    1.38.9: wzorce i lista zakazów z config/fastpaths.json. hot-reload
+    obejmuje ten plik, więc zmiana nie wymaga restartu."""
     from datetime import datetime as _dt
     folded = slowa_mod.fold(message or "").strip()
     if not folded or len(folded.split()) > 12:
         return None
-    asks_time = bool(_TIME_Q_RE.search(folded))
-    asks_date = bool(_DATE_Q_RE.search(folded))
+    cfg = _fast_config()
+    asks_time = any(pattern.search(folded) for pattern in cfg["time"])
+    asks_date = any(pattern.search(folded) for pattern in cfg["date"])
     if not asks_time and not asks_date:
         return None
-    if any(phrase in folded for phrase in _TIME_NOT_NOW):
+    if any(str(phrase).lower() in folded for phrase in cfg["zakaz"]):
         return None
     now = _dt.now()
     zone = now.astimezone().strftime("%Z")

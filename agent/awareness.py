@@ -71,6 +71,8 @@ import os
 import re
 from datetime import datetime, timedelta
 
+import config_loader as config_mod
+from env_loader import env_int
 import rozmowa as rozmowa_mod
 import standing as standing_mod
 import tools as tools_mod
@@ -91,8 +93,10 @@ MAX_BLOCK_CHARS = 4000  # 2200 w 1.8.22; +1800 na streszczenie rozmowy (rozmowa.
 # System lokalnego modelu (1.37.0): max 800 tokenów. 2,7 znaku/token to ten
 # sam przelicznik co router.SYSTEM_CHARS_PER_TOKEN; 2000 znaków zostawia
 # zapas na tokeny interpunkcji i cyfr (router._est_tokens liczy je osobno).
-LOCAL_SYSTEM_MAX_CHARS = 2000
-LOCAL_SYSTEM_MAX_TOKENS = 800
+# 1.38.9: LOCAL_SYSTEM_MAX to alias profilu (OLLAMA_* pozostaje źródłem prawdy
+# dla parametrów modelu; ten limit dotyczy tylko długości promptu).
+LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 800, 200, 4000)
+LOCAL_SYSTEM_MAX_CHARS = int(LOCAL_SYSTEM_MAX_TOKENS * 2.5)
 # Nazwa zadania stałego w bloku (reszta w notatce zadania).
 MAX_TASK_CHARS = 90
 
@@ -431,7 +435,7 @@ def _section(text: str, title: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _local_rules() -> str:
+def _local_rules_code() -> str:
     # 1.37.0: tekst pisany pod 3B (qwen2.5:3b), nie pod 70B: krótkie zdania,
     # numerowana lista, konkrety i wprost wyrażone zakazy. Bez emoji, bez
     # „proszę/uprzejmie”. Zdania mają najwyżej po kilkanaście słów.
@@ -452,6 +456,37 @@ def _local_rules() -> str:
     )
 
 
+def _local_rules() -> str:
+    """Zasady 3B z prompts/local_rules.md, z fallbackiem do kodu.
+
+    1.38.9: plik jest źródłem edytowalnym; placeholdery {CREATOR},
+    {USER_NAME}, {USER_GENDER_NOUN}, {USER_GENDER_FORMS} zachowują dynamikę
+    persona.py. Brak pliku albo błąd odczytu = dawny tekst z kodu.
+    """
+    try:
+        import persona as persona_mod
+        text = config_mod.text("prompts.local_rules", "").strip()
+        if text:
+            return (text.replace("{CREATOR}", persona_mod.CREATOR)
+                    .replace("{USER_NAME}", persona_mod.USER_NAME)
+                    .replace("{USER_GENDER_NOUN}", persona_mod.USER_GENDER_NOUN)
+                    .replace("{USER_GENDER_FORMS}", persona_mod.USER_GENDER_FORMS))
+    except Exception:
+        pass
+    return _local_rules_code()
+
+
+def _local_crisis(system_prompt: str) -> str:
+    """Sekcja Kryzys: prompts/kryzys.md, z fallbackiem do prompt.md."""
+    try:
+        text = config_mod.text("prompts.kryzys", "").strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    return _section(system_prompt, "Kryzys")
+
+
 def _fit_local_system(text: str) -> str:
     """Twardy budżet systemu lokalnego: 800 tokenów (LOCAL_SYSTEM_MAX_CHARS).
 
@@ -470,22 +505,39 @@ def _fit_local_system(text: str) -> str:
 
 
 def local_system(system_prompt: str, now: datetime | None = None) -> str:
-    """STABILNA część promptu lokalnego modelu (1.37.0).
+    """STABILNA część promptu lokalnego modelu (1.37.0, pliki od 1.38.9).
 
     Osobowość (persona.student_system_prompt), zasady dla 3B, sekcja
-    „Kryzys” z prompt.md, dopisek projektu i data z PORĄ DNIA. Godziny co do
-    minuty tu nie ma - ona jedzie w ulotnym bloku (local_block), żeby nie
-    kasować pamięci podręcznej Ollamy przy każdej wiadomości. Treść notatek
-    też tu nie wchodzi: to nadal wyłącznie wersja lokalna w local_block()."""
+    „Kryzys” z prompts/kryzys.md, dopisek projektu i data z PORĄ DNIA.
+    Godziny co do minuty tu nie ma - ona jedzie w ulotnym bloku
+    (local_block), żeby nie kasować pamięci podręcznej Ollamy. Treść notatek
+    też tu nie wchodzi: to nadal wyłącznie wersja lokalna w local_block().
+
+    Od 1.38.9 treść pochodzi z prompts/system_local.md; plik może używać
+    {PERSONA}, {LOCAL_RULES}, {CRISIS}, {PROJECT}. Brak pliku = dawny kod.
+    """
     now = now or datetime.now()
     try:
         import persona as persona_mod
-        crisis = _section(system_prompt, "Kryzys")
-        compact = persona_mod.student_system_prompt() + "\n\n" + _local_rules() + ("\n\n## Kryzys\n" + crisis if crisis else "")
-        # Przegląd 1.32.4: rozmowa projektu niesie graf i konwencję NOWY_WEZEL na końcu promptu.
+        persona_text = persona_mod.student_system_prompt()
+        rules = _local_rules()
+        crisis = _local_crisis(system_prompt)
+        project = ""
         i = system_prompt.find("\n\n--- Kontekst: projekt")
         if i >= 0:
-            compact += system_prompt[i:]
+            project = system_prompt[i:]
+        template = config_mod.text("prompts.system_local", "").strip()
+        if template:
+            compact = (template.replace("{PERSONA}", persona_text)
+                       .replace("{LOCAL_RULES}", rules)
+                       .replace("{CRISIS}", crisis)
+                       .replace("{PROJECT}", project))
+            if project and "{PROJECT}" not in template:
+                compact += project
+        else:
+            compact = persona_text + "\n\n" + rules + ("\n\n## Kryzys\n" + crisis if crisis else "")
+            # Przegląd 1.32.4: rozmowa projektu niesie graf i konwencję NOWY_WEZEL na końcu promptu.
+            compact += project
     except Exception:
         compact = system_prompt
     return _fit_local_system(compact.rstrip() + "\n\n" + today_line(now))
@@ -509,7 +561,18 @@ def cloud_prompt(system_prompt: str, now: datetime | None = None, chat: str | No
         block = trace_mod.mask(block)
     except Exception:
         block = ""  # bez maski nic: lepiej bez streszczenia niż z sekretem
-    return system_prompt + block
+    # 1.38.9: opcjonalny szablon prompts/system_cloud.md. Domyślnie plik ma
+    # tylko {SYSTEM}, więc wynik jest identyczny z dotychczasowym.
+    try:
+        template = config_mod.text("prompts.system_cloud", "").strip()
+        if template:
+            base = (template.replace("{SYSTEM}", system_prompt)
+                    if "{SYSTEM}" in template else system_prompt + "\n\n" + template)
+        else:
+            base = system_prompt
+    except Exception:
+        base = system_prompt
+    return base + block
 
 
 def _max_block_sample() -> str:

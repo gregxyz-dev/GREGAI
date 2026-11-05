@@ -1,0 +1,21 @@
+{
+  "wersja": 1,
+  "komendy": {
+    "pomoc": ["/pomoc", "lista komend", false],
+    "diagnoza": ["/diagnoza", "sprawdź internet warstwa po warstwie i powiedz, co naprawić", false],
+    "sprawdz": ["/sprawdz", "druga opinia o mojej ostatniej odpowiedzi: zmyślenia, liczby, język", false],
+    "plan": ["/plan cel", "plan krok po kroku: kroki, zależności, ryzyka, jak poznać sukces", true],
+    "badaj": ["/badaj temat", "dokładne badanie: najpierw źródła i fakty, potem wnioski", true],
+    "recenzja": ["/recenzja tekst", "recenzja tekstu albo pomysłu: problemy od najważniejszego, z poprawkami", false],
+    "lekcja": ["/lekcja [czego dotyczy]", "zapisz lekcję z tej rozmowy (najpierw pokażę szkic, zapis po Twoim „tak”)", false],
+    "lekcje": ["/lekcje", "zapisane lekcje; /lekcje usuń NUMER", false],
+    "model": ["/model", "kim jestem i z jakich modeli teraz korzystam", false]
+  },
+  "aliasy": {
+    "help": "pomoc", "pomocy": "pomoc", "komendy": "pomoc", "diagnose": "diagnoza",
+    "internet": "diagnoza", "sprawdź": "sprawdz", "verify": "sprawdz",
+    "weryfikuj": "sprawdz", "badanie": "badaj", "research": "badaj", "zbadaj": "badaj",
+    "review": "recenzja", "learn": "lekcja", "naucz": "lekcja", "modele": "model"
+  },
+  "opis": "Lista komend i aliasów. Zmiana wymaga restartu (stała KOMENDY jest czytana przy imporcie)."
+}

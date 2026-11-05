@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import re
 
+import config_loader as config_mod
 import persona as persona_mod
 import slowa as slowa_mod
 
 # nazwa -> (składnia, opis dla człowieka, czy wymaga argumentu)
-KOMENDY: dict[str, tuple[str, str, bool]] = {
+_DEFAULT_KOMENDY: dict[str, tuple[str, str, bool]] = {
     "pomoc": ("/pomoc", "lista komend", False),
     "diagnoza": ("/diagnoza", "sprawdź internet warstwa po warstwie i powiedz, co naprawić", False),
     "sprawdz": ("/sprawdz", "druga opinia o mojej ostatniej odpowiedzi: zmyślenia, liczby, język", False),
@@ -35,9 +36,54 @@ KOMENDY: dict[str, tuple[str, str, bool]] = {
     "lekcje": ("/lekcje", "zapisane lekcje; /lekcje usuń NUMER", False),
     "model": ("/model", "kim jestem i z jakich modeli teraz korzystam", False),
 }
-ALIASY = {"help": "pomoc", "pomocy": "pomoc", "komendy": "pomoc", "diagnose": "diagnoza", "internet": "diagnoza",
-          "sprawdź": "sprawdz", "verify": "sprawdz", "weryfikuj": "sprawdz", "badanie": "badaj", "research": "badaj",
-          "zbadaj": "badaj", "review": "recenzja", "learn": "lekcja", "naucz": "lekcja", "modele": "model"}
+_DEFAULT_ALIASY = {"help": "pomoc", "pomocy": "pomoc", "komendy": "pomoc", "diagnose": "diagnoza", "internet": "diagnoza",
+                   "sprawdź": "sprawdz", "verify": "sprawdz", "weryfikuj": "sprawdz", "badanie": "badaj", "research": "badaj",
+                   "zbadaj": "badaj", "review": "recenzja", "learn": "lekcja", "naucz": "lekcja", "modele": "model"}
+
+
+def _load_commands():
+    """Metadane komend z config/commands.json (fallback: kod).
+
+    1.38.9: zmiana wymaga restartu - KOMENDY jest stałą czytaną przy imporcie,
+    tak samo jak dotąd. Plik nie może dodać nowej komendy, bo kod nie ma dla
+    niej obsługi; brak któregokolwiek znanego klucza = pełny fallback.
+    """
+    raw = config_mod.get("commands.komendy", None)
+    if not isinstance(raw, dict):
+        return dict(_DEFAULT_KOMENDY), dict(_DEFAULT_ALIASY)
+    loaded = {}
+    for key, value in raw.items():
+        if key not in _DEFAULT_KOMENDY or not isinstance(value, (list, tuple)) or len(value) != 3:
+            continue
+        skladnia, opis, wymaga = value
+        if not isinstance(skladnia, str) or not isinstance(opis, str):
+            continue
+        loaded[key] = (skladnia, opis, bool(wymaga))
+    if set(loaded) != set(_DEFAULT_KOMENDY):
+        return dict(_DEFAULT_KOMENDY), dict(_DEFAULT_ALIASY)
+    aliases = dict(_DEFAULT_ALIASY)
+    raw_aliases = config_mod.get("commands.aliasy", None)
+    if isinstance(raw_aliases, dict):
+        for alias, target in raw_aliases.items():
+            if isinstance(alias, str) and target in _DEFAULT_KOMENDY:
+                aliases[alias] = target
+    return loaded, aliases
+
+
+def _current_commands():
+    """Aktualne (KOMENDY, ALIASY) z config/commands.json - dla hot-reloadu.
+
+    KOMENDY na poziomie modułu zostaje jako snapshot startowy (zgodność
+    z testami i /api/komendy), ale parse/help czytają ten helper, więc
+    zmiana pliku działa bez restartu.
+    """
+    try:
+        return _load_commands()
+    except Exception:
+        return dict(_DEFAULT_KOMENDY), dict(_DEFAULT_ALIASY)
+
+
+KOMENDY, ALIASY = _load_commands()
 
 # Konteksty trybu (dokładane do promptu Namysłu).
 KONTEKSTY = {
@@ -78,10 +124,11 @@ def parse(message: str) -> tuple[str, str] | None:
     raw = m.group(1)
     if "." in raw or raw.lower() in _SYSTEM_DIRS:
         return None
+    commands, aliases = _current_commands()
     name = slowa_mod.fold(raw)
-    name = ALIASY.get(raw.lower(), ALIASY.get(name, name))
+    name = aliases.get(raw.lower(), aliases.get(name, name))
     arg = (m.group(2) or "").strip()
-    if name in KOMENDY:
+    if name in commands:
         return name, arg
     if not arg and raw.isalpha():
         return "?" + raw, ""
@@ -91,7 +138,8 @@ def parse(message: str) -> tuple[str, str] | None:
 def help_text(unknown: str = "") -> str:
     head = f"Nie znam komendy /{unknown}. " if unknown else ""
     lines = [head + "Komendy (wpisz na początku wiadomości):"]
-    for skladnia, opis, _wymaga in KOMENDY.values():
+    commands, _aliases = _current_commands()
+    for skladnia, opis, _wymaga in commands.values():
         lines.append(f"{skladnia} - {opis}")
     lines.append("Zwykłe pytania piszesz jak dotąd; komendy to skróty do konkretnych trybów.")
     return "\n".join(lines)
@@ -99,7 +147,8 @@ def help_text(unknown: str = "") -> str:
 
 def api_list() -> list[dict]:
     """Dla interfejsu (/api/komendy): podpowiedzi w polu wpisywania."""
-    return [{"nazwa": n, "skladnia": s, "opis": o, "argument": w} for n, (s, o, w) in KOMENDY.items()]
+    commands, _aliases = _current_commands()
+    return [{"nazwa": n, "skladnia": s, "opis": o, "argument": w} for n, (s, o, w) in commands.items()]
 
 
 # --- /sprawdz: druga opinia o ostatniej odpowiedzi --------------------------------

@@ -1,0 +1,23 @@
+{
+  "wersja": 1,
+  "pusty": {
+    "min_dlugosc": 0,
+    "akcja": "stop",
+    "kod": "prompt-ctx"
+  },
+  "echo": {
+    "min_dlugosc_promptu": 40,
+    "dlugosc_porownania": 50,
+    "akcja": "retry"
+  },
+  "angielski": {
+    "min_dlugosc": 60,
+    "prog_slow": 3,
+    "akcja": "retry"
+  },
+  "urwane": {
+    "min_dlugosc": 500,
+    "akcja": "oznacz"
+  },
+  "opis": "Progi walidacji odpowiedzi lokalnego modelu. akcja: stop | retry | oznacz."
+}

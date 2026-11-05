@@ -1,0 +1,36 @@
+{
+  "wersja": 1,
+  "opis": "Szybkie, deterministyczne ścieżki. Wzorce są regexami Pythona (bez flag - loader dodaje IGNORECASE/UNICODE tam, gdzie trzeba). Edycja działa po hot-reloadzie.",
+  "czas": {
+    "wzorce": [
+      "\\b(?:ktora|jaka)\\s+(?:jest\\s+)?(?:teraz\\s+)?(?:aktualna\\s+|dokladna\\s+|obecna\\s+)?godzina\\b",
+      "\\b(?:aktualna|dokladna|obecna)\\s+godzina\\b",
+      "\\bktora\\s+(?:jest\\s+)?teraz\\b",
+      "\\bile\\s+jest\\s+(?:teraz|godzin|czasu)\\b",
+      "\\bile\\s+jest\\s*[?!.]*\\s*$",
+      "\\bpodaj\\s+(?:aktualna\\s+)?(?:godzine|czas)\\b",
+      "\\b(?:data\\s+i\\s+godzina|godzina\\s+i\\s+data)\\b"
+    ],
+    "zakaz": [
+      "w dniu", "w tygodniu", "w roku", "w miesiacu", "otwarte", "otwiera",
+      "zamyka", "stref", "strefie", "odleglosc", "podroz", "lot"
+    ]
+  },
+  "data": {
+    "wzorce": [
+      "\\b(?:jaka|ktora)\\s+(?:jest\\s+)?(?:dzisiaj\\s+|dzis\\s+|aktualna\\s+)?data\\b",
+      "\\bjaki\\s+(?:jest\\s+|mamy\\s+)?(?:dzisiaj\\s+|dzis\\s+)?(?:dzien|dzien\\s+tygodnia)\\b",
+      "\\bktory\\s+(?:jest\\s+)?(?:dzisiaj\\s+|dzis\\s+)?(?:dzien|dzien\\s+tygodnia)\\b",
+      "\\bco\\s+to\\s+za\\s+dzien\\b",
+      "\\bpodaj\\s+(?:dzisiejsza\\s+|aktualna\\s+)?(?:date|dzien)\\b",
+      "\\b(?:data\\s+i\\s+godzina|godzina\\s+i\\s+data)\\b"
+    ]
+  },
+  "narzedzia": {
+    "opis": "Snapshot intencji narzędziowych. Routing narzędzi nadal pochodzi z agent/capabilities.py (jedno źródło prawdy dla treningu).",
+    "weather": ["pogoda", "prognoza", "pada", "deszcz", "snieg"],
+    "market_quote": ["kurs", "cena", "btc", "bitcoin", "sol", "zloto", "waluta"],
+    "search_brain": ["notatki", "graf", "wiedza", "zapamietane"],
+    "wiki_lookup": ["co to jest", "kim jest", "wyjasnij", "definicja"]
+  }
+}

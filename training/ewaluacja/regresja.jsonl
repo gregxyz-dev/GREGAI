@@ -87,3 +87,6 @@
 {"id": "normalizacja-1385", "typ": "normalizacja_1385", "oczekiwane": true, "zrodlo": "1.38.5 #27: prefiks daty i numer kolizji w nazwie nie tworzą drugiego pliku; jeden odczyt, jedno Czytam plik"}
 {"id": "dedup-1386", "typ": "dedup_1386", "oczekiwane": true, "zrodlo": "1.38.6 #29: UI race wysyła ten sam plik 2x; ctx.files deduplikowane po resolve().lower()"}
 {"id": "namysl-once-1387", "typ": "namysl_once_1387", "oczekiwane": true, "zrodlo": "1.38.7 #30: dwa przebiegi Namysłu dla jednej wiadomości dawały dwa razy Czytam plik; flaga namysl_tried dopuszcza jeden"}
+{"id": "config-loader-1389", "typ": "config_loader_1389", "oczekiwane": true, "zrodlo": "1.38.9: JSON+prompts, fallback do kodu, hot-reload po mtime i odporność na zły JSON"}
+{"id": "config-files-1389", "typ": "config_files_1389", "oczekiwane": true, "zrodlo": "1.38.9: prompts/system_local + lokalne zasady/kryzys oraz config/social/fastpaths/namysl/commands podpięte"}
+{"id": "config-export-1389", "typ": "config_export_1389", "oczekiwane": true, "zrodlo": "1.38.9: config/tools.json i prompts/persona.md to aktualne snapshoty read-only z capabilities.py/persona.py"}

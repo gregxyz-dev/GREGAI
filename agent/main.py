@@ -60,6 +60,7 @@ load_env()
 import persona as persona_mod  # noqa: E402
 import vault as vault_mod  # noqa: E402
 import data as data_mod  # noqa: E402
+import config_loader  # noqa: E402
 import fsutil  # noqa: E402
 import router as router_mod  # noqa: E402
 import learning as learning_mod  # noqa: E402
@@ -2570,6 +2571,12 @@ def main():
               "wszystkie żądania spoza localhost będą odrzucane (403).")
     print(f"GREGAI działa: sieć LAN = {LAN_MODE}")
     print(f"Otwórz: http://{'localhost' if not LAN_MODE else '<adres-IP-tego-komputera>'}:{PORT}")
+    # 1.38.9: prompty i config/ są czytane z plików; watcher odświeża je co 5 s
+    # bez restartu. Błąd pliku nie zatrzymuje GREGAI - zostaje fallback z kodu.
+    try:
+        config_loader.start_watcher()
+    except Exception:
+        pass
     # Najpierw zajmujemy port: gdy jest zajęty, proces kończy się od razu, ZANIM
     # wystartują wątki w tle (serce, rozgrzewanie Ollamy), które inaczej
     # pracowałyby obok działającej już drugiej kopii.

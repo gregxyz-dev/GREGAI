@@ -1,0 +1,14 @@
+{
+  "wersja": 1,
+  "czas_budzet_s": 150,
+  "material_lokalny_znakow": 5300,
+  "fazy": [
+    {"id": "rozpoznanie", "nazwa": "Rozpoznanie", "timeout_s": null, "warunek_pominiecia": "nigdy"},
+    {"id": "zbieranie", "nazwa": "Zbieranie materiału", "timeout_s": null, "warunek_pominiecia": "nigdy"},
+    {"id": "szkic", "nazwa": "Szkic odpowiedzi", "timeout_s": 180, "warunek_pominiecia": "brak modelu"},
+    {"id": "krytyka", "nazwa": "Krytyka", "timeout_s": 120, "warunek_pominiecia": "rozmowa bez materiału albo brak czasu"},
+    {"id": "poprawa", "nazwa": "Poprawa", "timeout_s": 120, "warunek_pominiecia": "brak uwag krytyki albo brak czasu"},
+    {"id": "sprawdzenie", "nazwa": "Sprawdzenie", "timeout_s": null, "warunek_pominiecia": "nigdy"}
+  ],
+  "opis": "Metadane faz Namysłu. Kolejność i nazwy są czytane przez namysl.py; wykonanie poszczególnych faz pozostaje w kodzie, bo każda robi inną rzecz. Nie usuwaj id faz."
+}

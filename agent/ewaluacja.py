@@ -37,6 +37,10 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+from env_loader import load_env
+
+load_env()
+
 ROOT = Path(__file__).resolve().parent.parent
 CASES_PATH = ROOT / "training" / "ewaluacja" / "regresja.jsonl"
 HISTORY_PATH = ROOT / "data" / "ewaluacja" / "historia.jsonl"
@@ -45,7 +49,8 @@ OFFLINE_TYPES = ("routing", "komenda", "bramka", "spoleczne", "slonce", "straz",
                  "audyt_1351", "lokalny_cache", "lokalny_budzet", "lokalny_styl", "lokalny_parametry", "lokalny_walidacja",
                  "lokalny_kolejka", "lokalny_retry", "lokalny_sesja", "lokalny_warmup",
                  "spoleczne_1380", "czas_1380", "plik_1380", "plik_upload_1381", "namysl_413_1382", "awaryjny_1382",
-                 "duplikat_1383", "prompt_ctx_1383", "notatki_1384", "normalizacja_1385", "dedup_1386", "namysl_once_1387")
+                 "duplikat_1383", "prompt_ctx_1383", "notatki_1384", "normalizacja_1385", "dedup_1386", "namysl_once_1387",
+                 "config_loader_1389", "config_files_1389", "config_export_1389")
 
 # 1.32.28 (audyt #1): pliki, których eval --zywo NIE MOŻE zmienić.
 _PRODUCTION_FILES = (
@@ -2192,6 +2197,104 @@ def _check_namysl_once_1387() -> tuple[bool, str]:
     return (not problems), "; ".join(problems) if problems else "jeden przebieg Namysłu na wiadomość"
 
 
+def _check_config_loader_1389() -> tuple[bool, str]:
+    """1.38.9: JSON + teksty z prompts/, fallback i hot-reload."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from config_loader import ConfigLoader
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-cfg-"))
+    (tmp / "prompts").mkdir(parents=True)
+    (tmp / "config").mkdir(parents=True)
+    p = tmp / "prompts" / "a.md"
+    c = tmp / "config" / "b.json"
+    p.write_text("A", encoding="utf-8")
+    c.write_text(json.dumps({"pole": {"x": 1}, "lista": [1, 2]}), encoding="utf-8")
+    try:
+        loader = ConfigLoader(tmp)
+        if loader.get("prompts.a") != "A":
+            problems.append("nie czyta prompts/a.md")
+        if loader.get("b.pole.x") != 1:
+            problems.append("nie czyta zagnieżdżonego JSON")
+        if loader.get("b.nie", "FB") != "FB":
+            problems.append("brak fallbacku dla brakującego pola")
+        if loader.get("prompts.nie", "FB") != "FB":
+            problems.append("brak fallbacku dla brakującego promptu")
+        p.write_text("B", encoding="utf-8")
+        changed = loader.reload_if_changed(force=True)
+        if "prompts/a.md" not in changed or loader.get("prompts.a") != "B":
+            problems.append(f"hot-reload nie zadziałał: {changed}")
+        c.write_text("{zly json", encoding="utf-8")
+        if loader.get("b.pole.x", 7) != 7:
+            problems.append("błąd JSON nie wraca do defaultu")
+        if loader.get("prompts.a") != "B":
+            problems.append("błąd jednego pliku psuje drugi")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "JSON, teksty, fallback i hot-reload OK"
+
+
+def _check_config_files_1389() -> tuple[bool, str]:
+    """1.38.9: pliki prompts/config są podpięte do działających ścieżek."""
+    import komendy as komendy_mod
+    import namysl as namysl_mod
+    import router as router_mod
+    import awareness as aw
+
+    problems: list[str] = []
+    required = [
+        "prompts/system_local.md", "prompts/system_cloud.md", "prompts/local_rules.md",
+        "prompts/kryzys.md", "prompts/persona.md",
+        "config/fastpaths.json", "config/social.json", "config/namysl.json",
+        "config/validation.json", "config/tools.json", "config/commands.json",
+    ]
+    for rel in required:
+        if not (ROOT / rel).is_file():
+            problems.append(f"brak {rel}")
+    system = aw.local_system("SYS")
+    for needle in ("116 123", "Moim twórcą", "NIE zgaduj"):
+        if needle not in system and needle not in aw._local_rules():
+            problems.append(f"brak „{needle}” w promptach")
+    if router_mod._social_reply("dzięki", {"tryb": "zawsze", "material_do_sieci": False}) != "Nie ma za co!":
+        problems.append("social.json nie działa dla dzięki")
+    if not (router_mod._time_answer("Która godzina?") or "").startswith("Jest "):
+        problems.append("fastpaths.json nie działa dla godziny")
+    if namysl_mod.FAZY != ("rozpoznanie", "zbieranie", "szkic", "krytyka", "poprawa", "sprawdzenie"):
+        problems.append(f"FAZY z configu: {namysl_mod.FAZY}")
+    if namysl_mod.FAZY_LABELS.get("zbieranie") != "Zbieranie materiału":
+        problems.append("etykiety faz nie pochodzą z configu")
+    if komendy_mod.KOMENDY.get("plan", ("",))[0] != "/plan cel":
+        problems.append("commands.json nie działa")
+    return (not problems), "; ".join(problems) if problems else "prompty i config podpięte"
+
+
+def _check_config_export_1389() -> tuple[bool, str]:
+    """1.38.9: tools.json i persona.md to aktualne snapshoty read-only."""
+    import eksport_config
+
+    problems: list[str] = []
+    tools_path = ROOT / "config" / "tools.json"
+    persona_path = ROOT / "prompts" / "persona.md"
+    try:
+        on_disk = json.loads(tools_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"tools.json: {type(e).__name__}: {e}"
+    if on_disk != eksport_config.tools_snapshot():
+        problems.append("config/tools.json nieaktualny wobec CAPABILITIES")
+    if not on_disk.get("_readonly"):
+        problems.append("tools.json bez _readonly")
+    try:
+        persona_disk = persona_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"persona.md: {type(e).__name__}: {e}"
+    if persona_disk != eksport_config.persona_export():
+        problems.append("prompts/persona.md nieaktualny wobec persona.py")
+    return (not problems), "; ".join(problems) if problems else "tools.json i persona.md aktualne"
+
+
 def _check_offline(case: dict) -> tuple[bool, str]:
     typ = case["typ"]
     if typ == "izolacja":
@@ -2254,6 +2357,12 @@ def _check_offline(case: dict) -> tuple[bool, str]:
         return _check_dedup_1386()
     if typ == "namysl_once_1387":
         return _check_namysl_once_1387()
+    if typ == "config_loader_1389":
+        return _check_config_loader_1389()
+    if typ == "config_files_1389":
+        return _check_config_files_1389()
+    if typ == "config_export_1389":
+        return _check_config_export_1389()
     if typ == "devtools":
         return _check_devtools()
     if typ == "routing":

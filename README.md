@@ -1,4 +1,4 @@
-# GREGAI 1.38.8
+# GREGAI 1.38.9
 
 Osobista inteligencja strategiczna jednej osoby. Rozmówca nazywa się **GREGAI**
 i mieszka na laptopie: zna Twoje notatki, pamięta to, co mu powiesz
@@ -40,11 +40,11 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.38.8 - wizualny lifting steppera Namysłu
-(więcej oddechu, łączniki faz, pulsujące podkreślenie aktywnej fazy,
-cyjanowe numery, mobilne 3+3, reduced-motion). Wcześniej 1.38.7 - Namysł
-raz na wiadomość i jeden odczyt pliku. Wcześniej 1.38.6 - deduplikacja
-`ctx.files` po rozwiązanej ścieżce.
+**`CHANGELOG.md`**. Najnowsze: 1.38.9 - konfiguracja AI w plikach:
+`prompts/*.md` i `config/*.json`, loader z hot-reloadem 5 s i fallbackiem
+do kodu; `tools.json`/`persona.md` to read-only snapshoty. Wcześniej
+1.38.8 - wizualny lifting steppera Namysłu. Wcześniej 1.38.7 - Namysł raz
+na wiadomość i jeden odczyt pliku.
 Wcześniej 1.37.0 - dopasowanie lokalnego 3B: stabilny cache promptu,
 budżety, walidacja odpowiedzi, kolejka i profil sesji.
 Wcześniej 1.36.0 - przygotowanie do publicznego repozytorium: `LICENSE` (MIT) z copyrightem "GREGAI contributors",

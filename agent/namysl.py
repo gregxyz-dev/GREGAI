@@ -119,6 +119,7 @@ from typing import Callable
 
 import analiza as analiza_mod
 _TERAZ_MARK = "## Teraz ("  # nagłówek bloku awareness.HEADER (bez importu: awareness ciągnie vault)
+import config_loader as config_mod
 import data as data_mod
 import fsutil
 import koryto as koryto_mod
@@ -128,7 +129,7 @@ import sources as sources_mod
 import symbols as symbols_mod
 import vault as vault_mod
 import slowa as slowa_mod
-from env_loader import env_float
+from env_loader import env_float, env_int
 
 STATE_PATH = Path(data_mod.PROJECT_ROOT) / "data" / "namysl.json"
 # 1.30.5 (zgłoszenie Grzegorza: "4 minuty a dalej nie mam odpowiedzi"): twardy
@@ -137,10 +138,14 @@ STATE_PATH = Path(data_mod.PROJECT_ROOT) / "data" / "namysl.json"
 # odpowiedź, tylko bez recenzji - zamiast czekać w nieskończoność. Trzymamy go
 # PONIŻEJ budżetu wiadomości (juggler, 210 s), żeby to Namysł grzecznie oddał
 # szkic, a nie twardy limit sieci uciął pół zdania. Kto chce dłużej: NAMYSL_TIME_BUDGET.
-TIME_BUDGET = env_float("NAMYSL_TIME_BUDGET", 150.0, 30.0, 7200.0)
+# 1.38.9: budżet i materiał z config/namysl.json; NAMYSL_TIME_BUDGET w .env
+# nadal ma pierwszeństwo (zgodność z dotychczasowymi instalacjami).
+TIME_BUDGET = env_float("NAMYSL_TIME_BUDGET",
+                        float(config_mod.get("namysl.czas_budzet_s", 150.0) or 150.0),
+                        30.0, 7200.0)
 
-FAZY = ("rozpoznanie", "zbieranie", "szkic", "krytyka", "poprawa", "sprawdzenie")
-FAZY_LABELS = {
+_DEFAULT_FAZY = ("rozpoznanie", "zbieranie", "szkic", "krytyka", "poprawa", "sprawdzenie")
+_DEFAULT_FAZY_LABELS = {
     "rozpoznanie": "Rozpoznanie",
     "zbieranie": "Zbieranie materiału",
     "szkic": "Szkic odpowiedzi",
@@ -148,6 +153,34 @@ FAZY_LABELS = {
     "poprawa": "Poprawa",
     "sprawdzenie": "Sprawdzenie",
 }
+
+
+def _load_phases():
+    """(FAZY, etykiety) z config/namysl.json, tylko gdy zestaw jest kompletny.
+
+    Kolejność i nazwy są konfigurowalne; usunięcie fazy jest odrzucane, bo
+    kod wykonuje sześć konkretnych kroków i UI musi dostać wszystkie.
+    """
+    raw = config_mod.get("namysl.fazy", []) or []
+    if not isinstance(raw, list):
+        return _DEFAULT_FAZY, dict(_DEFAULT_FAZY_LABELS)
+    ids = []
+    labels = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        fid = str(item.get("id") or "").strip()
+        if fid in _DEFAULT_FAZY and fid not in ids:
+            ids.append(fid)
+            name = str(item.get("nazwa") or "").strip()
+            if name:
+                labels[fid] = name
+    if set(ids) != set(_DEFAULT_FAZY):
+        return _DEFAULT_FAZY, dict(_DEFAULT_FAZY_LABELS)
+    return tuple(ids), {**_DEFAULT_FAZY_LABELS, **labels}
+
+
+FAZY, FAZY_LABELS = _load_phases()
 # 1.32.7 (decyzja Grzegorza): „Dokładne myślenie” to jedyny tryb GREGAI - bez „szybko” i bez
 # „sam decyduj”. Stary wpis w data/namysl.json („auto”, „wylaczony”) jest ignorowany.
 TRYBY = ("zawsze",)
@@ -157,9 +190,9 @@ TRYBY = ("zawsze",)
 # PRAKTYCZNIE działa dobrze do ok. 4-6 tys. tokenów, więc od 1.37.0 materiał
 # lokalny ma 5300 znaków (ok. 2000 tokenów), a cała wiadomość użytkownika
 # (materiał + ulotny blok „Teraz”) jest przycinana do LOCAL_USER_MAX_CHARS.
-MATERIAL_CHARS_LOCAL = 5_300
+MATERIAL_CHARS_LOCAL = max(1000, min(20000, int(config_mod.get("namysl.material_lokalny_znakow", 5300) or 5300)))
 MATERIAL_CHARS_CLOUD = 16_000
-LOCAL_USER_MAX_CHARS = 5_200  # ~2000 tokenów, ten sam przelicznik 2,7 znaku/token
+LOCAL_USER_MAX_CHARS = int(env_int("LOCAL_USER_MAX", 2000, 200, 8000) * 2.6)
 NOTE_EXCERPT_CHARS = 1_200
 MAX_NOTES = 5
 MAX_FILES = 4
@@ -981,6 +1014,14 @@ class _Models:
 def run(ctx: Context) -> dict | None:
     """Pełny Namysł. Zwraca {"speech", "card", "model_active", "provider"} albo
     None, gdy nie udało się napisać nawet szkicu (router idzie dawną drogą)."""
+    global FAZY, FAZY_LABELS, TIME_BUDGET, MATERIAL_CHARS_LOCAL
+    # 1.38.9: metadane faz mogą zmienić się w config/namysl.json bez restartu.
+    FAZY, FAZY_LABELS = _load_phases()
+    TIME_BUDGET = env_float("NAMYSL_TIME_BUDGET",
+                            float(config_mod.get("namysl.czas_budzet_s", 150.0) or 150.0),
+                            30.0, 7200.0)
+    MATERIAL_CHARS_LOCAL = max(1000, min(20000, int(config_mod.get("namysl.material_lokalny_znakow",
+                                                                   MATERIAL_CHARS_LOCAL) or MATERIAL_CHARS_LOCAL)))
     narr = Narrator(ctx.progress)
     models = _Models(ctx, narr)
     message = strip_prefix(ctx.message).strip() or ctx.message

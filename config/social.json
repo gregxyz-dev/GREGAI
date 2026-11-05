@@ -1,0 +1,15 @@
+{
+  "wersja": 1,
+  "dziekuje": [
+    "(?i)\\b(?:dzi[eę]k\\w*|dziek\\w*|thx|thanks|dzi[eę]ks|dzieks)\\b"
+  ],
+  "powitania": [
+    "(?i)^\\s*(?:hej(?:ka)?|cze[sś][cć]|witaj|witam|siema|elo|dzie[nń]\\s+dobry|dobry\\s+wiecz[oó]r)\\b"
+  ],
+  "akcje": [
+    "zr[oó]b", "usu[nń]", "zapami[eę]taj", "sprawd[zź]", "plan", "napisz",
+    "poka[zż]", "wyszukaj", "przeczytaj", "otw[oó]rz", "wy[lł][aą]cz",
+    "w[lł][aą]cz", "zainstaluj", "zrestartuj"
+  ],
+  "opis": "Wzorce odpowiedzi społecznych w router.route. Akcje są dokumentacyjnym snapshotem; właściwą decyzję podejmuje namysl.wants/_ACTION_WORD_RE."
+}

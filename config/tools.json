@@ -1,0 +1,253 @@
+{
+  "_readonly": true,
+  "zrodlo": "agent/capabilities.py",
+  "opis": "Snapshot trzonu narzędzi do UI//debug (bez dynamicznych SYSOP). Nie edytuj ręcznie.",
+  "tools": [
+    {
+      "key": "freeram",
+      "short": "tryb Freeram: zwolnij RAM (wyładuj model, zatrzymaj Ollamę), oddaj moc maszynie",
+      "prompt": "- **freeram**: tryb mocy, który użytkownik uruchamia sam, wpisując 'freeram' (wyładowuje duży model i zatrzymuje Ollamę, zabezpieczeń WARP i zapory nie rusza). Obsługuje go serwer: nie wywołujesz go sam i nie opisujesz jego działania z głowy.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A\\s*(?:tryb\\s+)?free[\\s-]?ram\\s*[.!]*\\s*\\Z"
+      ]
+    },
+    {
+      "key": "fullon",
+      "short": "tryb Fullon: pełna moc dla lokalnego AI (wczytaj i przypnij model w RAM)",
+      "prompt": "- **fullon**: tryb mocy, który użytkownik uruchamia sam, wpisując 'fullon' (startuje Ollamę, wczytuje i przypina duży model w RAM, rozgrzewa). Obsługuje go serwer: nie wywołujesz go sam i nie opisujesz jego działania z głowy.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A\\s*(?:tryb\\s+)?full[\\s-]?on\\s*[.!]*\\s*\\Z"
+      ]
+    },
+    {
+      "key": "gregaipanicmode",
+      "short": "panic mode: zablokuj dostęp z sieci (zapora + LAN) i wyłącz cały komputer",
+      "prompt": "- **gregaipanicmode**: awaryjna blokada, którą {UZYTKOWNIK} uruchamia sam, wpisując dosłownie 'gregaipanicmode' (najpierw cofa dostęp z sieci - zapora i tryb LAN, potem wyłącza CAŁY komputer, nie tylko GREGAI). Obsługuje go serwer: nie wywołujesz go sam, nie podsuwasz go jako sugestii (nawet żartem) i nie opisujesz jego działania z głowy.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A\\s*(?:tryb\\s+)?gregai[\\s-]?panic[\\s-]?mode\\s*[.!]*\\s*\\Z"
+      ]
+    },
+    {
+      "key": "run_eval",
+      "short": "uruchom lokalne testy regresji GREGAI",
+      "prompt": "- **run_eval**: uruchamia testy regresji GREGAI. Domyślnie szybkie, offline i bez zapisu historii; z parametrem --zywo korzysta z prawdziwych modeli i płatnych limitów Koryta. Tylko bezpośrednia prośba użytkownika, nie decyzja modelu.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A.*\\b(?:uruchom|zrób|odpal|przeprowadź|sprawdź)\\s+(?:mi\\s+)?(?:szybkie\\s+)?(?:testy|eval|ewaluacj\\w*)\\b"
+      ]
+    },
+    {
+      "key": "run_check",
+      "short": "uruchom check.sh bez zmian w systemie",
+      "prompt": "- **run_check**: uruchamia check.sh i pokazuje wynik kontroli. Skrypt nie zmienia systemu, ale pełny audyt wymaga sudo, którego przeglądarka nie ma. Tylko bezpośrednia prośba użytkownika.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A.*\\b(?:uruchom|zrób|odpal|sprawdź|wykonaj)\\s+(?:mi\\s+)?(?:check(?:\\.sh)?|kontrolę|kontrole)\\b"
+      ]
+    },
+    {
+      "key": "env_status",
+      "short": "stan venv, pakietów runtime i lokalnej Ollamy",
+      "prompt": "- **env_status**: pokazuje stan .venv, wersje pakietów runtime (httpx, huawei-lte-api) i lokalnej Ollamy. Tylko bezpośrednia prośba użytkownika.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A.*\\b(?:stan|status)\\s+(?:środowiska|venv|pakietów|zależności)\\b|\\bwersje\\s+pakietów\\b"
+      ]
+    },
+    {
+      "key": "service_status",
+      "short": "stan usługi gregai i ostatnie logi (tylko odczyt)",
+      "prompt": "- **service_status**: pokazuje stan usługi gregai, jej właściwości i ostatnie 30 linii dziennika. Tylko odczyt, bez restartu. Tylko bezpośrednia prośba użytkownika.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A.*\\b(?:status|stan)\\s+(?:usługi\\s+)?gregai\\b|\\Alogi\\s+(?:usługi\\s+)?gregai\\b"
+      ]
+    },
+    {
+      "key": "docs_check",
+      "short": "sprawdź spójność dokumentacji projektu",
+      "prompt": "- **docs_check**: porównuje wersję i liczbę kontroli w README, FUNDAMENT, CHANGELOG i check.sh oraz sprawdza odwołania do plików. Tylko bezpośrednia prośba użytkownika.",
+      "user_only": true,
+      "call": true,
+      "keywords": [
+        "\\A.*\\b(?:sprawdź|zweryfikuj)\\s+(?:spójność\\s+)?(?:dokumentacj\\w*|docs)\\b|\\brozbieżności\\s+w\\s+dokumentacji\\b"
+      ]
+    },
+    {
+      "key": "search_brain",
+      "short": "szukaj faktu w notatkach użytkownika (argument: czego szukać)",
+      "prompt": "- **search_brain**: konkretny fakt Z TREŚCI plików użytkownika (notatki, projekty, koncepcje, \"neuronki\"). Podaj nazwę pliku źródłowego (wszystkie, jeśli było kilka). Narzędzie domyślne: nazwa własna z plików użytkownika, nic innego nie pasuje -> to. Pytanie o sam GRAF (ile węzłów, typy, huby) -> graph_overview, nie to. Pytanie o wiedzę ZE ŚWIATA (nie z plików użytkownika) -> wiki_lookup, nie to.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\b(?:co|czy)\\s+mam\\s+(?:w\\s+)?(?:moich\\s+)?notatk\\w*\\s+(?:o|na\\s+temat)\\b|\\bpoka[zż]\\s+(?:mi\\s+)?(?:moje\\s+)?notatk\\w*\\s+(?:o|z|na\\s+temat)\\b|\\b(?:znajd[zź]|wyszukaj|poszukaj|szukaj|sprawd[zź])\\s+(?:mi\\s+)?(?:w|we)\\s+(?:moich\\s+)?notatk\\w*\\b|\\A\\s*(?:czy\\s+mam\\s+co[sś]|co\\s+mam)\\s+(?:o|na\\s+temat)\\s+(?!(?:tym|tej|tego|nim|niej|nich|sobie)\\b)|\\bw\\s+(?:której|jakiej)\\s+notatce\\b"
+      ]
+    },
+    {
+      "key": "graph_overview",
+      "short": "przegląd grafu notatek: liczby, typy, huby",
+      "prompt": "- **graph_overview**: przegląd CAŁEGO grafu notatek: ile węzłów, podział na typy (panel \"Filtry\" na http://localhost:7777) i najbardziej połączone węzły (panel \"Top huby\"). Pasuje do pytań O SAM GRAF/STRUKTURĘ, nie o pojedynczy fakt, np. \"ile masz notatek?\", \"jakie są najbardziej połączone węzły?\". To te same dane, co w przeglądarce - nie masz dostępu do niczego więcej.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\A(?=.*\\bw[eę]z[lł]\\w*\\b)(?=.*\\b(?:wyczyta\\w*|czyta\\w*|widzisz|masz|jest|poka\\w*)\\b)",
+        "\\bile\\s+(mam|masz|jest|macie)\\s+(notatek|w[eę]z[lł]\\w*)\\b",
+        "\\A(?=.*\\b(notatk\\w*|w[eę]z[lł]\\w*)\\b)(?=.*\\b(bez|nie\\s+maj[aą]|nie\\s+ma)\\s+(żadnych\\s+)?po[lł][aą]cze[nń]\\b)|\\bsamotn\\w*\\s+(w[eę]z[lł]\\w*|notatk\\w*)\\b",
+        "\\A(?=.*\\bjakie\\s+typy\\b)(?=.*\\b(?:notatk\\w*|w[eę]z[lł]\\w*|graf\\w*)\\b)",
+        "\\btop\\s*hub\\w*\\b|\\bnajbardziej\\s+po[lł][aą]czon\\w*\\b",
+        "\\bco\\s+(widzisz|masz)\\s+w\\s+(moim\\s+)?grafie\\b",
+        "\\bopowiedz\\s+o\\s+(moich\\s+)?w[eę]z[lł]ach\\b"
+      ]
+    },
+    {
+      "key": "research_web",
+      "short": "szukaj w internecie (argument: zapytanie)",
+      "prompt": "- **research_web**: sprawdź coś w internecie i odnieś wynik do konkretnych liczb/celów/sytuacji użytkownika, nie tylko surowy fakt.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bsprawd[zź]\\w*\\b.*\\bw\\s+(?:internecie|necie)\\b|\\bsprawd[zź]\\w*\\s+(?:mi\\s+)?w\\s+sieci\\b|\\bwyszukaj\\b(?!\\s+(?:mi\\s+)?(?:w|we|po|na)\\s+(?:moich\\s+|mojej\\s+|moim\\s+|tych\\s+|naszych\\s+)?(?:plik\\w*|notatk\\w*|katalog\\w*|folder\\w*|dysk\\w*|log\\w*|pami[eę]ci|graf\\w*|w[eę]z[lł]\\w*|wiedz\\w*|neuronk\\w*))"
+      ]
+    },
+    {
+      "key": "market_quote",
+      "short": "bieżący kurs jednego symbolu/tickera (argument: ticker, np. aapl.us)",
+      "prompt": "- **market_quote**: BIEŻĄCY kurs jednego tickera (np. aapl.us, ^spx, btcusd). \"jaki jest kurs X\". Metal, krypto albo indeks po nazwie (złoto, srebro, bitcoin) -> market_quote z tickerem (xauusd, xagusd, btcusd); research_web tylko, gdy nie da się wskazać instrumentu.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\A(?!.*\\b(?:daj\\s+zna[cć]|informuj\\s+mnie|powiadom\\s+mnie|ostrze[zż]\\s+mnie)\\b)(?=.*\\b(?:kurs\\w*|notowan\\w*|cen[aąeęy]|kosztuj\\w*)\\b)(?=.*(?:\\b[a-z]{1,6}\\.[a-z]{2,3}\\b|\\^[a-z]{2,6}\\b|\\b(?:ada|avalanche|avax|bitcoin|bitcoina|bitcoinem|bonk|bonka|btc|cardano|chainlink|doge|dogecoin|dot|eth|ethereum|link|litecoin|ltc|polkadot|ripple|sol|solana|solany|solaną|srebra|srebrem|srebro|xrp|zlota|zloto|złota|złoto)\\b))"
+      ]
+    },
+    {
+      "key": "wiki_lookup",
+      "short": "hasło z Wikipedii do banku wiedzy (argument: temat)",
+      "prompt": "- **wiki_lookup**: ENCYKLOPEDYCZNA wiedza o świecie (osoby, miejsca, pojęcia, wydarzenia), NIE z plików użytkownika. Pasuje do \"co to jest X\", \"kim był X\", \"sprawdź na Wikipedii X\". Różnica od search_brain: wiedza ZE ŚWIATA, nie z notatek użytkownika. Różnica od research_web: stabilne fakty encyklopedyczne, nie aktualności/ceny/\"co się teraz dzieje\" (to research_web). Znalezisko trafia do lokalnego banku wiedzy - następne pytanie o ten temat nie potrzebuje już internetu.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bwikipedi\\w*\\b|\\bencyklopedi\\w*\\b"
+      ]
+    },
+    {
+      "key": "weather",
+      "short": "pogoda i prognoza na dziś/jutro (argument: miasto, domyślnie z .env)",
+      "prompt": "- **weather**: aktualna pogoda i prognoza na dziś i jutro (temperatura, opady, wiatr, wschód i zachód słońca) z Open-Meteo. Dotyczy \"jaka jest pogoda\", \"czy będzie padać\", \"prognoza na jutro w Krakowie\". Nie zgaduj pogody z pamięci ani z linków.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\A[^.?!\\n]{0,40}\\bpogod(?:a|y|[eę]|zie|[aą]|owe\\w*)\\b|\\A[^.?!\\n]{0,40}\\bprognoz\\w*\\s+(?:pogody|na\\s+(?:dzi[sś]|jutro|weekend))\\b|\\A\\s*(?:czy|a\\s+czy)\\s+(?:dzi[sś]\\s+|jutro\\s+|dzisiaj\\s+)?(?:b[eę]dzie\\s+)?pada(?:[cć]|\\s+deszcz|\\s+[sś]nieg)?\\b|\\A\\s*(?:(?:czy|a\\s+czy)\\s+)?(?:(?:dzi[sś]|dzisiaj|jutro)\\s+)?b[eę]dzie\\s+(?:(?:dzi[sś]|dzisiaj|jutro)\\s+)?pada(?:[cć]|\\s+deszcz|\\s+[sś]nieg)?\\b|\\A\\s*(?:ile\\s+(?:jest\\s+)?stopni|jaka\\s+(?:jest\\s+)?temperatura)\\s+(?:na\\s+dworze|za\\s+oknem|w\\s+\\w+)"
+      ]
+    },
+    {
+      "key": "net_diagnose",
+      "short": "diagnoza dostępu GREGAI do internetu, warstwa po warstwie",
+      "prompt": "- **net_diagnose**: sprawdza, czy i dlaczego GREGAI ma albo nie ma internetu (WARP, tunel, DNS, wyszukiwarki, dostawcy AI) i mówi, co naprawić. Dotyczy \"czemu nie masz internetu?\", \"zdiagnozuj internet\", \"sprawdź połączenie z internetem\". To NIE jest stan sieci domowej (urządzenia, router) - to network_status.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bdiagnoz\\w*\\s+(?:dost[eę]pu\\s+do\\s+)?(?:internet\\w*|po[lł][aą]czeni\\w*|warp)\\b|\\bzdiagnozuj\\b|\\b(?:czemu|dlaczego)\\s+(?:nie\\s+masz|nie\\s+dzia[lł]a\\s+ci|nie\\s+dzia[lł]a|tracisz)\\s+(?:dost[eę]pu\\s+do\\s+)?internet\\w*|\\A\\W*sprawd[zź]\\s+(?:mi\\s+|swoje\\s+)?(?:po[lł][aą]czenie\\s+z\\s+internetem|dost[eę]p\\s+do\\s+internetu|internet)\\W*\\Z|\\bczy\\s+masz\\s+(?:teraz\\s+)?(?:dost[eę]p\\s+do\\s+)?internet\\w*\\b|\\A\\W*(?:jak\\s+to|przecie[zż])\\s+nie\\s+masz\\s+(?:dost[eę]pu\\s+do\\s+)?internet\\w*"
+      ]
+    },
+    {
+      "key": "self_model",
+      "short": "kim jest GREGAI i z jakich modeli korzysta",
+      "prompt": "- **self_model**: kim jest GREGAI, kto go stworzył i z jakich modeli korzysta. Dotyczy \"z jakiego modelu korzystasz?\", \"na jakim modelu działasz?\", \"czym jesteś?\", \"kto cię napisał?\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\A(?=.*\\b(?:jeste[sś]|ty|ci[eę]|ciebie|tob\\w*|tw[oó]j\\w*|u[zż]ywasz|korzystasz|dzia[lł]asz|nap[eę]dza\\w*)\\b)(?=.*(?:\\b(?:z\\s+jakiego|jakiego|na\\s+jakim|jakim|kt[oó]rego|kt[oó]rym)\\s+(?:modelu|modelem|llm\\w*|ai)\\b|\\bjaki(?:m)?\\s+(?:jeste[sś]\\s+)?model(?:em)?\\b))|\\b(?:czym|kim)\\s+(?:ty\\s+)?jeste[sś]\\b|\\bkto\\s+(?:ci[eę]|tobie)\\s+(?:stworzy|napisa|zrobi|zaprogramowa|wytrenowa|zbudowa)\\w*|\\bkto\\s+(?:jest\\s+)?tw(?:oim|[oó]j)\\s+(?:tw[oó]rc|autor)\\w*"
+      ]
+    },
+    {
+      "key": "self_status",
+      "short": "czego GREGAI się nauczył",
+      "prompt": "- **self_status**: co GREGAI SAM się do tej pory nauczył (nowe komendy, słowa do dopytań, bank wiedzy z Wikipedii) i jaka część rozmów nie potrzebowała już modelu. Dotyczy \"czego się nauczyłeś?\", \"jak Ci idzie samouczenie?\" (o Twoim rozwoju/nauce, nie sieci domowej czy projektach użytkownika).",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\b(czego|co)\\s+si[eę]\\s+nauczy[lł]e?ś\\b|\\A\\s*(?:jak\\s+si[eę]\\s+(?:czujesz|masz)|jaki\\s+(?:jest\\s+)?tw[oó]j\\s+stan|co\\s+(?:ostatnio\\s+)?robi[lł]e?ś)\\s*[?!.]*\\s*\\Z|\\bco\\s+(teraz\\s+)?umiesz(\\s*,?\\s*czego\\s+nie\\s+umia[lł]e?ś)?\\b|\\bco\\s+nowego\\s+(umiesz|potrafisz)\\b|\\bjak\\s+ci\\s+idzie\\s+samoucz\\w*\\b|\\bile\\s+si[eę]\\s+(już\\s+)?nauczy[lł]e?ś\\b|\\bczy\\s+się\\s+(czegoś\\s+)?nauczy[lł]e?ś\\b"
+      ]
+    },
+    {
+      "key": "brief_me",
+      "short": "brief: najważniejsze węzły notatek i alerty sieci domowej",
+      "prompt": "- **brief_me**: krótkie podsumowanie: najważniejsze węzły w notatkach i alerty sieci domowej. Kalendarza ani poczty NIE czyta. Dotyczy KAŻDEGO pytania o to, co nowego/ważnego się dzieje, np. \"co nowego?\", \"zrób mi brief\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bbrief\\b|\\A\\s*(?:no\\s+(?:to\\s+)?|i\\s+)?co\\s+(?:nowego|wa[zż]nego|si[eę]\\s+zmieni[lł]o)(?:\\s+(?:u\\s+mnie|dzi[sś]|dzisiaj|wa[zż]nego|ostatnio|w\\s+(?:moich\\s+)?notatkach))*\\s*[?!.]*\\s*\\Z|\\A\\s*co\\s+(?:mam|jest)\\s+(?:dzi[sś]|dzisiaj|jutro)?\\s*w\\s+kalendarzu\\s*[?!.]*\\s*\\Z|\\A\\s*(?:jakie|czy)\\s+mam\\s+nieprzeczytan\\w*\\s+(?:wiadomo[sś]ci|maile?)\\s*[?!.]*\\s*\\Z|\\bwymaga\\w*\\s+(mojej\\s+)?uwagi\\b"
+      ]
+    },
+    {
+      "key": "remember",
+      "short": "zapisz jeden fakt do pamięci (argument: treść faktu)",
+      "prompt": "- **remember**: jeden fakt, jeden opatrzony datą plik w memory/. Zawsze powiedz na głos dokładnie to, co zapisałeś. Pasuje do \"zapamiętaj: ...\", \"zapisz sobie, że ...\", \"nie zapomnij, że ...\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bzapami[eę]taj\\b|\\bzapisz\\s+sobie\\b|\\bnie\\s+zapomnij\\b"
+      ]
+    },
+    {
+      "key": "plan_day",
+      "short": "plan dnia z notatek użytkownika",
+      "prompt": "- **plan_day**: maksymalnie pięć elementów bazy, uporządkowanych wg tego, co najważniejsze strategicznie i finansowo. WYŁĄCZNIE z notatek użytkownika i z tego, co sam powiedział w rozmowie, nigdy nie zmyślaj punktów planu. Dotyczy KAŻDEGO pytania o to, co dziś/dzisiaj robić, np. \"plan na dziś?\", \"co mam dzisiaj do zrobienia?\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bplan\\s+na\\s+dzi[sś]\\b|\\bplan\\s+na\\s+dzie[nń]\\b|\\bplan\\s+dnia\\b|\\bzaplanuj\\s+(mi\\s+)?dzie[nń]\\b|\\A(?=.*\\bdzi[sś](?:iaj)?\\b)(?=.*\\b(?:zrobieni\\w*|priorytet\\w*)\\b)|\\A(?=.*\\bdzi[sś](?:iaj)?\\b)(?=.*\\bzrobi[cć]\\w*\\b)(?=.*\\b(?:mam|musz[eę]|trzeba|powinien\\w*|powinnam)\\b)|\\A(?=.*\\bdzi[sś](?:iaj)?\\b)(?=.*\\b(?:naj)?wa[zż]niejsz\\w*\\b)(?=.*\\b(?:mam|moje|m[oó]j|moim|dla\\s+mnie)\\b)(?!.*\\b(?:wiadomo[sś]\\w*|news\\w*|informacj\\w*\\s+ze\\s+[sś]wiata)\\b)"
+      ]
+    },
+    {
+      "key": "network_status",
+      "short": "stan sieci domowej: urządzenia, router, sygnał, dane",
+      "prompt": "- **network_status**: PEŁNY stan sieci domowej: (1) urządzenia TERAZ podłączone vs. znane-ale-offline (IP/MAC/nazwa/producent); (2) alerty: nowe urządzenie albo powrót po nieobecności; (3) router: sygnał, operator, typ (LTE/5G), dane w TYM MIESIĄCU, SSID, model, bateria. Dotyczy KAŻDEGO pytania o sieć/Wi-Fi/router/urządzenia, np. \"stan sieci?\". To NIE search_brain: sieć to nie notatka w plikach. \"Sieć\" może też znaczyć GRAF notatek (np. \"co się z czym łączy\") - dwuznaczność z graph_overview, dopytaj.",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bjakie\\s+urz[aą]dzenia\\b(?=.*\\b(?:sieci|wifi|wi[- ]?fi|pod[lł][aą]czon\\w*|router\\w*|w\\s+domu)\\b)|\\bkto jest w sieci\\b|\\b(stan|status)\\s+siec\\w*\\b|\\bsie[cć]\\w*\\s+domow\\w*\\b|\\bco (siedzi|wisi) w sieci\\b|\\A(?=.*\\b(?:ile|zu[zż]ycie|zu[zż]y[lł]\\w*)\\b)(?=.*\\b(?:danych|internetu|transferu|gb)\\b)(?=.*\\b(?:mam|mi|zosta[lł]o|zu[zż]y[lł]\\w*|zu[zż]ycie|w\\s+tym\\s+miesi[aą]cu|pakiet\\w*)\\b)(?!.*\\b(?:kosztuj\\w*|cena|cen[yaę]|abonament\\w*|potrzeba|potrzebuj\\w*)\\b)|\\blimit\\s+danych\\b|\\A\\s*jaki\\s+(?:mam\\s+)?(?:teraz\\s+)?(?:zasi[eę]g|sygna[lł]\\w*)\\s*[?!.]*\\s*\\Z|\\A(?=.*\\b(?:zasi[eę]g\\w*|sygna[lł]\\w*)\\b)(?=.*\\b(?:rout\\w*|sie[cć]\\w*|wifi|wi[- ]?fi|telefon\\w*|operator\\w*|4g|5g|lte|internet\\w*)\\b)|\\bnazwa\\s+(mojego\\s+)?wi[- ]?fi\\b|\\bssid\\b|\\A(?=.*\\b(?:4g|5g|lte)\\b)(?=.*\\b(?:mam|m[oó]j|moim|router\\w*|sygna[lł]\\w*|zasi[eę]g\\w*|[lł][aą]czy\\s+si[eę]|po[lł][aą]czeni\\w*)\\b)(?!.*\\b(?:iphone\\w*|samsung\\w*|galaxy|xiaomi|pixel|telefon\\s+ma|obs[lł]uguje|ma\\s+(?:4g|5g|lte))\\b)|\\bjaki\\s+mam\\s+internet\\b|\\bbateria\\w*\\s+(w\\s+)?router\\w*\\b|\\bstatus\\s+routera\\b|\\A(?=.*\\bpod[łl][aą]czy\\w*\\b)(?=.*\\b(?:sieci?|wifi|wi[- ]?fi|rout\\w*)\\b)"
+      ]
+    },
+    {
+      "key": "standing_task_new",
+      "short": "nowe zadanie stałe: pilnuj czegoś w tle i daj znać, gdy się wydarzy (argument: całe polecenie)",
+      "prompt": "- **standing_task_new**: NOWE zadanie W TLE (nie jednorazowe pytanie) - czasowniki śledź/pilnuj/monitoruj/informuj mnie w sensie CIĄGŁYM (\"cały czas\", \"i daj znać, gdy...\"), nie \"sprawdź teraz\". Argument: CAŁA treść polecenia, dosłownie, nigdy skrócona. Pasuje do: \"śledź giełdę i daj znać kiedy wchodzić\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\A(?=.*\\b(?:[sś]led(?:[zź]|[zź]cie|zi[cć]|zi[lł]\\w*)|(?:pilnuj|monitoruj|informuj)(?:cie|esz)?)\\b)(?=.*\\b(?:ca[lł]y\\s+czas|na\\s+bie[zż][aą]co|ci[aą]gle|stale)\\b)|\\A(?=.*\\b(?:daj\\s+zna[cć]|informuj\\s+mnie|powiadom\\s+mnie|ostrze[zż]\\s+mnie)\\s*,?\\s*(?:gdy|kiedy|jak|je[sś]li|je[zż]eli)\\b)(?=.*\\b(?:[sś]led[zź]\\w*|pilnuj\\w*|monitoruj\\w*|kurs\\w*|cen[aęy]\\w*|spadnie|wzro[sś]nie|przekroczy|poni[zż]ej|powy[zż]ej|pojawi\\s+si[eę]|zmieni\\s+si[eę])\\b)|\\binformuj\\s+mnie\\s+(?:na\\s+bie[zż][aą]co\\s+)?o\\b"
+      ]
+    },
+    {
+      "key": "standing_task_list",
+      "short": "lista zadań stałych, które GREGAI teraz pilnuje w tle",
+      "prompt": "- **standing_task_list**: jakie zadania stałe teraz pilnujesz. \"co teraz śledzisz?\", \"co pilnujesz w tle?\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bco\\s+(?:teraz\\s+)?[sś]ledzisz\\b|\\bco\\s+(?:teraz\\s+)?pilnujesz\\b|\\bjakie\\s+(?:masz\\s+)?zadania\\s+sta[lł]e\\b"
+      ]
+    },
+    {
+      "key": "standing_task_stop",
+      "short": "zatrzymaj zadanie stałe (argument: którego dotyczyło, jeśli jest ich kilka)",
+      "prompt": "- **standing_task_stop**: zatrzymanie zadania stałego. Argument: czego dotyczyło (do dopasowania, gdy jest ich kilka). \"przestań śledzić giełdę\".",
+      "user_only": false,
+      "call": true,
+      "keywords": [
+        "\\bprzesta[nń]\\s+(?:[sś]ledzi[cć]|pilnowa[cć]|monitorowa[cć])\\b|\\bzatrzymaj\\s+(?:to\\s+)?zadanie\\b|\\bkoniec\\s+z\\s+pilnowaniem\\b|\\bwy[lł][aą]cz\\s+zadanie\\s+sta[lł]e\\b"
+      ]
+    }
+  ]
+}

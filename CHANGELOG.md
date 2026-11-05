@@ -2,6 +2,48 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.38.9
+
+Konfiguracja warstwy AI wychodzi z kodu do plików. Powłoka (API, UI,
+systemd, WARP, nftables, `install.sh`, `check.sh`) zostaje bez zmian.
+
+**Nowe katalogi.**
+- `prompts/system_local.md` - szablon systemu lokalnego z placeholderami
+  `{PERSONA}`, `{LOCAL_RULES}`, `{CRISIS}`, `{PROJECT}`,
+- `prompts/system_cloud.md` - opcjonalny szablon chmury (`{SYSTEM}`; domyślnie
+  wynik jest identyczny z dotychczasowym),
+- `prompts/local_rules.md` - 8 zasad 3B (placeholdery twórcy/użytkownika
+  zachowują dynamikę `persona.py`),
+- `prompts/kryzys.md` - sekcja Kryzys,
+- `prompts/persona.md` - read-only eksport `_STUDENT_PROMPT`,
+- `config/fastpaths.json` - wzorce zegara/daty i snapshot intencji narzędzi,
+- `config/social.json` - podziękowania, powitania, akcje,
+- `config/namysl.json` - metadane 6 faz, budżet czasu, limit materiału,
+- `config/validation.json` - progi i akcje walidacji odpowiedzi lokalnej,
+- `config/tools.json` - read-only snapshot CAPABILITIES,
+- `config/commands.json` - metadane komend i aliasów.
+
+**`agent/config_loader.py`.** Czyta JSON i Markdown, cache po `mtime`,
+watcher co 5 s, log `Przeładowano: ...`, fallback do wartości z kodu przy
+braku pliku albo złym JSON. Start watchera w `main()`.
+
+**Podpięcia.** `awareness.local_system/_local_rules/_local_crisis` czytają
+prompty; `router._time_answer/_social_reply` czytają fastpaths/social;
+`router._validate_local_response` czyta progi i akcje; `namysl` bierze
+etykiety/limit materiału/budżet z JSON; `komendy.parse/help_text/api_list`
+czytają commands.json na bieżąco. `LOCAL_*` w `.env.example` to aliasy na
+`OLLAMA_*`; OLLAMA_* pozostaje źródłem prawdy.
+
+**Świadome granice.** Wykonanie sześciu faz Namysłu zostaje w kodzie (każda
+faza robi inną rzecz); JSON konfiguruje metadane. `tools.json` i
+`persona.md` są snapshotami read-only - źródłem prawdy pozostają
+`capabilities.py` i `persona.py`. `check.sh` nietknięty.
+
+**Weryfikacja.** Nowe przypadki `gregai eval`: loader (JSON, teksty,
+fallback, hot-reload, zły JSON), podpięcie promptów/configu oraz zgodność
+snapshotów tools/persona. Szybki eval 92/92. `bash wydaj.sh` na czystym
+rozpakowaniu.
+
 ## Co nowego w 1.38.8
 
 Wizualny lifting steppera Namysłu. Wyłącznie CSS (`ui/crack.css` + wpis
