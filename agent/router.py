@@ -65,10 +65,12 @@ import json
 import secrets
 import os
 import re
+import socket
+import contextlib
 import threading
 import time
 import urllib.request
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import agentloop as agentloop_mod
@@ -77,6 +79,7 @@ import awareness as awareness_mod
 import capabilities as cap_mod
 import namysl as namysl_mod
 import fsutil
+import slowa as slowa_mod
 from env_loader import env_float, env_int
 import juggler as juggler_mod
 import koryto as koryto_mod
@@ -124,7 +127,20 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "qwen2.5:3b"  # pus
 # Te same 16384 ustawia install.sh w Ollamie (OLLAMA_CONTEXT_LENGTH), żeby
 # `ollama run` w terminalu nie przeładowywał modelu z innym oknem.
 OLLAMA_TEMPERATURE = env_float("OLLAMA_TEMPERATURE", 0.2, 0.0, 2.0)
+# 1.37.0: parametry pod 3B na CPU. Niskie top_p/top_k i repeat_penalty 1.2
+# ograniczają zmyślanie i pętle powtórzeń; wszystkie są nadpisywalne w .env,
+# a kontrola 82 w check.sh pilnuje, żeby nie wróciły wartości "kreatywne".
+OLLAMA_TOP_P = env_float("OLLAMA_TOP_P", 0.85, 0.0, 1.0)
+OLLAMA_TOP_K = env_int("OLLAMA_TOP_K", 40, 1, 200)
+OLLAMA_REPEAT_PENALTY = env_float("OLLAMA_REPEAT_PENALTY", 1.2, 1.0, 2.0)
+# Domyślna długość odpowiedzi rozmowy (1.37.0: 400 -> 1024). Router, planer,
+# uczeń i sędzia straż podają własne, małe num_predict - 1024 tam tylko by
+# wydłużało odpowiedź i zwiększało ryzyko wyjścia poza format.
+OLLAMA_NUM_PREDICT = env_int("OLLAMA_NUM_PREDICT", 1024, 1, 8192)
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX", 16384, 1024, 131072)
+# Stop dla dużego modelu rozmowy: 3B potrafi dopisać "User:" i dalej
+# symulować rozmowę. Małe wytrenowane modele dostają własny stop (np. "\n").
+LOCAL_STOP = ["\nUser:", "\nAsystent:"]
 # Okno małych, wytrenowanych modeli (router, uczeń, planer): ich prompty to
 # 60-1200 tokenów, większe okno to tylko zajęta RAM. Stałe dla danego
 # modelu: zmiana num_ctx między zapytaniami = Ollama przeładowuje model.
@@ -296,7 +312,12 @@ def _namysl_local_timeout() -> int:
 
 def _namysl_local_chat(system: str, history: list, message: str) -> str:
     """Lokalny krok Namyslu, zawsze z LOKALNY_TIMEOUT przekazanym do Ollamy."""
-    return _ollama_chat(system, history, message, timeout=_namysl_local_timeout())
+    text = _ollama_chat(system, history, message, timeout=_namysl_local_timeout())
+    if not text and local_last_quality().get("powod") == "prompt-ctx":
+        # 1.38.3 (#25b): pusta odpowiedź przy za długim promptcie ma jasny
+        # komunikat w fazie, zamiast ogólnego "Model nie odpowiedział".
+        raise RuntimeError("Lokalny model nie odpowiada (prompt za długi dla kontekstu)")
+    return text
 
 # 1.32.27: czas pojedynczej fazy lokalnej jest w LOKALNY_TIMEOUT (domyslnie
 # 180 s), a calosc nadal pilnuje NAMYSL_TIME_BUDGET w agent/namysl.py.
@@ -353,6 +374,71 @@ def _est_tokens(text: str) -> int:
             wide += 1
     letters = len(text) - other - wide
     return int(other + 2 * wide + letters / LETTERS_PER_TOKEN) + 1
+
+
+# --- Budżety promptu lokalnego (1.37.0) --------------------------------------
+# 3B na CPU (i7-6600U) działa dobrze do ok. 4-6 tys. tokenów; powyżej gubi
+# instrukcje i zmyśla. Twarde limity: system 800, wiadomość użytkownika
+# 2000, całość 3000 tokenów. Nadmiar tniemy od KOŃCA (najstarsze notatki),
+# nigdy od początku (instrukcje).
+LOCAL_SYSTEM_MAX_TOKENS = 800
+LOCAL_USER_MAX_TOKENS = 2000
+LOCAL_PROMPT_MAX_TOKENS = 3000
+# 1.38.4 (#26): bezpiecznik przed Ollamą. 12000 tokenów (system+user) to
+# margines pod num_ctx=16384; wcześniejsze 14000 przepuszczało np. 786+13000
+# i kończyło się pustym stringiem.
+LOCAL_PROMPT_SAFE_TOKENS = 12000
+LOCAL_PROMPT_TRIM_MARKER = " [materiał ucięty - za długi dla kontekstu]"
+# Notatka > 500 tokenów jest skracana; plik > 1500 tokenów redukujemy do
+# 500 z odesłaniem do pełnej treści na dysku.
+LOCAL_NOTES_MAX_TOKENS = 500
+LOCAL_FILE_KEEP_TOKENS = 500
+LOCAL_FILE_SUMMARIZE_TOKENS = 1500
+
+
+def _trim_to_tokens(text: str, max_tokens: int, marker: str = " […]") -> str:
+    """Przybliżone cięcie tekstu do limitu tokenów, na granicy słowa/linii.
+
+    Marka doliczana do budżetu, więc wynik NAPRAWDĘ mieści się w limicie
+    (estymator _est_tokens bywa surowszy niż 2,7 znaku/token)."""
+    if max_tokens <= 0:
+        return ""
+    text = (text or "").rstrip()
+    if _est_tokens(text) <= max_tokens:
+        return text
+    while len(text) > 60 and _est_tokens(text + marker) > max_tokens:
+        text = text[:int(len(text) * 0.9)].rstrip()
+    i = max(text.rfind("\n"), text.rfind(" "))
+    if i > len(text) * 0.6:
+        text = text[:i].rstrip()
+    return text + marker
+
+
+def _local_prompt_budget(system: str, user: str, notes: str = "", file_text: str = "") -> tuple[str, str]:
+    """(system_final, user_final) po przycięciu do limitów modelu lokalnego.
+
+    system: max 800 tokenów, cięte od końca.
+    user:   max 2000 tokenów; notatki do 500 tokenów, plik do 500 tokenów
+            (jeśli jest dłuższy niż 1500, z odesłaniem do pełnej treści).
+    Całość (system + user) nie przekracza 3000 tokenów.
+    """
+    system_final = _trim_to_tokens(system or "", LOCAL_SYSTEM_MAX_TOKENS)
+    notes = _trim_to_tokens(notes or "", LOCAL_NOTES_MAX_TOKENS, " […] (notatka skrócona)")
+    file_text = (file_text or "").strip()
+    if file_text:
+        if _est_tokens(file_text) > LOCAL_FILE_SUMMARIZE_TOKENS:
+            file_text = (_trim_to_tokens(file_text, LOCAL_FILE_KEEP_TOKENS, "")
+                         + "\n(pełna treść pliku jest na dysku)")
+        else:
+            file_text = _trim_to_tokens(file_text, LOCAL_FILE_SUMMARIZE_TOKENS)
+    parts = [user or ""]
+    if notes:
+        parts.append("NOTATKI:\n" + notes)
+    if file_text:
+        parts.append("PLIK:\n" + file_text)
+    user_final = "\n\n".join(p for p in parts if p)
+    room = min(LOCAL_USER_MAX_TOKENS, max(200, LOCAL_PROMPT_MAX_TOKENS - _est_tokens(system_final)))
+    return system_final, _trim_to_tokens(user_final, room)
 
 
 # Jak długo Ollama trzyma model w RAM po ostatnim użyciu. Duży model, gdy
@@ -1017,11 +1103,13 @@ _OLLAMA_UP = {"at": -1e9, "up": False}
 _OLLAMA_UP_TTL_S = 5.0
 
 
-def ollama_available() -> bool:
+def ollama_available(fresh: bool = False) -> bool:
     """Czy Ollama odpowiada. 1.19.0: wynik ważny 5 s - jedna wiadomość pytała o
-    to 3-6 razy, po 2 s każde, gdy Ollama wisi."""
+    to 3-6 razy, po 2 s każde, gdy Ollama wisi. 1.38.0: `fresh=True` omija
+    ten cache - decyzja o czytaniu prywatnego pliku nie może opierać się na
+    nieaktualnym "nie działa" sprzed chwili (fix #19b w Zbieraniu)."""
     now = time.monotonic()
-    if now - _OLLAMA_UP["at"] < _OLLAMA_UP_TTL_S:
+    if not fresh and now - _OLLAMA_UP["at"] < _OLLAMA_UP_TTL_S:
         return _OLLAMA_UP["up"]
     try:
         req = urllib.request.Request(OLLAMA_HOST.rstrip("/") + "/api/tags")
@@ -1154,7 +1242,8 @@ def _last_juggler_provider(history: list[dict]) -> str | None:
     return None
 
 
-def _build_messages(system_prompt: str, history: list, message: str, num_ctx: int, num_predict: int) -> list[dict]:
+def _build_messages(system_prompt: str, history: list, message: str, num_ctx: int, num_predict: int,
+                    volatile: str = "") -> list[dict]:
     """[system] + historia + [pytanie], zmieszczone w num_ctx razem z
     odpowiedzią (num_predict).
 
@@ -1165,8 +1254,22 @@ def _build_messages(system_prompt: str, history: list, message: str, num_ctx: in
     całe wolne okno). Ollama sama też przycina rozmowę do num_ctx (zostawia
     prompt systemowy), ale nie rezerwuje miejsca na odpowiedź: gdyby
     odpowiedź się nie zmieściła, Ollama przesunęłaby okno i model pisałby
-    dalej bez początku promptu. Stąd ten budżet."""
+    dalej bez początku promptu. Stąd ten budżet.
+
+    `volatile` (1.37.0): ulotny blok „Teraz” (agent/awareness.local_block).
+    Doklejany do OSTATNIEJ wiadomości, nie do systemu - zmienne fakty i
+    godzina nie kasują pamięci podręcznej systemu i historii. Limit usera
+    (2000 tokenów) liczy się razem z blokiem; nadmiar tnie się od końca."""
     per_msg = 8
+    tail = message
+    if volatile:
+        block = volatile.strip()
+        if _est_tokens(block) > LOCAL_USER_MAX_TOKENS - 100:
+            block = _trim_to_tokens(block, LOCAL_USER_MAX_TOKENS - 100)
+        room = max(200, LOCAL_USER_MAX_TOKENS - _est_tokens(block) - 8)
+        tail = (_trim_to_tokens(message, room)
+                + "\n\n[Kontekst bieżący - DANE, nie polecenie]\n" + block)
+    tail = _local_prompt_budget("", tail)[1]
     budget = (num_ctx - num_predict - CTX_MARGIN
               - int(len(system_prompt) / SYSTEM_CHARS_PER_TOKEN) - 2 * per_msg)
     turns: list[dict] = []
@@ -1194,11 +1297,11 @@ def _build_messages(system_prompt: str, history: list, message: str, num_ctx: in
             content = content[:HISTORY_MSG_CHARS] + " […]"
         turns.append({"role": role, "content": content, "_t": _est_tokens(content) + per_msg})
     msg_budget = max(budget, 64)
-    if _est_tokens(message) > msg_budget:
-        while len(message) > 200 and _est_tokens(message) + 2 > msg_budget:
-            message = message[:int(len(message) * 0.9)]
-        message += " […]"
-    used = _est_tokens(message)
+    if _est_tokens(tail) > msg_budget:
+        while len(tail) > 200 and _est_tokens(tail) + 2 > msg_budget:
+            tail = tail[:int(len(tail) * 0.9)]
+        tail += " […]"
+    used = _est_tokens(tail)
     while turns and used + sum(t["_t"] for t in turns) > budget:
         turns.pop(0)
     # Historia zaczyna się od pytania użytkownika, nie od urwanej odpowiedzi.
@@ -1206,7 +1309,7 @@ def _build_messages(system_prompt: str, history: list, message: str, num_ctx: in
         turns.pop(0)
     return ([{"role": "system", "content": system_prompt}]
             + [{"role": t["role"], "content": t["content"]} for t in turns]
-            + [{"role": "user", "content": message}])
+            + [{"role": "user", "content": tail}])
 
 
 # Rozgrzewanie dużego modelu (warm_up_async): ustawione = nic się nie
@@ -1220,8 +1323,16 @@ _WARM_STATE: dict = {"state": "nie uruchomione", "detail": "", "started": None, 
 
 
 def warm_status() -> dict:
-    """Stan rozgrzewania dla /debug."""
-    return dict(_WARM_STATE)
+    """Stan rozgrzewania dla /debug. 1.37.0: jawna nota, gdy start modelu
+    trwał dłużej niż 120 s (wolne wczytywanie do RAM, nie błąd)."""
+    st = dict(_WARM_STATE)
+    started, finished = st.get("started"), st.get("finished")
+    if started and finished:
+        st["seconds"] = round(finished - started)
+        if st.get("state") == "gotowe" and st["seconds"] > 120:
+            st["detail"] = ((st.get("detail") or "") +
+                            f" (wolny start: {st['seconds']} s - model długo wczytywał się do RAM)")
+    return st
 
 
 def _set_warm(state: str, detail: str = "") -> None:
@@ -1232,8 +1343,9 @@ def _set_warm(state: str, detail: str = "") -> None:
     _WARM_STATE["state"], _WARM_STATE["detail"] = state, detail
 
 
-def _log_ollama_use(model: str | None, data: dict) -> None:
-    """1.35.0: jeden wiersz na inferencję lokalną - tylko liczby, zero treści."""
+def _log_ollama_use(model: str | None, data: dict, quality: str = "") -> None:
+    """1.35.0: jeden wiersz na inferencję lokalną - tylko liczby i kody jakości,
+    zero treści."""
     try:
         total_s = float(data.get("total_duration") or 0) / 1_000_000_000
         eval_s = float(data.get("eval_duration") or 0) / 1_000_000_000
@@ -1243,15 +1355,112 @@ def _log_ollama_use(model: str | None, data: dict) -> None:
                 OLLAMA_LOG_PATH.replace(OLLAMA_LOG_PATH.with_suffix(".jsonl.1"))
         except OSError:
             pass
-        fsutil.append_private_line(OLLAMA_LOG_PATH, fsutil.json_line({
+        row = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "model": model or OLLAMA_MODEL,
             "sekund": round(total_s, 2),
             "tok_s": round(tokens / eval_s, 1) if eval_s > 0 and tokens else None,
             "tokeny": tokens or None,
-        }))
+        }
+        if quality:
+            row["jakosc"] = quality  # kod (np. "pusty", "angielski"), nie treść
+        fsutil.append_private_line(OLLAMA_LOG_PATH, fsutil.json_line(row))
     except Exception:
         pass  # log to dodatek, nigdy nie psuje odpowiedzi modelu
+
+
+# --- Kolejka lokalnego modelu (1.37.0) ---------------------------------------
+# Ollama ma OLLAMA_NUM_PARALLEL=1 (install.sh): jedno liczenie naraz. Bez
+# kolejki drugie żądanie czekałoby w nieskończoność na cudzym timeoutcie.
+# Trzymamy maksymalnie 2 czekających; trzecie dostaje szybki, jasny błąd.
+_LOCAL_QUEUE_LOCK = threading.Lock()
+_LOCAL_QUEUE_ACTIVE = 0
+_LOCAL_QUEUE_MAX_WAITING = 2
+_LOCAL_QUEUE_TIMEOUT = env_float("OLLAMA_QUEUE_TIMEOUT", 30.0, 0.1, 600.0)
+_LOCAL_SLOT = threading.BoundedSemaphore(1)
+
+
+@contextmanager
+def _local_slot():
+    """Slot liczenia lokalnego modelu: 1 aktywny + max 2 czekających.
+
+    Czekanie dłuższe niż OLLAMA_QUEUE_TIMEOUT (30 s) kończy się wyjątkiem -
+    wołający przechodzi do kolejnego etapu koryta albo trybu zapasowego.
+    """
+    global _LOCAL_QUEUE_ACTIVE
+    with _LOCAL_QUEUE_LOCK:
+        if _LOCAL_QUEUE_ACTIVE >= 1 + _LOCAL_QUEUE_MAX_WAITING:
+            raise RuntimeError("lokalny model zajęty: kolejka pełna (2 czekają)")
+        _LOCAL_QUEUE_ACTIVE += 1
+    try:
+        if not _LOCAL_SLOT.acquire(timeout=_LOCAL_QUEUE_TIMEOUT):
+            raise RuntimeError(f"lokalny model zajęty: brak slotu przez {_LOCAL_QUEUE_TIMEOUT:.0f} s")
+        try:
+            yield
+        finally:
+            _LOCAL_SLOT.release()
+    finally:
+        with _LOCAL_QUEUE_LOCK:
+            _LOCAL_QUEUE_ACTIVE -= 1
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Czy wyjątek to timeout (Ollama nie odpowiedziała w limicie)?"""
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout)):
+        return True
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
+
+
+# --- Walidacja odpowiedzi 3B (1.37.0) ----------------------------------------
+_PL_DIACRITICS = "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"
+_EN_WORDS_RE = re.compile(r"\b(?:the|is|are|and|of|with|you|here|this|that|for|have|will|not|can)\b", re.IGNORECASE)
+_END_OK_CHARS = ".!?…:;\"'”’)»]`"
+_LAST_LOCAL_QUALITY: dict = {"powod": "", "model": ""}
+
+
+def _validate_local_response(response: str, prompt: str = "") -> tuple[bool, str, bool]:
+    """(ok, powód, czy_ponowic) dla odpowiedzi dużego modelu lokalnego.
+
+    Sprawdza cztery znane wpadki qwen2.5:3b: pusty tekst, powtórzenie
+    promptu, odpowiedź po angielsku i urwanie w połowie zdania. Halucynacji
+    (ceny, daty) nie da się wykryć automatycznie - pilnuje jej instrukcja
+    w awareness._local_rules („NIE zgaduj...”)."""
+    text = (response or "").strip()
+    if not text:
+        # 1.38.3 (#25b): pusty tekst to zwykle przekroczony kontekst - retry z
+        # tym samym promptem dałby ten sam błąd i podwoił ciszę.
+        return False, "pusty", False
+    if prompt:
+        head = " ".join(text[:50].split()).lower()
+        asked = " ".join((prompt or "")[:50].split()).lower()
+        if len(asked) >= 40 and head == asked:
+            return False, "powtorzenie promptu", True
+    if (len(text) > 60 and not re.search(f"[{_PL_DIACRITICS}]", text)
+            and len(_EN_WORDS_RE.findall(text)) > 3):
+        return False, "angielski", True
+    if len(text) > 500 and text[-1] not in _END_OK_CHARS:
+        return True, "urwane", False
+    return True, "", False
+
+
+def local_last_quality() -> dict:
+    """Ostatni kod jakości odpowiedzi lokalnej (dla /debug i śladu decyzji)."""
+    return dict(_LAST_LOCAL_QUALITY)
+
+
+def _ollama_request(payload: dict, timeout: int, quality: str = "") -> dict:
+    req = urllib.request.Request(
+        OLLAMA_HOST.rstrip("/") + "/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with netguard_mod.local_urlopen(req, timeout=timeout) as resp:
+        data = netguard_mod.read_json(resp)
+    _log_ollama_use(payload.get("model"), data, quality)
+    return data
 
 
 def _ollama_chat(
@@ -1259,20 +1468,25 @@ def _ollama_chat(
     history: list,
     message: str,
     timeout: int = OLLAMA_TIMEOUT,
-    num_predict: int = 400,
+    num_predict: int = OLLAMA_NUM_PREDICT,
     stop: list[str] | None = None,
     model: str | None = None,
     _warmup: bool = False,
+    volatile: str = "",
+    _allow_retry: bool = True,
 ) -> str:
     """Jedno zapytanie /api/chat do lokalnej Ollamy, wspólne dla wszystkich
     modeli (duży, router, uczeń, planer), żeby każda poprawka (limity,
-    keep_alive, okno) obejmowała je naraz.
+    keep_alive, okno, kolejka) obejmowała je naraz.
 
     `num_predict`/`stop`: routing i planer to jedna linia (kilkadziesiąt
-    tokenów, `stop` na końcu linii), rozmowa do 400 tokenów (200 -> 400,
-    2026-10-19: 200 WŁAŚNIE ucinało dłuższe odpowiedzi w połowie słowa -
-    zgłoszenie Grzegorza, ta sama poprawka co CLOUD_MAX_TOKENS/
-    JUGGLER_MAX_TOKENS niżej) bez `stop`.
+    tokenów, `stop` na końcu linii), rozmowa do 1024 tokenów (1.37.0;
+    wcześniej 400, a 200 ucinało dłuższe odpowiedzi w połowie słowa).
+    Duży model rozmowy dostaje LOCAL_STOP, żeby nie dopisywał "User:".
+
+    `volatile` (1.37.0): ulotny blok „Teraz” - idzie do ostatniej wiadomości,
+    nie do systemu (patrz _build_messages). Po timeoucie jest pierwszym
+    kandydatem do odrzucenia w jednej próbie ponowienia.
 
     Okno (num_ctx) i keep_alive są stałe dla danego modelu: zmiana num_ctx
     między zapytaniami zmusiłaby Ollamę do przeładowania modelu."""
@@ -1281,29 +1495,135 @@ def _ollama_chat(
     num_ctx = settings["num_ctx"]
     if big and not _warmup:
         _BIG_WARM_DONE.wait(WARMUP_TIMEOUT)
+    stops = stop if stop is not None else (LOCAL_STOP if big and not _warmup else None)
     options = {
         "temperature": OLLAMA_TEMPERATURE,
+        "top_p": OLLAMA_TOP_P,
+        "top_k": OLLAMA_TOP_K,
+        "repeat_penalty": OLLAMA_REPEAT_PENALTY,
         "num_predict": num_predict,
         "num_ctx": num_ctx,
     }
-    if stop:
-        options["stop"] = stop
-    payload = json.dumps({
-        "model": model or OLLAMA_MODEL,
-        "messages": _build_messages(system_prompt, history, message, num_ctx, num_predict),
-        "stream": False,
-        "options": options,
-        "keep_alive": settings["keep_alive"],
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        OLLAMA_HOST.rstrip("/") + "/api/chat",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with netguard_mod.local_urlopen(req, timeout=timeout) as resp:
-        data = netguard_mod.read_json(resp)
-    _log_ollama_use(model, data)
-    return data.get("message", {}).get("content", "").strip()
+    if stops:
+        options["stop"] = stops
+    # Walidacja dotyczy dużego modelu rozmowy. Router/planer/uczeń i sędzia
+    # straż odpowiadają jedną linią z własnym `stop` (albo małym limitem) -
+    # ich "urwane bez kropki" to normalny format, a retry tylko wydłuża ciszę.
+    validate = big and not _warmup and not stop and num_predict >= 400
+    quality = ""
+    prompt_trimmed = False
+    msg = message
+    temperature = OLLAMA_TEMPERATURE
+    attempts = 2 if _allow_retry else 1
+    slot = contextlib.nullcontext() if _warmup else _local_slot()
+    try:
+        with slot:
+            attempt = 0
+            while True:
+                attempt += 1
+                messages = _build_messages(system_prompt, history, msg, num_ctx, num_predict, volatile=volatile)
+                # 1.38.3 (#25b), próg 12000 od 1.38.4 (#26): bezpiecznik przed
+                # Ollamą. 12000 tokenów (system+user) to margines pod
+                # num_ctx=16384; user tniemy od KOŃCA (materiał, notatki),
+                # zostawiając instrukcje. Bez tego zbyt długi prompt kończył
+                # się pustym stringiem i komunikatem "Model nie odpowiedział".
+                system_tokens = _est_tokens(messages[0]["content"]) if messages else 0
+                user_tokens = _est_tokens(messages[-1]["content"]) if messages else 0
+                if messages and system_tokens + user_tokens > LOCAL_PROMPT_SAFE_TOKENS:
+                    room = min(12000, max(500, LOCAL_PROMPT_SAFE_TOKENS - system_tokens))
+                    messages[-1]["content"] = _trim_to_tokens(
+                        messages[-1]["content"], room, LOCAL_PROMPT_TRIM_MARKER)
+                    prompt_trimmed = True
+                    quality = "prompt-ctx"
+                payload = {
+                    "model": model or OLLAMA_MODEL,
+                    "messages": messages,
+                    "stream": False,
+                    "options": dict(options, temperature=temperature),
+                    "keep_alive": settings["keep_alive"],
+                }
+                try:
+                    data = _ollama_request(payload, timeout, quality)
+                except Exception as e:
+                    # Jeden retry po timeoucie: bez ulotnego bloku (fakty,
+                    # notatki, streszczenie). Dalsze próby tylko wydłużają
+                    # ciszę - wołający ma własny fallback.
+                    if attempt < attempts and volatile and _is_timeout_error(e):
+                        volatile = ""
+                        quality = "timeout-bez-notatek"
+                        timeout = min(timeout, 120)
+                        continue
+                    raise
+                reply = (data.get("message", {}) or {}).get("content", "").strip()
+                if not validate:
+                    break
+                ok, reason, again = _validate_local_response(reply, message)
+                # 1.38.3 (#25b): pusty tekst traktujemy jako przekroczony
+                # kontekst (to najczęstsza przyczyna) - kod jakości widoczny
+                # w /debug, bez retry z tym samym promptem.
+                quality = "prompt-ctx" if reason == "pusty" else reason
+                _LAST_LOCAL_QUALITY.update(powod=quality, model=model or OLLAMA_MODEL)
+                if ok or not again or attempt >= attempts:
+                    # Pusty/angielski po drugiej próbie: oddajemy puste, żeby
+                    # koryto przeszło do następnego etapu (pusty dymek gorszy).
+                    if not ok and reason in ("pusty", "angielski", "powtorzenie promptu"):
+                        return ""
+                    break
+                if reason == "angielski":
+                    msg = "Odpowiedz po polsku (krótko, po polsku):\n" + message
+                temperature = 0.1
+    finally:
+        _LAST_LOCAL_QUALITY.update(powod=quality, model=model or OLLAMA_MODEL)
+    return reply
+
+
+def local_session_stats(now=None) -> dict:
+    """Licznik lokalnego modelu na dziś (1.37.0), tylko z pliku liczb.
+
+    OLLAMA_LOG_PATH nie ma identyfikatora procesu, więc "sesja" to wpisy z
+    dzisiejszej daty. Zwraca sumę tokenów, liczbę inferencji i medianę tok/s;
+    przy 5000/10000 tokenów dokłada uczciwe ostrzeżenie do /debug.
+    """
+    from datetime import datetime as _dt
+    day = (now or _dt.now()).strftime("%Y-%m-%d")
+    tokens = 0
+    count = 0
+    rates: list[float] = []
+    try:
+        with OLLAMA_LOG_PATH.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not str(row.get("ts") or "").startswith(day):
+                    continue
+                count += 1
+                try:
+                    tokens += int(row.get("tokeny") or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    if row.get("tok_s") is not None:
+                        rates.append(float(row["tok_s"]))
+                except (TypeError, ValueError):
+                    pass
+    except OSError:
+        pass
+    rates.sort()
+    median = round(rates[len(rates) // 2], 1) if rates else None
+    warning = ""
+    if tokens >= 10000:
+        warning = ("Lokalny model zużył dziś ponad 10000 tokenów. Zrestartuj Ollamę "
+                   "(systemctl restart ollama), żeby wyczyścić KV cache.")
+    elif tokens >= 5000:
+        warning = ("Lokalny model zużył dziś ponad 5000 tokenów - kolejne odpowiedzi "
+                   "mogą być wolniejsze.")
+    return {"tokeny": tokens, "inferencje": count, "tok_s_mediana": median,
+            "ostrzezenie": warning, "dzien": day}
 
 
 def on_battery() -> bool:
@@ -1353,7 +1673,7 @@ def warm_up_async(system_prompt: str | None = None) -> None:
                 _set_warm("trwa", f"router {ROUTER_MODEL}")
                 try:
                     _ollama_chat(router_system_prompt(), [], "cześć", timeout=ROUTER_TIMEOUT * 4,
-                                 num_predict=1, model=ROUTER_MODEL)
+                                 num_predict=1, model=ROUTER_MODEL, _warmup=True)
                 except Exception:
                     pass
             # 1.24.0 (przegląd wydajności): przy KORYTO_LOKALNIE=bez_internetu, z kluczami
@@ -1370,7 +1690,7 @@ def warm_up_async(system_prompt: str | None = None) -> None:
                 _set_warm("trwa", f"uczeń {STUDENT_MODEL}")
                 try:
                     _ollama_chat(persona_mod.student_system_prompt(), [], "cześć", timeout=STUDENT_TIMEOUT * 2,
-                                 num_predict=1, model=STUDENT_MODEL)
+                                 num_predict=1, model=STUDENT_MODEL, _warmup=True)
                 except Exception:
                     pass
                 _set_warm("gotowe", f"rozmowę prowadzi uczeń {STUDENT_MODEL}; duży model wczyta się, gdy będzie potrzebny")
@@ -1805,6 +2125,12 @@ def _network_failure_note(errors: dict) -> str:
     model został pominięty z wyboru (KORYTO_LOKALNIE=bez_internetu)."""
     why = "; ".join(f"{k.replace('_error', '')}: {_friendly_error(v)}" for k, v in errors.items()
                     if k in ("cloud_error", "juggler_error") and v)
+    if errors.get("ollama_error"):
+        # 1.38.2 (#24): próba awaryjna lokalnego BYŁA, ale też się nie udała -
+        # nie pisz "nie użyłem lokalnego", bo to nieprawda.
+        return ("Sieć nie odpowiedziała, a lokalny model też nie odpowiedział ("
+                + _friendly_error(errors["ollama_error"]) +
+                "). Spróbuj za chwilę albo sprawdź Nadzorcę (Ollama / model lokalny).")
     return ("Sieciowe AI nie odpowiedziały" + (f" ({why})" if why else "") +
             ". Lokalnego modelu nie użyłem, bo internet działa (KORYTO_LOKALNIE=bez_internetu) - "
             "spróbuj za chwilę albo sprawdź Nadzorcę (Claude / Darmowa pula).")
@@ -2017,6 +2343,85 @@ _NEXT_STEPS = {
 _SAFE_TICKER_RE = re.compile(r"^[A-Za-z0-9.^_-]{1,20}$")
 
 
+# --- 1.38.0: deterministyczne odpowiedzi społeczne i zegar -------------------
+# "dzięki" nie jest poleceniem, a szło do Koryta: model nie odpowiadał, a UI
+# pokazywało narrację trasy ("Internet działa (WARP połączony)..."). Krótkie
+# podziękowanie/powitanie dostaje odpowiedź z kodu, bez modelu i bez Namysłu.
+# "Dzięki, zrób plan" zawiera czasownik działania - namysl.wants() zwraca True,
+# więc NIE jest przechwytywane.
+_SOCIAL_THANKS_RE = re.compile(r"(?i)\b(?:dzi[eę]k\w*|dziek\w*|thx|thanks|dzi[eę]ks|dzieks)\b")
+_SOCIAL_GREETING_RE = re.compile(
+    r"(?i)^\s*(?:hej(?:ka)?|cze[sś][cć]|witaj|witam|siema|elo|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)\b")
+
+
+def _social_reply(message: str, settings: dict | None = None, files=None,
+                  pending_action: dict | None = None, pending_clarify: list | None = None) -> str | None:
+    """Krótka, ciepła odpowiedź na podziękowanie/powitanie - albo None.
+
+    Nie przechwytuje pytań ("?"), wiadomości z załącznikiem, spraw czekających
+    na zgodę/doprecyzowanie ani poleceń z czasownikiem działania."""
+    text = (message or "").strip()
+    if not text or files or pending_action or pending_clarify or "?" in text:
+        return None
+    try:
+        if namysl_mod.wants(text, files, settings)[0]:
+            return None
+    except Exception:
+        return None
+    if _SOCIAL_THANKS_RE.search(text):
+        return "Nie ma za co!"
+    if _SOCIAL_GREETING_RE.match(text):
+        return "Cześć! W czym mogę pomóc?"
+    return None
+
+
+# Pytania o zegar i datę. slowa.fold() zdejmuje ogonki, więc wzorce są pisane
+# bez nich i łapią też "ktora"/"jaka" z różnych zapisów. Szybka ścieżka ma
+# działać w milisekundach, bez modelu i bez Namysłu.
+_TIME_Q_RE = re.compile(
+    r"\b(?:ktora|jaka)\s+(?:jest\s+)?(?:teraz\s+)?(?:aktualna\s+|dokladna\s+|obecna\s+)?godzina\b"
+    r"|\b(?:aktualna|dokladna|obecna)\s+godzina\b"
+    r"|\bktora\s+(?:jest\s+)?teraz\b"
+    r"|\bile\s+jest\s+(?:teraz|godzin|czasu)\b"
+    r"|\bile\s+jest\s*[?!.]*\s*$"
+    r"|\bpodaj\s+(?:aktualna\s+)?(?:godzine|czas)\b"
+    r"|\b(?:data\s+i\s+godzina|godzina\s+i\s+data)\b")
+_DATE_Q_RE = re.compile(
+    r"\b(?:jaka|ktora)\s+(?:jest\s+)?(?:dzisiaj\s+|dzis\s+|aktualna\s+)?data\b"
+    r"|\bjaki\s+(?:jest\s+|mamy\s+)?(?:dzisiaj\s+|dzis\s+)?(?:dzien|dzien\s+tygodnia)\b"
+    r"|\bktory\s+(?:jest\s+)?(?:dzisiaj\s+|dzis\s+)?(?:dzien|dzien\s+tygodnia)\b"
+    r"|\bco\s+to\s+za\s+dzien\b"
+    r"|\bpodaj\s+(?:dzisiejsza\s+|aktualna\s+)?(?:date|dzien)\b"
+    r"|\b(?:data\s+i\s+godzina|godzina\s+i\s+data)\b")
+_TIME_NOT_NOW = ("w dniu", "w tygodniu", "w roku", "w miesiacu", "otwarte", "otwiera", "zamyka",
+                 "stref", "strefie", "odleglosc", "podroz", "lot")
+
+
+def _time_answer(message: str) -> str | None:
+    """Odpowiedź na pytanie o aktualną godzinę/datę - albo None.
+
+    Nie odpowiada na pytania o godziny otwarcia, strefy czasowe ani odległości
+    w czasie; tylko krótkie "która godzina / jaka data / jaki dziś dzień"."""
+    from datetime import datetime as _dt
+    folded = slowa_mod.fold(message or "").strip()
+    if not folded or len(folded.split()) > 12:
+        return None
+    asks_time = bool(_TIME_Q_RE.search(folded))
+    asks_date = bool(_DATE_Q_RE.search(folded))
+    if not asks_time and not asks_date:
+        return None
+    if any(phrase in folded for phrase in _TIME_NOT_NOW):
+        return None
+    now = _dt.now()
+    zone = now.astimezone().strftime("%Z")
+    zone = f" {zone}" if zone and not zone.startswith(("+", "-")) else ""
+    clock = f"Jest {now:%H:%M}{zone}."
+    date = awareness_mod.today_line(now)
+    if asks_time and asks_date:
+        return f"{clock} {date}"
+    return clock if asks_time else date
+
+
 def _market_next_steps(card) -> list | None:
     inst = ""
     if isinstance(card, dict):
@@ -2100,22 +2505,21 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
     skup_akcja = skup_poziom >= 4 and skupienie_mod.czy_akcja_nieodwracalna(skup_powody)
 
     # Blok „Teraz” (agent/awareness.py, 1.8.22): zegar, fakty z memory/,
-    # zadania w tle, poprzednia rozmowa - dokładany do promptu systemowego
-    # PRZY TEJ wiadomości, nie przy starcie serwera. Dwie wersje, bo granica
-    # „notatki zostają na komputerze” (prompt.md, Zabezpieczenia absolutne)
-    # jest celowa: model LOKALNY dostaje pełny blok (treść faktów, nazwy
-    # zadań), żongler i chmura tylko zegar i liczby. Leniwie, raz na
-    # wiadomość: szybka ścieżka narzędzi (większość wiadomości) nie liczy
-    # bloku wcale. Każdy błąd = goły prompt jak dotąd: blok jest dodatkiem,
-    # nigdy powodem, żeby rozmowa się nie odbyła.
+    # zadania w tle, poprzednia rozmowa - liczone PRZY TEJ wiadomości.
+    # 1.37.0: dla modelu LOKALNEGO rozdzielony na dwie części. System jest
+    # stabilny (osobowość, zasady, data z porą dnia), a ulotny blok z faktami
+    # i dokładną godziną jedzie do OSTATNIEJ wiadomości użytkownika. Dzięki
+    # temu zmiana faktu nie kasuje pamięci podręcznej systemu i historii.
+    # Żongler i chmura dostają jak dotąd tylko zegar i liczby.
     _sys_cache: dict = {}
+    _vol_cache: dict = {}
 
     def _sys(cloud: bool) -> str:
         key = "cloud" if cloud else "local"
         if key not in _sys_cache:
             try:
                 _sys_cache[key] = (awareness_mod.cloud_prompt(system_prompt, chat=chat) if cloud
-                                   else awareness_mod.local_prompt(system_prompt, vault, chat=chat))
+                                   else awareness_mod.local_system(system_prompt))
             except Exception as e:
                 _sys_cache[key] = system_prompt
                 try:
@@ -2124,6 +2528,19 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                     pass
         return _sys_cache[key]
 
+    def _volatile() -> str:
+        """Ulotny blok „Teraz” dla lokalnego modelu (doklejany do user message)."""
+        if "local" not in _vol_cache:
+            try:
+                _vol_cache["local"] = awareness_mod.local_block(vault, chat=chat)
+            except Exception as e:
+                _vol_cache["local"] = ""
+                try:
+                    trace_mod.record("teraz_blad", f"{type(e).__name__}: {e}"[:200], tool=None)
+                except Exception:
+                    pass
+        return _vol_cache["local"]
+
     # Namysł (agent/namysl.py, 1.9.0): kilkufazowe myślenie zamiast jednego
     # przebiegu, gdy wiadomość tego wymaga (namysl.wants) albo gdy są
     # załączone pliki. `progress` (z main.py) to kanał narracji na żywo do
@@ -2131,8 +2548,18 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
     # Zwraca wynik albo None (= dawna ścieżka, bez zmian).
     files = [f for f in (files or []) if isinstance(f, str) and f]
     _namysl_settings = namysl_mod.load_settings()
+    # 1.38.7 (#30): flaga "Namysł już próbowany w tej wiadomości".
+    namysl_tried = False
 
     def _try_namysl(model_up_now: bool, force: bool = False, kontekst: str = "", msg: str | None = None):
+        # 1.38.7 (#30): JEDEN Namysł na wiadomość. Gdy pierwszy przebieg
+        # (np. dla załącznika) zwróci None, dawniej ścieżka rozmowy wołała go
+        # drugi raz - cała faza Zbierania czytała plik ponownie i "Czytam plik"
+        # pojawiało się 2×, z "Notatki: nic" drugiego przebiegu pomiędzy.
+        nonlocal namysl_tried
+        if namysl_tried and not force:
+            return None
+        namysl_tried = True
         # 1.32.0: komendy /plan, /badaj, /recenzja wymuszają Namysł (force) z blokiem
         # kontekstu trybu (komendy.KONTEKSTY) i własną treścią (msg = argument komendy).
         the_msg = msg if msg is not None else message
@@ -2144,13 +2571,16 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         ctx = namysl_mod.Context(
             vault=vault, message=the_msg, history_local=list(history), history_cloud=_cloud_history(history),
             files=files, sys_local=_sys(cloud=False) + kontekst, sys_cloud=_sys(cloud=True) + kontekst, local_up=model_up_now,
+            local_volatile=_volatile(),
             # 1.32.27: szkic i pozostale fazy lokalne dostaja LOKALNY_TIMEOUT
             # (domyslnie 180 s), a nie krotki limit zalezny od chwilowego budzetu.
             local_chat=_namysl_local_chat,
             # 1.33.3 (audyt #18): świeże sprawdzenie Ollamy - snapshot
             # `model_up_now` bywa nieaktualny, a plik ma wchodzić, gdy lokalny
             # model odpowie choćby jako rezerwa.
-            local_recheck=lambda: ollama_available(),
+            # 1.38.0 (#20): fresh=True, bo ollama_available() ma 5-sekundowy
+            # cache - stary "nie działa" blokował plik mimo działającej Ollamy.
+            local_recheck=lambda: ollama_available(fresh=True),
             # 1.30.23: rozdzielnica - waga uwagi decyduje, którą szyną (darmowa
             # pula / płatny Claude) i jakim modelem puścić KAŻDE wywołanie Namysłu.
             cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, _rozdz=juggler_mod.rozdzielnica(skup_poziom): namysl_cloud_call(
@@ -2260,7 +2690,8 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                 if etap == "lokalnie":
                     if not local_ok_here:
                         continue
-                    answer, who = _ollama_chat(_sys(cloud=False) + _NOTES_SUFFIX, history, user, timeout=RICH_TIMEOUT), "lokalnie"
+                    answer, who = _ollama_chat(_sys(cloud=False) + _NOTES_SUFFIX, history, user, timeout=RICH_TIMEOUT,
+                                               volatile=_volatile()), "lokalnie"
                 elif allow_net and juggler_mod.providers_pool(etap):
                     answer, who = juggler_mod.chat(_sys(cloud=True) + _NOTES_SUFFIX, _cloud_history(history), user,
                                                    timeout=JUGGLER_TIMEOUT, etapy=[etap])
@@ -2431,7 +2862,8 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                 if etap == "lokalnie":
                     if not local_ok_here:
                         continue
-                    answer, who = _ollama_chat(_sys(cloud=False) + _WEB_SUFFIX, history, user, timeout=RICH_TIMEOUT), "lokalnie"
+                    answer, who = _ollama_chat(_sys(cloud=False) + _WEB_SUFFIX, history, user, timeout=RICH_TIMEOUT,
+                                               volatile=_volatile()), "lokalnie"
                 elif juggler_mod.providers_pool(etap):
                     answer, who = juggler_mod.chat(system, _cloud_history(history), user, timeout=JUGGLER_TIMEOUT, etapy=[etap])
                 else:
@@ -2612,13 +3044,22 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                     extra["style_problems"] = problems
                 return reply, "uczen_rozmowa", extra
         try:
-            reply = _ollama_chat(_sys(cloud=False), history, message, timeout=RICH_TIMEOUT)
+            reply = _ollama_chat(_sys(cloud=False), history, message, timeout=RICH_TIMEOUT, volatile=_volatile())
             if not reply:
+                # 1.38.3 (#25b): pusta odpowiedź po za długim promptcie ma
+                # własny komunikat; nie udajemy zwykłego "model milczy".
+                if local_last_quality().get("powod") == "prompt-ctx":
+                    raise RuntimeError("Lokalny model nie odpowiada (prompt za długi dla kontekstu)")
                 raise RuntimeError("pusta odpowiedź modelu")  # pusty dymek byłby gorszy niż tryb zapasowy
         except Exception as e:
-            errors["ollama_error"] = f"{type(e).__name__}: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
+            hint = " - brak pamięci? sprawdź /debug" if _is_timeout_error(e) else ""
+            errors["ollama_error"] = f"{type(e).__name__}: {e}{hint}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             return None, "ollama_blad", {}
-        return reply, "ollama_rozmowa", {}
+        extra = {}
+        quality = local_last_quality().get("powod") or ""
+        if quality:
+            extra["lokalna_jakosc"] = quality  # np. "urwane" - odpowiedź może być niepełna
+        return reply, "ollama_rozmowa", extra
 
     def _rozmowa_korytem(local_ok: bool, base_extra: dict | None = None) -> dict | None:
         """Krok 2 (prawdziwa rozmowa) KORYTEM (1.17.0, agent/koryto.py): etapy
@@ -2697,7 +3138,8 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                             "własnymi słowami, w swoim stylu, nie kopiuj wprost:]\n"
                             + "\n---\n".join(text for _, text in findings)
                         )
-                        reply = _ollama_chat(_sys(cloud=False), history, compile_message, timeout=RICH_TIMEOUT)
+                        reply = _ollama_chat(_sys(cloud=False), history, compile_message, timeout=RICH_TIMEOUT,
+                                              volatile=_volatile())
                         if reply:
                             extra = dict(extra_base, juggler_juniorzy=[name for name, _ in findings], koryto=etap)
                             return _finish("zongler_senior_juniorzy",
@@ -2748,14 +3190,34 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         # Claude nie blokuje już awaryjnego lokalnego przy wadze 1-2, skoro i tak
         # nie był pytany. NetGuardBlocked traktujemy jak "wszyscy wyczerpani".
         exhausted_names = {n for n in allowed_pool if juggler_mod.exhausted(n)}
-        if emergency_local_allowed(local_now, local_ok, koryto_mod.order(), allowed_pool,
-                                   warp_blocked, exhausted_names):
+        # 1.38.2 (#24): po porażce WSZYSTKICH etapów sieciowych lokalny jest
+        # ostatnią szansą nawet przy KORYTO_LOKALNIE=bez_internetu. Wcześniej
+        # wymagaliśmy "wszyscy wyczerpani" (twardy cooldown), więc zwykły 413/429
+        # kończył się komunikatem "lokalnego modelu nie użyłem, bo internet działa".
+        cloud_failed = bool(errors.get("juggler_error") or errors.get("cloud_error") or not allowed_pool)
+        # 1.38.2 (#24): sprawdź Ollamę TERAZ, po porażce sieci - snapshot
+        # `local_ok` z początku wiadomości mógł być nieaktualny (model właśnie
+        # się wczytał albo wrócił po chwilowej awarii). Tylko gdy trzeba.
+        local_ok_now = local_ok
+        if cloud_failed and not local_ok_now:
+            try:
+                local_ok_now = ollama_available(fresh=True)
+            except Exception:
+                local_ok_now = False
+        emergency_by_cloud = (cloud_failed and local_ok_now and not local_now
+                              and "lokalnie" in koryto_mod.order())
+        if emergency_by_cloud or emergency_local_allowed(local_now, local_ok_now, koryto_mod.order(), allowed_pool,
+                                                         warp_blocked, exhausted_names):
             reply, stage, extra = _rozmowa_lokalnie(errors)
             if reply is not None:
                 extra.update(extra_base)
                 extra.update({k: v for k, v in errors.items() if v})
-                extra["lokalnie_awaryjnie"] = ("WARP padł w trakcie wiadomości" if warp_blocked
-                                                else "sieciowi dozwoleni przy tej wadze wyczerpani (cooldown/wyłączeni)")
+                if errors.get("juggler_error") or errors.get("cloud_error"):
+                    extra["lokalnie_awaryjnie"] = "Sieć nie odpowiedziała - liczę lokalnie"
+                elif warp_blocked:
+                    extra["lokalnie_awaryjnie"] = "WARP padł w trakcie wiadomości"
+                else:
+                    extra["lokalnie_awaryjnie"] = "sieciowi dozwoleni przy tej wadze wyczerpani (cooldown/wyłączeni)"
                 return _finish("lokalnie_awaryjnie", {"speech": reply, "card": None, "model_active": True}, extra=extra)
             extra_base.update({k: v for k, v in errors.items() if v})
         _koryto_errors.clear()
@@ -2947,6 +3409,19 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                 return _finish("doprecyzowanie_rozwiazane", result, tool=resolved)
         # Nie rozpoznano odpowiedzi: traktuj wiadomość normalnie niżej,
         # zamiast zgadywać (może to zupełnie nowy temat).
+
+    # 1.38.0 (#21/#22): deterministyczne, natychmiastowe odpowiedzi przed
+    # jakimkolwiek modelem. "dzięki"/"hej" nie mogą iść przez Koryto (model
+    # bywa wolny, a UI pokazywało wtedy narrację trasy zamiast odpowiedzi).
+    # Pytanie o zegar ma odpowiedź z kodu, nie z modelu - także warianty
+    # "jaka jest aktualna godzina w Polsce?".
+    social = _social_reply(message, _namysl_settings, files=files, pending_action=pending_action,
+                           pending_clarify=pending_clarify)
+    if social:
+        return _finish("spoleczne", {"speech": social, "card": None, "model_active": False})
+    time_answer = _time_answer(message)
+    if time_answer:
+        return _finish("szybka_sciezka", {"speech": time_answer, "card": None, "model_active": False})
 
     # "dodaj do węzłów" / "zapisz to do notatek" (1.30.22): deterministycznie,
     # PRZED dwuznacznością i Namysłem. Bierze OSTATNIĄ odpowiedź GREGAI i

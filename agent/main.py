@@ -493,6 +493,13 @@ def _run_chat(payload: dict, job: dict | None = None) -> dict:
     # wątki rozmowy w przeglądarce i izolacja notatek projektu niżej.
     chat = sources_mod.chat_id(project_id)
     files = _upload_paths(chat, payload.get("files"))
+    # 1.38.2 (#24): UI może wysłać "przeczytaj to" bez nazwy załącznika
+    # (wyścig z uploadem albo przełączenie rozmowy). Jeśli w TEJ rozmowie jest
+    # świeżo wgrany plik, odzyskaj go, zanim Namysł zrezygnuje i pójdzie w notatki.
+    if not files:
+        files = _recent_read_attachment(chat, message)
+    # 1.38.6 (#29): UI może wysłać ten sam plik 2× (race w przeglądarce).
+    files = _dedup_upload_paths(files)
     progress = (lambda ev: _job_progress(job, ev)) if job is not None else None
     with _CHAT_LOCK:
         # Rozmowa, o którą nikt nie pyta od dawna (karta przeglądarki zamknięta,
@@ -619,6 +626,48 @@ def _upload_paths(chat: str, names) -> list[str]:
                 out.append(n)
         except OSError:
             out.append(n)
+    return out
+
+
+_READ_ATTACH_RE = re.compile(
+    r"(?i)\b(?:przeczytaj|przeanalizuj|stre[sś][cć]|stre[sś]ci[eę]|om[oó]w|zajrzyj)\s+"
+    r"(?:to|ten\s+plik|za[lł][aą]cznik)\b")
+
+
+def _recent_read_attachment(chat: str, message: str) -> list[str]:
+    """Odzyskaj świeżo wgrany plik, gdy wiadomość prosi o przeczytanie "tego".
+
+    1.38.2 (#24): UI czasem nie przekaże nazwy załącznika (wyścig z uploadem
+    albo przełączenie rozmowy). Tylko wtedy, gdy wiadomość wprost prosi
+    o przeczytanie "to/ten plik/załącznik" i tylko z katalogu TEJ rozmowy.
+    Bez tego Namysł nie startował, a odpowiedź szła z notatek.
+    """
+    if not _READ_ATTACH_RE.search(message or ""):
+        return []
+    p = sources_mod.recent_upload(chat, max_age_s=1800.0)
+    return [str(p)] if p is not None else []
+
+
+def _dedup_upload_paths(files) -> list[str]:
+    """Usuwa duplikaty z listy załączników, po rozwiązanej ścieżce.
+
+    1.38.6 (#29): przeglądarka może wysłać tę samą nazwę 2× (race między
+    uploadem a wysłaniem). Wtedy ctx.files ma dwa wpisy, a Zbieranie i tak
+    musi przeczytać plik raz. Porównanie jest case-insensitive.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for f in files or []:
+        if not isinstance(f, str) or not f:
+            continue
+        try:
+            key = str(Path(f).resolve()).lower()
+        except OSError:
+            key = str(f).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
     return out
 
 
@@ -1399,6 +1448,9 @@ class Handler(BaseHTTPRequestHandler):
                     "planner": router_mod.planner_status(),
                     # Rozgrzewanie modeli po starcie (router.warm_status).
                     "warm": router_mod.warm_status(),
+                    # 1.37.0: dzisiejszy licznik lokalnego modelu (tokeny, mediana
+                    # tok/s) i uczciwe ostrzeżenie po 5000/10000 tokenach.
+                    "ollama_sesja": router_mod.local_session_stats(),
                     # Warstwa systemowa (agent/sysop.py): czy włączona, jakie
                     # katalogi dozwolone, ostatnie wpisy dziennika audytu.
                     "sysop": {"enabled": sysop_mod.enabled(), "shell": sysop_mod.shell_enabled(),
@@ -2543,8 +2595,10 @@ def main():
     # a nie przy pierwszej wiadomości użytkownika.
     # 1.32.12 (audyt tura 16): rozgrzewamy TEN prompt, który naprawdę idzie do modelu lokalnego
     # (zwięzły, ok. 2 tys. znaków), nie pełny 19-tysięczny, którego lokalny model już nie widzi.
+    # 1.37.0: dokładnie STABILNY system (bez ulotnego bloku „Teraz”, który jedzie do user
+    # message) - dzięki temu pierwsza wiadomość trafia w pamięć podręczną promptu Ollamy.
     try:
-        _warm_prompt = awareness_mod.local_prompt(get_system_prompt(), get_vault())
+        _warm_prompt = awareness_mod.local_system(get_system_prompt())
     except Exception:
         _warm_prompt = get_system_prompt()
     router_mod.warm_up_async(_warm_prompt)

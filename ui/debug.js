@@ -203,6 +203,9 @@ function renderLog(allEntries) {
       const korytoEtap = extraChip("koryto", (v) => `etap: ${v}`, "", "etap koryta, który odpowiedział");
       const localSkip = extraChip("lokalnie", (v) => `lokalnie: ${v}`, "forgotten", "dlaczego lokalny etap nie odpowiedział");
       const ollamaError = extraChip("ollama_error", (v) => `model lokalny błąd: ${v}`, "forgotten");
+      // 1.37.0: walidacja odpowiedzi 3B - np. "urwane" (odpowiedź bez końca
+      // zdania, nie błąd), "angielski"/"pusty" (po retry odrzucone).
+      const localQuality = extraChip("lokalna_jakosc", (v) => `jakość lokalnej odpowiedzi: ${v}`, "forgotten");
       const notesError = extraChip("notatki_error", (v) => `notatki błąd: ${v}`, "forgotten");
       const modelDown = extraChip("model_down", () => "model lokalny niedostępny", "forgotten");
       const routingCtx = extraChip("routing_kontekst", () => "argument z kontekstu rozmowy", "topic", "narzędzie dostało temat z poprzednich wiadomości - nie uczy się z tego wzorca");
@@ -228,7 +231,7 @@ function renderLog(allEntries) {
         : "";
       return `<tr>
         <td class="mono">${fmtTime(e.ts)}</td>
-        <td><span class="badge badge-${escapeHtml(e.stage)}${STAGE_TONED.has(e.stage) ? " tone" : ""}">${escapeHtml(label)}</span>${newPattern}${newTopicWords}${forgotten}${jugglerProvider}${korytoEtap}${jugglerJuniors}${jugglerError}${cloudError}${studentError}${ollamaError}${localSkip}${notesError}${modelDown}${routingCtx}${sanitizedLeak}</td>
+        <td><span class="badge badge-${escapeHtml(e.stage)}${STAGE_TONED.has(e.stage) ? " tone" : ""}">${escapeHtml(label)}</span>${newPattern}${newTopicWords}${forgotten}${jugglerProvider}${korytoEtap}${jugglerJuniors}${jugglerError}${cloudError}${studentError}${ollamaError}${localQuality}${localSkip}${notesError}${modelDown}${routingCtx}${sanitizedLeak}</td>
         <td class="msg" title="${escapeHtml(e.message)}">${escapeHtml(e.message)}</td>
         <td class="mono">${escapeHtml(e.tool || "")}</td>
         <td class="mono">${fmtMs(e.took_ms)}</td>
@@ -881,6 +884,13 @@ function renderSysInfo(data) {
           : '<span class="ok">włączony: stałe narzędzia (' + (data.sysop.tools ? data.sysop.tools.length : "?") + ')</span>' + (data.sysop.shell ? ' <span class="warn">+ dowolny shell (SYSOP_SHELL=1)</span>' : ", shell wyłączony"))
       : "wyłączony") : "brak danych"],
     ["Model (rdzeń)", escapeHtml(data.ollama_model || "?")],
+    ["Model lokalny dziś", (() => {
+      const s = data.ollama_sesja;
+      if (!s) return "brak danych";
+      const med = s.tok_s_mediana != null ? s.tok_s_mediana + " tok/s (mediana)" : "brak pomiaru";
+      const warn = s.ostrzezenie ? ' <span class="warn">' + escapeHtml(s.ostrzezenie) + "</span>" : "";
+      return (s.tokeny || 0) + " tokenów, " + (s.inferencje || 0) + " inferencji, " + escapeHtml(med) + warn;
+    })()],
     ["Wczytany teraz", loaded],
     ["Zainstalowane modele", installed],
   ];

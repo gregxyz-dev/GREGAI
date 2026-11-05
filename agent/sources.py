@@ -54,6 +54,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -177,6 +178,84 @@ def folders(chat: str | None = None) -> list[Path]:
 
 def upload_root(chat: str | None = None) -> Path:
     return UPLOAD_DIR / chat_id(chat)
+
+
+_UPLOAD_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def find_upload_by_name(chat: str | None, name: str) -> list[Path]:
+    """Pliki wgrane do TEJ rozmowy, których nazwa pochodzi od `name`.
+
+    1.38.1 (#23): `save_upload` zapisuje "<data>-<nazwa>" (a przy kolizji
+    "<data>-<nazwa>-2.<ext>"), więc referencja do oryginalnej nazwy z
+    wiadomości nie trafiała w dokładne porównanie `find_by_name`. Tutaj
+    zdejmujemy prefiks daty i akceptujemy numer kolizji. Szukamy WYŁĄCZNIE
+    w katalogu wgranych tej rozmowy - nigdy w innych rozmowach.
+    Zwraca najnowsze pierwsze."""
+    wanted = os.path.basename((name or "").strip()).lower()
+    if not wanted:
+        return []
+    stem, suffix = os.path.splitext(wanted)
+    root = upload_root(chat)
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+    out: list[Path] = []
+    for p in entries:
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        n = p.name.lower()
+        base = _UPLOAD_DATE_PREFIX_RE.sub("", n, count=1)
+        collision = bool(suffix) and re.fullmatch(re.escape(stem) + r"-\d+" + re.escape(suffix), base) is not None
+        if n == wanted or base == wanted or collision:
+            # Ta sama brama co przy pełnej ścieżce: symlink z wgranych nie
+            # może wyprowadzić poza katalog tej rozmowy.
+            safe = resolve_in_chat(chat, str(p))
+            if safe is not None:
+                out.append(safe)
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    out.sort(key=_mtime, reverse=True)
+    return out
+
+
+def recent_upload(chat: str | None, max_age_s: float = 1800.0) -> Path | None:
+    """Najnowszy plik wgrany do TEJ rozmowy w ostatnich `max_age_s` sekundach.
+
+    1.38.2 (#24): interfejs czasem wyśle wiadomość "przeczytaj to" bez nazwy
+    załącznika (np. po przełączeniu rozmowy albo w wyścigu z uploadem). Serwer
+    może wtedy odzyskać świeżo wgrany plik z katalogu TEJ rozmowy, zamiast
+    odpowiadać z notatek. Tylko bieżąca rozmowa, tylko świeże pliki.
+    """
+    root = upload_root(chat)
+    cutoff = time.time() - max(0.0, float(max_age_s))
+    best: Path | None = None
+    best_mtime = 0.0
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return None
+    for p in entries:
+        try:
+            if not p.is_file():
+                continue
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= cutoff and mtime > best_mtime:
+            best, best_mtime = p, mtime
+    if best is None:
+        return None
+    return resolve_in_chat(chat, str(best))
 
 
 def _private_names() -> tuple[str, ...]:

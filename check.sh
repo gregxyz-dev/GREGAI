@@ -33,7 +33,7 @@ envval() { grep -E "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$ENV_FIL
 
 # Kontrole nie zapisują do prawdziwego dziennika Koryta (1.20.0).
 export KORYTO_DZIENNIK_PLIK="$(mktemp -u /tmp/gregai-koryto-XXXXXX.json)"
-printf '\n\033[1;36m== GREGAI: 80 kontroli (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
+printf '\n\033[1;36m== GREGAI: 101 kontroli (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
 sudo -v || { echo "Bez sudo nie da się sprawdzić wszystkiego. Uruchom ponownie i podaj hasło."; exit 1; }
 
 # 1. System
@@ -127,12 +127,13 @@ fi
 DROPIN=/etc/systemd/system/ollama.service.d/gregai.conf
 CTX="$(envval OLLAMA_NUM_CTX)"; CTX="${CTX:-16384}"
 if ! grep -q 'OLLAMA_NUM_PARALLEL=1' "$DROPIN" 2>/dev/null || ! grep -q 'OLLAMA_HOST=127.0.0.1:11434' "$DROPIN" 2>/dev/null \
-   || ! grep -q 'OLLAMA_CONTEXT_LENGTH=16384' "$DROPIN" 2>/dev/null; then
+   || ! grep -q 'OLLAMA_CONTEXT_LENGTH=16384' "$DROPIN" 2>/dev/null \
+   || ! grep -q 'OLLAMA_KEEP_ALIVE=30m' "$DROPIN" 2>/dev/null; then
   bad 9 "Brak ustawień Ollamy GREGAI ($DROPIN)" "bash install.sh"
 elif ! [[ "$CTX" =~ ^[0-9]+$ ]] || [ "$CTX" -lt 16384 ]; then
   bad 9 "OLLAMA_NUM_CTX=$CTX w .env: pełny prompt GREGAI się nie mieści" "bash install.sh (ustawi 16384)"
 else
-  ok 9 "Ollama: tylko 127.0.0.1, jedna rozmowa naraz, okno $CTX tokenów"
+  ok 9 "Ollama: tylko 127.0.0.1, jedna rozmowa naraz, okno $CTX tokenów, keep_alive 30m"
 fi
 
 # 10. Model rozmowy pobrany
@@ -2815,7 +2816,7 @@ r, seen = run({"rozpoznanie": ROZ, "szkic": "Złoto: 2412,35 USD (notowanie).", 
 chk("krytyka_bez_werdyktu", r["speech"].startswith("Złoto: 2412,35") and "poprawa" not in seen
     and any(f.get("nazwa") == "krytyka" and f.get("uwaga") == "brak" for f in r["card"]["fazy"]))
 chk("rozpoznanie_historia_lokalna", "_hist_for_plan = ctx.history_cloud if models.may_use_cloud(False) else ctx.history_local" in inspect.getsource(nm.run))
-chk("rozgrzewka_zwiezly_prompt", "awareness_mod.local_prompt(get_system_prompt(), get_vault())" in (ROOT / "agent" / "main.py").read_text(encoding="utf-8"))
+chk("rozgrzewka_zwiezly_prompt", "awareness_mod.local_system(get_system_prompt())" in (ROOT / "agent" / "main.py").read_text(encoding="utf-8"))
 chk("krytyka_tylko_gdy_czas", "narr.elapsed() + 2 * (_draft_s or 0) > TIME_BUDGET" in inspect.getsource(nm.run))
 
 # 4. Koryto: powód budżetu w błędach, recenzent z tego samego etapu, dokończenie bez dublowania,
@@ -3998,10 +3999,232 @@ else
   bad 80 "Audyt 1.33.4: ${AUDYT34_CHECK:-błąd importu}" "sprawdź agent/namysl.py (Context.local_available, zbieranie plików)"
 fi
 
+# 81-88. Lokalny model 3B (1.37.0): cache promptu, budżety, styl instrukcji,
+# parametry inferencji, walidacja odpowiedzi, kolejka, retry po timeoucie,
+# licznik sesji. Wszystkie na atrapach, bez Ollamy, sieci i zapisu do data/.
+LOKALNY_CHECKS="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+names = {
+    "cache": ewaluacja._check_local_cache,
+    "budzet": ewaluacja._check_local_budget,
+    "styl": ewaluacja._check_local_style,
+    "parametry": ewaluacja._check_local_params,
+    "walidacja": ewaluacja._check_local_validation,
+    "kolejka": ewaluacja._check_local_queue,
+    "retry": ewaluacja._check_local_retry,
+    "sesja": ewaluacja._check_local_session,
+}
+for key, fn in names.items():
+    try:
+        ok, why = fn()
+    except Exception as e:
+        ok, why = False, f"wyjątek {type(e).__name__}: {e}"
+    print(key, "OK" if ok else "FAIL " + why.replace("\n", " ")[:300], sep="\t")
+PY
+)"
+lok_ok() {
+  local key="$1"
+  printf '%s\n' "$LOKALNY_CHECKS" | awk -F'\t' -v k="$key" '$1 == k && $2 == "OK" {found=1} END {exit !found}'
+}
+lok_why() {
+  local key="$1"
+  printf '%s\n' "$LOKALNY_CHECKS" | awk -F'\t' -v k="$key" '$1 == k {sub(/^OK$/, "OK"); print $2}'
+}
+if lok_ok cache; then
+  ok 81 "Lokalny 3B: stabilny system (data + pora dnia), Teraz i godzina w user message - cache promptu nie kasuje historii"
+else
+  bad 81 "Lokalny 3B cache: $(lok_why cache)" "sprawdź agent/awareness.py (local_system/local_block) i agent/router.py (_build_messages)"
+fi
+if lok_ok budzet; then
+  ok 82 "Lokalny 3B budżety: system 800 tok, user 2000 tok, całość 3000 tok, materiał Namysłu 5300 znaków"
+else
+  bad 82 "Lokalny 3B budżety: $(lok_why budzet)" "sprawdź _local_prompt_budget w agent/router.py i MATERIAL_CHARS_LOCAL w agent/namysl.py"
+fi
+if lok_ok styl; then
+  ok 83 "Lokalny 3B styl: numerowane, krótkie zasady, konkretne zakazy, bez emoji i uprzejmości"
+else
+  bad 83 "Lokalny 3B styl: $(lok_why styl)" "sprawdź _local_rules w agent/awareness.py"
+fi
+if lok_ok parametry; then
+  ok 84 "Lokalny 3B parametry: temperature 0.2, top_p 0.85, top_k 40, repeat_penalty 1.2, num_predict 1024, stop User:/Asystent:"
+else
+  bad 84 "Lokalny 3B parametry: $(lok_why parametry)" "sprawdź options w _ollama_chat (agent/router.py)"
+fi
+if lok_ok walidacja; then
+  ok 85 "Lokalny 3B walidacja: pusty/echo/angielski/urwane, dokładnie jeden retry"
+else
+  bad 85 "Lokalny 3B walidacja: $(lok_why walidacja)" "sprawdź _validate_local_response w agent/router.py"
+fi
+if lok_ok kolejka; then
+  ok 86 "Lokalny 3B kolejka: 1 liczy + 2 czekają, trzecie żądanie odpada z czytelnym błędem"
+else
+  bad 86 "Lokalny 3B kolejka: $(lok_why kolejka)" "sprawdź _local_slot w agent/router.py"
+fi
+if lok_ok retry; then
+  ok 87 "Lokalny 3B retry po timeoucie: jedna próba bez ulotnego bloku (notatki, fakty)"
+else
+  bad 87 "Lokalny 3B retry: $(lok_why retry)" "sprawdź retry w _ollama_chat (agent/router.py)"
+fi
+if lok_ok sesja; then
+  ok 88 "Lokalny 3B sesja: dzisiejsze tokeny i mediana tok/s w /debug, progi 5000/10000 tokenów"
+else
+  bad 88 "Lokalny 3B sesja: $(lok_why sesja)" "sprawdź local_session_stats w agent/router.py i panel w ui/debug.js"
+fi
+# 89. Warmup i keep_alive: instalator, .env.example, nota o wolnym starcie
+# (ewaluacja) ORAZ ŻYWA instalacja: drop-in systemd Ollamy.
+LOKALNY_WARMUP_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_local_warmup()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$LOKALNY_WARMUP_CHECK" = "OK" ] && grep -q 'OLLAMA_KEEP_ALIVE=30m' "$DROPIN" 2>/dev/null; then
+  ok 89 "Lokalny 3B warmup: keep_alive 30m w drop-inie, nota 'wolny start' po 120 s"
+elif [ "$LOKALNY_WARMUP_CHECK" != "OK" ]; then
+  bad 89 "Lokalny 3B warmup: ${LOKALNY_WARMUP_CHECK:-błąd importu}" "sprawdź install.sh, .env.example i warm_status w agent/router.py"
+else
+  bad 89 "Lokalny 3B warmup: brak OLLAMA_KEEP_ALIVE=30m w $DROPIN" "bash install.sh (odtworzy drop-in)"
+fi
+
+# 90-92. 1.38.0: deterministyczne odpowiedzi społeczne, szybki zegar i
+# filtr wymyślonych nazw plików z rozpoznania. Na atrapach, bez modeli.
+SPOLECZNE_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_spoleczne_1380()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$SPOLECZNE_CHECK" = "OK" ]; then
+  ok 90 "\"dzięki\"/\"cześć\" -> krótka odpowiedź z kodu, bez modelu, Namysłu i opisu koryta"
+else
+  bad 90 "Odpowiedzi społeczne: ${SPOLECZNE_CHECK:-błąd importu}" "sprawdź _social_reply i kolejność w agent/router.py (route)"
+fi
+CZAS_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_czas_1380()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$CZAS_CHECK" = "OK" ]; then
+  ok 91 "Zegar: warianty godziny/daty w szybkiej ścieżce (<1 s, bez modelu i Namysłu)"
+else
+  bad 91 "Szybki zegar: ${CZAS_CHECK:-błąd importu}" "sprawdź _time_answer w agent/router.py"
+fi
+PLIK_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_plik_1380()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$PLIK_CHECK" = "OK" ]; then
+  ok 92 "Plik w Zbieraniu: załącznik czytany mimo \"PLIKI: to\"; \"pominięty\" tylko bez modelu i zgody"
+else
+  bad 92 "Plik w Zbieraniu: ${PLIK_CHECK:-błąd importu}" "sprawdź _plausible_file_ref i pętlę plików w agent/namysl.py"
+fi
+UPLOAD_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_plik_upload_1381()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$UPLOAD_CHECK" = "OK" ]; then
+  ok 93 "Plik z data/wgrane/<chat>/: znajdowany po oryginalnej nazwie i czytany z częściami 1/N"
+else
+  bad 93 "Plik z wgranych: ${UPLOAD_CHECK:-błąd importu}" "sprawdź sources.find_upload_by_name i _resolve_file w agent/namysl.py"
+fi
+NAM413_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_namysl_413_1382()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$NAM413_CHECK" = "OK" ]; then
+  ok 94 "Namysł + plik + 413 Groqa: szkic liczy lokalny model, plik jest w jego promptcie"
+else
+  bad 94 "Namysł po 413: ${NAM413_CHECK:-błąd importu}" "sprawdź _Models.ask w agent/namysl.py i _recent_read_attachment w agent/main.py"
+fi
+AWARYJNY_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_awaryjny_1382()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$AWARYJNY_CHECK" = "OK" ]; then
+  ok 95 "Po 413 wszystkich sieciowych lokalny awaryjnie (także KORYTO_LOKALNIE=bez_internetu), uczciwy komunikat"
+else
+  bad 95 "Awaryjny lokalny: ${AWARYJNY_CHECK:-błąd importu}" "sprawdź emergency_by_cloud w _rozmowa_korytem i _network_failure_note w agent/router.py"
+fi
+DUPLIKAT_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_duplikat_1383()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$DUPLIKAT_CHECK" = "OK" ]; then
+  ok 96 "Plik w Zbieraniu: jedna ścieżka z wielu referencji = jeden odczyt, jedna narracja, jedno źródło"
+else
+  bad 96 "Duplikat pliku: ${DUPLIKAT_CHECK:-błąd importu}" "sprawdź seen_paths i deduplikację plan.pliki w agent/namysl.py"
+fi
+PROMPT_CTX_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_prompt_ctx_1383()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$PROMPT_CTX_CHECK" = "OK" ]; then
+  ok 97 "Prompt lokalny: system+user > 12000 tokenów cięte z markerem; pusta odpowiedź bez retry i z jasnym komunikatem"
+else
+  bad 97 "Guard kontekstu: ${PROMPT_CTX_CHECK:-błąd importu}" "sprawdź guard w _ollama_chat i _validate_local_response w agent/router.py"
+fi
+NOTATKI_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_notatki_1384()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$NOTATKI_CHECK" = "OK" ]; then
+  ok 98 "Nazwa załącznika nie uruchamia szukania w notatkach; jeden odczyt, jedno „Czytam plik”"
+else
+  bad 98 "Notatki a nazwa pliku: ${NOTATKI_CHECK:-błąd importu}" "sprawdź _notes_query_without_attachment i seen_names w agent/namysl.py"
+fi
+NORMALIZACJA_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_normalizacja_1385()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$NORMALIZACJA_CHECK" = "OK" ]; then
+  ok 99 "Prefiks daty i numer kolizji w nazwie pliku nie tworzą drugiego odczytu („Czytam plik” raz)"
+else
+  bad 99 "Normalizacja nazw plików: ${NORMALIZACJA_CHECK:-błąd importu}" "sprawdź _normalize_name i jej użycie w agent/namysl.py"
+fi
+DEDUP_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_dedup_1386()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$DEDUP_CHECK" = "OK" ]; then
+  ok 100 "ctx.files: ten sam plik 2× (UI race) liczony raz, po resolve().lower()"
+else
+  bad 100 "Deduplikacja ctx.files: ${DEDUP_CHECK:-błąd importu}" "sprawdź _dedup_upload_paths i jego wywołanie w agent/main.py"
+fi
+NAMYSŁ_ONCE_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import ewaluacja
+ok, why = ewaluacja._check_namysl_once_1387()
+print("OK" if ok else "FAIL " + why)
+PY
+)"
+if [ "$NAMYSŁ_ONCE_CHECK" = "OK" ]; then
+  ok 101 "Namysł uruchamia się raz na wiadomość; jeden odczyt pliku w Zbieraniu (_read_file_once)"
+else
+  bad 101 "Jeden Namysł na wiadomość: ${NAMYSŁ_ONCE_CHECK:-błąd importu}" "sprawdź namysl_tried w _try_namysl i _read_file_once w agent/namysl.py"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[1;32m== %d/80 OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$PORT"
+  printf '\033[1;32m== %d/101 OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$PORT"
   exit 0
 fi
-printf '\033[1;31m== %d/80 OK, do poprawy: %s\033[0m\n\n' "$PASS" "${FAILED[*]}"
+printf '\033[1;31m== %d/101 OK, do poprawy: %s\033[0m\n\n' "$PASS" "${FAILED[*]}"
 exit 1

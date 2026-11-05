@@ -66,3 +66,24 @@
 {"id": "audyt-1333-timer-plik", "typ": "audyt_1333", "oczekiwane": true, "zrodlo": "1.33.3: jeden timer w stepperze + numeracja 1-6 (#18), plik załączony w prompcie lokalnego modelu po padnięciu chmury (#19)"}
 {"id": "audyt-1334-zbieranie-plik", "typ": "audyt_1334", "oczekiwane": true, "zrodlo": "1.33.4 (#19b): Zbieranie samo sprawdza Ollamę; material_do_sieci=false + lokalny działa -> plik czytany i digest tylko w promptcie lokalnym; bez Ollamy -> pominięty"}
 {"id": "audyt-1351-usun-zadanie", "typ": "audyt_1351", "oczekiwane": true, "zrodlo": "1.35.1: usunięcie zadania stałego usuwa też powiązaną notatkę Task (type: Task, tytuł = nazwa) do kosza; brak notatki = no-op; węzły znikają z grafu"}
+{"id": "lokalny-1370-cache", "typ": "lokalny_cache", "oczekiwane": true, "zrodlo": "1.37.0: stabilny system (data + pora dnia), dokładna godzina i fakty w ostatniej wiadomości użytkownika - nie kasują cache promptu Ollamy"}
+{"id": "lokalny-1370-budzet", "typ": "lokalny_budzet", "oczekiwane": true, "zrodlo": "1.37.0: system 800 tok, user 2000 tok, całość 3000 tok, materiał lokalny Namysłu 5300 znaków"}
+{"id": "lokalny-1370-styl", "typ": "lokalny_styl", "oczekiwane": true, "zrodlo": "1.37.0: instrukcje pod 3B - krótkie zdania, numerowana lista, konkretne zakazy, bez emoji i uprzejmości"}
+{"id": "lokalny-1370-parametry", "typ": "lokalny_parametry", "oczekiwane": true, "zrodlo": "1.37.0: temperature 0.2, top_p 0.85, top_k 40, repeat_penalty 1.2, num_predict 1024, num_ctx 16384 i stop User:/Asystent: w body"}
+{"id": "lokalny-1370-walidacja", "typ": "lokalny_walidacja", "oczekiwane": true, "zrodlo": "1.37.0: detekcja pustej odpowiedzi, echa promptu, angielskiego i urwania; dokładnie jeden retry"}
+{"id": "lokalny-1370-kolejka", "typ": "lokalny_kolejka", "oczekiwane": true, "zrodlo": "1.37.0: single slot Ollamy - 1 liczy + 2 czekają, trzecie żądanie odpada z czytelnym błędem zamiast wisieć"}
+{"id": "lokalny-1370-retry", "typ": "lokalny_retry", "oczekiwane": true, "zrodlo": "1.37.0: po timeoucie jedna próba bez ulotnego bloku (notatki, fakty) i krótszym limitem czasu"}
+{"id": "lokalny-1370-sesja", "typ": "lokalny_sesja", "oczekiwane": true, "zrodlo": "1.37.0: /debug pokazuje dzisiejsze tokeny i medianę tok/s; progi 5000 i 10000 tokenów"}
+{"id": "lokalny-1370-warmup", "typ": "lokalny_warmup", "oczekiwane": true, "zrodlo": "1.37.0: OLLAMA_KEEP_ALIVE=30m w instalatorze i .env.example; nota 'wolny start' po 120 s rozgrzewania"}
+{"id": "spoleczne-1380-dzieki", "typ": "spoleczne_1380", "oczekiwane": true, "zrodlo": "1.38.0 #21: dzięki/cześć -> krótka odpowiedź z kodu (Nie ma za co!), bez modelu, Namysłu i opisu koryta"}
+{"id": "czas-1380-warianty", "typ": "czas_1380", "oczekiwane": true, "zrodlo": "1.38.0 #22: Jaka jest aktualna godzina w Polsce? / data / dzień -> szybka ścieżka <1 s, bez modelu"}
+{"id": "plik-1380-rozpoznanie", "typ": "plik_1380", "oczekiwane": true, "zrodlo": "1.38.0 #20: rozpoznanie 3B dopisuje PLIKI: to; załącznik nadal czytany, bez etykiety pominięty"}
+{"id": "plik-upload-1381", "typ": "plik_upload_1381", "oczekiwane": true, "zrodlo": "1.38.1 #23: plik z data/wgrane/<chat>/<data>-nazwa> znajdowany po oryginalnej nazwie; Zbieranie czyta go z częściami 1/N"}
+{"id": "namysl-413-1382", "typ": "namysl_413_1382", "oczekiwane": true, "zrodlo": "1.38.2 #24: plik z data/wgrane + 413 Groqa -> szkic na lokalnym, plik w promptcie (nie odpowiedź z notatek)"}
+{"id": "awaryjny-1382", "typ": "awaryjny_1382", "oczekiwane": true, "zrodlo": "1.38.2 #24: po porażce wszystkich etapów sieciowych lokalny jest ostatnią szansą także przy KORYTO_LOKALNIE=bez_internetu"}
+{"id": "duplikat-1383", "typ": "duplikat_1383", "oczekiwane": true, "zrodlo": "1.38.3 #25a: ta sama ścieżka z wielu referencji = jeden odczyt, jedna narracja Czytam plik, jedno źródło, Notatki: nic raz"}
+{"id": "prompt-ctx-1383", "typ": "prompt_ctx_1383", "oczekiwane": true, "zrodlo": "1.38.3 #25b: system+user > 14000 tokenów cięte z markerem, pusta odpowiedź bez retry i z komunikatem prompt za długi"}
+{"id": "notatki-1384", "typ": "notatki_1384", "oczekiwane": true, "zrodlo": "1.38.4 #26: nazwa załącznika rozbita na słowa nie uruchamia szukania w notatkach; jeden odczyt pliku"}
+{"id": "normalizacja-1385", "typ": "normalizacja_1385", "oczekiwane": true, "zrodlo": "1.38.5 #27: prefiks daty i numer kolizji w nazwie nie tworzą drugiego pliku; jeden odczyt, jedno Czytam plik"}
+{"id": "dedup-1386", "typ": "dedup_1386", "oczekiwane": true, "zrodlo": "1.38.6 #29: UI race wysyła ten sam plik 2x; ctx.files deduplikowane po resolve().lower()"}
+{"id": "namysl-once-1387", "typ": "namysl_once_1387", "oczekiwane": true, "zrodlo": "1.38.7 #30: dwa przebiegi Namysłu dla jednej wiadomości dawały dwa razy Czytam plik; flaga namysl_tried dopuszcza jeden"}

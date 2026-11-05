@@ -505,6 +505,11 @@ cat > "$DROPIN_TMP" <<'EOF'
 Environment="OLLAMA_HOST=127.0.0.1:11434"
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_CONTEXT_LENGTH=16384"
+# 1.37.0: model zostaje w RAM 30 minut po ostatnim użyciu (serwerowy default;
+# requesty GREGAI i tak niosą własne keep_alive). Bez tego `ollama run` w
+# terminalu i inne narzędzia wyrzucały model po 5 minutach, a kolejne pytanie
+# płaciło ponowne wczytanie wag z dysku.
+Environment="OLLAMA_KEEP_ALIVE=30m"
 # 1.32.10 (audyt tura 14): 8 GB RAM bez swapu - najwyżej 2 modele naraz, pamięć podręczna
 # kontekstu w 8 bitach (ok. 0,3 GB zamiast 0,6 GB przy 16k), a przy braku pamięci jądro zabija
 # najpierw Ollamę (wstanie sama), nie pulpit ani GREGAI.

@@ -1,4 +1,4 @@
-# GREGAI 1.36.0
+# GREGAI 1.38.8
 
 Osobista inteligencja strategiczna jednej osoby. Rozmówca nazywa się **GREGAI**
 i mieszka na laptopie: zna Twoje notatki, pamięta to, co mu powiesz
@@ -12,7 +12,7 @@ Bez frameworków, bez procesu budowania.
 - Adres: **http://localhost:7777** (tylko na tym laptopie)
 - Instalacja: **jedna komenda, z dowolnego folderu**: `bash <folder>/install.sh`
   (niżej); system od zera: `INSTALACJA_UBUNTU_26_04.md`
-- Kontrola po instalacji: **`bash check.sh`** (80 kontroli; `install.sh` odpala ją sam)
+- Kontrola po instalacji: **`bash check.sh`** (101 kontroli; `install.sh` odpala ją sam)
 - Decyzje, zakres i bramki 1.0.0 (historia stabilizacji): **`ROADMAP_1.0.md`**
 - Licencja: **MIT** (`LICENSE`)
 
@@ -40,8 +40,14 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.36.0 - przygotowanie do publicznego
-repozytorium: `LICENSE` (MIT) z copyrightem "GREGAI contributors",
+**`CHANGELOG.md`**. Najnowsze: 1.38.8 - wizualny lifting steppera Namysłu
+(więcej oddechu, łączniki faz, pulsujące podkreślenie aktywnej fazy,
+cyjanowe numery, mobilne 3+3, reduced-motion). Wcześniej 1.38.7 - Namysł
+raz na wiadomość i jeden odczyt pliku. Wcześniej 1.38.6 - deduplikacja
+`ctx.files` po rozwiązanej ścieżce.
+Wcześniej 1.37.0 - dopasowanie lokalnego 3B: stabilny cache promptu,
+budżety, walidacja odpowiedzi, kolejka i profil sesji.
+Wcześniej 1.36.0 - przygotowanie do publicznego repozytorium: `LICENSE` (MIT) z copyrightem "GREGAI contributors",
 `SECURITY.md` z kanałem prywatnego zgłaszania podatności (72 h na
 potwierdzenie, 30 dni na poprawkę), jawnym zakresem i uczciwymi znanymi
 ograniczeniami, uzupełniony `.gitignore` oraz szablony GitHub Issues
@@ -190,6 +196,19 @@ Lokalny krok "Szkic odpowiedzi" w Namyśle ma własny limit
 `LOKALNY_TIMEOUT` (domyślnie 180 s, minimum 60 s). To osobne ustawienie od
 `CLOUD_TIMEOUT` i `JUGGLER_TIMEOUT`; zmiana lokalnego limitu nie wydłuża
 zapytań do Claude, Groq, Gemini, OpenRouter, Hugging Face ani Cloudflare.
+
+**Profil lokalnego 3B (1.37.0).** qwen2.5:3b na i7-6600U to nie miniaturka
+dużego modelu, więc GREGAI traktuje go inaczej: prompt systemowy jest
+stabilny w ramach dnia i pory dnia (dokładna godzina, fakty z pamięci i
+streszczenie rozmowy idą na koniec, do ostatniej wiadomości użytkownika),
+co pozwala Ollamie używać pamięci podręcznej promptu między wiadomościami.
+Limity: 800 tokenów systemu, 2000 wiadomości użytkownika, 3000 całości;
+materiał lokalny Namysłu to 5300 znaków. Parametry: `temperature=0.2`,
+`top_p=0.85`, `top_k=40`, `repeat_penalty=1.2`, `num_predict=1024` i stop
+`User:`/`Asystent:`. Odpowiedzi są walidowane (pusty, echo promptu,
+angielski, urwanie) z jednym retry, a kolejka dopuszcza jedno liczenie i
+dwóch czekających (`OLLAMA_QUEUE_TIMEOUT`, domyślnie 30 s). W `/debug`
+widać dzisiejsze tokeny, medianę tok/s i ostrzeżenie po 5000/10000 tokenach.
 
 Zablokowane rozmiary (decyzja 2026-10-08, na tę maszynę 16 GB): router
 1.5B, uczeń 1.5B, planer 0.5B. Duży model 3B (decyzja 2026-10-12, zejście

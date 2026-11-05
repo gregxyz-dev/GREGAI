@@ -42,7 +42,10 @@ CASES_PATH = ROOT / "training" / "ewaluacja" / "regresja.jsonl"
 HISTORY_PATH = ROOT / "data" / "ewaluacja" / "historia.jsonl"
 OFFLINE_TYPES = ("routing", "komenda", "bramka", "spoleczne", "slonce", "straz", "nauka", "pretensja", "devtools",
                  "lokalny_timeout", "izolacja", "audyt_1329", "audyt_1330", "audyt_1331", "audyt_1332", "audyt_1333", "audyt_1334",
-                 "audyt_1351")
+                 "audyt_1351", "lokalny_cache", "lokalny_budzet", "lokalny_styl", "lokalny_parametry", "lokalny_walidacja",
+                 "lokalny_kolejka", "lokalny_retry", "lokalny_sesja", "lokalny_warmup",
+                 "spoleczne_1380", "czas_1380", "plik_1380", "plik_upload_1381", "namysl_413_1382", "awaryjny_1382",
+                 "duplikat_1383", "prompt_ctx_1383", "notatki_1384", "normalizacja_1385", "dedup_1386", "namysl_once_1387")
 
 # 1.32.28 (audyt #1): pliki, których eval --zywo NIE MOŻE zmienić.
 _PRODUCTION_FILES = (
@@ -638,7 +641,7 @@ def _check_audyt_1332() -> tuple[bool, str]:
 
     # #11: prefiksy muszą być maskowane także w tekście wychodzącym do sieci.
     secrets = {
-        "openrouter": "sk-or-PLACEHOLDER
+        "openrouter": "sk-or-PLACEHOLDER0123456789",
         "groq": "gsk_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
         "ssh-rsa": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7",
         "ssh-ed25519": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExample",
@@ -968,6 +971,1227 @@ def _check_local_timeout() -> tuple[bool, str]:
     return ok, f"domyślny {default_timeout}, z .env {override_timeout}"
 
 
+# --- 1.37.0: lokalny model 3B (cache, budżety, jakość, kolejka, sesja) ------
+
+class _FakeResponse:
+    """Minimalna odpowiedź HTTP dla netguard.read_json (read + context manager)."""
+
+    def __init__(self, payload: dict):
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def read(self, n: int = -1):
+        if n is None or n < 0:
+            raw, self._raw = self._raw, b""
+            return raw
+        raw, self._raw = self._raw[:n], self._raw[n:]
+        return raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _fake_ollama(replies: list, callback):
+    """Podstawia netguard.local_urlopen; `replies` to dicti odpowiedzi albo
+    wyjątki. Zwraca (wynik callbacku, przechwycone ciała żądań)."""
+    import netguard as netguard_mod
+    import router as router_mod
+
+    original = netguard_mod.local_urlopen
+    bodies: list[dict] = []
+    queue = list(replies)
+    old_log = router_mod.OLLAMA_LOG_PATH
+
+    def fake(req, timeout=120, **_kw):
+        bodies.append(json.loads(req.data.decode("utf-8")))
+        if not queue:
+            raise AssertionError("nieoczekiwane dodatkowe zapytanie do Ollamy")
+        item = queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return _FakeResponse(item)
+
+    try:
+        netguard_mod.local_urlopen = fake
+        router_mod.OLLAMA_LOG_PATH = Path(tempfile.mkdtemp(prefix="gregai-ollama-log-")) / "uzycie.jsonl"
+        result = callback()
+    finally:
+        netguard_mod.local_urlopen = original
+        router_mod.OLLAMA_LOG_PATH = old_log
+    return result, bodies
+
+
+def _reply(text: str, tokens: int = 20) -> dict:
+    return {"message": {"content": text}, "eval_count": tokens,
+            "eval_duration": 1_000_000_000, "total_duration": 2_000_000_000}
+
+
+def _check_local_cache() -> tuple[bool, str]:
+    """1.37.0 #1: stabilny system (data + pora dnia), ulotny blok w user message."""
+    import router as router_mod
+    import awareness as aw
+    from datetime import datetime as _dt
+
+    problems = []
+    t1 = _dt(2026, 11, 5, 10, 1)
+    t2 = _dt(2026, 11, 5, 10, 59)
+    t3 = _dt(2026, 11, 5, 22, 1)
+    v = type("V", (), {"notes": {}})()
+    s1, s2, s3 = aw.local_system("## Kryzys\n116 123.", t1), aw.local_system("## Kryzys\n116 123.", t2), aw.local_system("## Kryzys\n116 123.", t3)
+    if s1 != s2:
+        problems.append("system zmienia się w ramach tej samej pory dnia")
+    if s1 == s3:
+        problems.append("system nie zmienia się przy innej porze dnia")
+    if "Godzina:" in s1:
+        problems.append("dokładna godzina w systemie (psuje cache)")
+    if router_mod._est_tokens(s1) > router_mod.LOCAL_SYSTEM_MAX_TOKENS:
+        problems.append(f"system {router_mod._est_tokens(s1)} tokenów")
+    block = aw.local_block(v, t1)
+    if "Godzina:" not in block or "## Teraz (" not in block:
+        problems.append("blok Teraz bez godziny/nagłówka")
+    msgs = router_mod._build_messages(s1, [], "Która godzina?", router_mod.OLLAMA_NUM_CTX, 400, volatile=block)
+    if "## Teraz (" in msgs[0]["content"]:
+        problems.append("blok Teraz w systemie")
+    if "## Teraz (" not in msgs[-1]["content"] or "Godzina:" not in msgs[-1]["content"]:
+        problems.append("blok Teraz poza ostatnią wiadomością")
+    return (not problems), "; ".join(problems) if problems else "system stabilny w porze dnia, Teraz w user message"
+
+
+def _check_local_budget() -> tuple[bool, str]:
+    """1.37.0 #2: system 800 tok, user 2000 tok, materiał lokalny 5300 znaków."""
+    import router as router_mod
+    import awareness as aw
+    import namysl as namysl_mod
+
+    problems = []
+    system, user = router_mod._local_prompt_budget("S" * 20_000, "Pytanie testowe.",
+                                                   notes="N" * 20_000, file_text="F" * 20_000)
+    st, ut = router_mod._est_tokens(system), router_mod._est_tokens(user)
+    if st > router_mod.LOCAL_SYSTEM_MAX_TOKENS:
+        problems.append(f"system {st} > 800")
+    if ut > router_mod.LOCAL_USER_MAX_TOKENS:
+        problems.append(f"user {ut} > 2000")
+    if st + ut > router_mod.LOCAL_PROMPT_MAX_TOKENS:
+        problems.append(f"całość {st + ut} > 3000")
+    if "notatka skrócona" not in user:
+        problems.append("notatka nie została oznaczona jako skrócona")
+    if "pełna treść pliku" not in user:
+        problems.append("plik bez odesłania do pełnej treści")
+    _s2, huge_user = router_mod._local_prompt_budget("", "U" * 30_000)
+    if router_mod._est_tokens(huge_user) > router_mod.LOCAL_USER_MAX_TOKENS:
+        problems.append(f"wklejony tekst {router_mod._est_tokens(huge_user)} > 2000")
+    if namysl_mod.MATERIAL_CHARS_LOCAL > 5300:
+        problems.append(f"materiał lokalny {namysl_mod.MATERIAL_CHARS_LOCAL} znaków")
+    variant = namysl_mod._local_user("M" * 20_000, "## Teraz (x)\nGodzina: 10:00")
+    if len(variant) > namysl_mod.LOCAL_USER_MAX_CHARS:
+        problems.append(f"wariant lokalny Namysłu {len(variant)} znaków")
+    if "## Teraz (" not in variant:
+        problems.append("Namysł zgubił blok Teraz")
+    return (not problems), "; ".join(problems) if problems else f"system {st} tok, user {ut} tok, materiał 5300 znaków"
+
+
+def _check_local_style() -> tuple[bool, str]:
+    """1.37.0 #3: instrukcje pod 3B - krótkie, numerowane, konkretne."""
+    import awareness as aw
+
+    rules = aw._local_rules()
+    problems = []
+    for must in ("1.", "2.", "NIE zgaduj", "NIE pisz", "mocniejszego modelu", "Odpowiedz po polsku"):
+        if must not in rules:
+            problems.append(f"brak „{must}”")
+    if "uprzejmie" in rules.lower() or "proszę" in rules.lower():
+        problems.append("zbędna uprzejmość")
+    if any(ch in rules for ch in "😀🙂✅❌"):
+        problems.append("emoji w instrukcjach")
+    for line in rules.splitlines():
+        body = line.split(".", 1)[1] if line[:2].strip().rstrip(".").isdigit() and "." in line else line
+        for sentence in re.split(r"(?<=[.!?])\s+", body):
+            words = len(re.findall(r"\w+", sentence))
+            if words > 15:
+                problems.append(f"zdanie {words} słów: {sentence[:40]}")
+    return (not problems), "; ".join(problems) if problems else "8 krótkich, numerowanych zasad"
+
+
+def _check_local_params() -> tuple[bool, str]:
+    """1.37.0 #4: parametry inferencji naprawdę w body żądania."""
+    import router as router_mod
+
+    router_mod._BIG_WARM_DONE.set()
+    result, bodies = _fake_ollama([_reply("Odpowiedź po polsku.")],
+                                  lambda: router_mod._ollama_chat("SYS", [], "Pytanie", num_predict=router_mod.OLLAMA_NUM_PREDICT))
+    if not bodies:
+        return False, "brak żądania do Ollamy"
+    opts = bodies[0].get("options") or {}
+    problems = []
+    if opts.get("temperature", 9) > 0.5:
+        problems.append("temperature > 0.5")
+    if opts.get("top_p") != 0.85:
+        problems.append(f"top_p {opts.get('top_p')}")
+    if opts.get("top_k") != 40:
+        problems.append(f"top_k {opts.get('top_k')}")
+    if opts.get("repeat_penalty") != 1.2:
+        problems.append(f"repeat_penalty {opts.get('repeat_penalty')}")
+    if opts.get("num_predict") != 1024:
+        problems.append(f"num_predict {opts.get('num_predict')}")
+    if opts.get("num_ctx", 99999) > router_mod.OLLAMA_NUM_CTX:
+        problems.append(f"num_ctx {opts.get('num_ctx')}")
+    stop = opts.get("stop") or []
+    if "\nUser:" not in stop or "\nAsystent:" not in stop:
+        problems.append("brak stop dla User:/Asystent:")
+    if not bodies[0].get("keep_alive"):
+        problems.append("brak keep_alive")
+    if result != "Odpowiedź po polsku.":
+        problems.append(f"odpowiedź {result!r}")
+    return (not problems), "; ".join(problems) if problems else "temperature 0.2, top_p 0.85, top_k 40, repeat 1.2, 1024 tok"
+
+
+def _check_local_validation() -> tuple[bool, str]:
+    """1.37.0 #5: detekcja pustego, echa promptu, angielskiego i urwania."""
+    import router as router_mod
+
+    problems = []
+    cases = [
+        ("", "cokolwiek", (False, "pusty", False)),
+        ("To jest dokładnie powtórzony prompt użytkownika, który model odbił zamiast odpowiedzi.",
+         "To jest dokładnie powtórzony prompt użytkownika, który model odbił zamiast odpowiedzi.",
+         (False, "powtorzenie promptu", True)),
+        ("Sure! Here is the answer you need with the price of gold today and more details.",
+         "kurs złota", (False, "angielski", True)),
+        ("To jest odpowiedź, która urywa się w połowie zdania i nie ma końca " * 12, "pytanie", (True, "urwane", False)),
+        ("Krótka, poprawna odpowiedź po polsku.", "pytanie", (True, "", False)),
+    ]
+    for text, prompt, want in cases:
+        got = router_mod._validate_local_response(text, prompt)
+        if got != want:
+            problems.append(f"{want[1] or 'ok'}: dostałem {got}")
+    # 1.38.3 (#25b): pusta odpowiedź NIE jest ponawiana - to zwykle przekroczony
+    # kontekst, więc retry z tym samym promptem dałby ten sam błąd.
+    reply, bodies = _fake_ollama([_reply("")],
+                                 lambda: router_mod._ollama_chat("SYS", [], "Pytanie"))
+    if reply != "" or len(bodies) != 1:
+        problems.append(f"pusta odpowiedź bez retry: {reply!r}, {len(bodies)} żądań")
+    # Retry po angielsku: drugie żądanie musi nieść "Odpowiedz po polsku".
+    reply2, bodies2 = _fake_ollama([_reply("Sure! Here is the answer you need with the price of gold today and more."),
+                                    _reply("Poprawna odpowiedź po polsku.")],
+                                   lambda: router_mod._ollama_chat("SYS", [], "Pytanie"))
+    sent = json.dumps(bodies2[-1].get("messages") or [], ensure_ascii=False) if len(bodies2) > 1 else ""
+    if reply2 != "Poprawna odpowiedź po polsku." or "Odpowiedz po polsku" not in sent:
+        problems.append(f"retry angielskiego: {reply2!r}, {len(bodies2)} żądań")
+    return (not problems), "; ".join(problems) if problems else "pusty bez retry, echo/angielski z retry, urwane tylko oznaczane"
+
+
+def _check_local_queue() -> tuple[bool, str]:
+    """1.37.0 #6: semafor 1 liczy + 2 czekają, trzecie żądanie odpada."""
+    import threading as _th
+    import time as _time
+    import router as router_mod
+
+    old_timeout = router_mod._LOCAL_QUEUE_TIMEOUT
+    router_mod._LOCAL_QUEUE_TIMEOUT = 0.4
+    problems = []
+    release = _th.Event()
+    errors: list[str] = []
+
+    def holder():
+        try:
+            with router_mod._local_slot():
+                release.wait(3)
+        except Exception as e:  # pragma: no cover - diagnostyka testu
+            errors.append(f"holder: {type(e).__name__}: {e}")
+
+    def waiter():
+        try:
+            with router_mod._local_slot():
+                pass
+        except Exception as e:
+            errors.append(f"waiter: {type(e).__name__}: {e}")
+
+    try:
+        t0 = _th.Thread(target=holder, daemon=True)
+        t0.start()
+        # dwaj czekający (active = 3: holder + 2)
+        waiters = [_th.Thread(target=waiter, daemon=True) for _ in range(2)]
+        for t in waiters:
+            t.start()
+        deadline = _time.monotonic() + 2
+        while _time.monotonic() < deadline:
+            with router_mod._LOCAL_QUEUE_LOCK:
+                if router_mod._LOCAL_QUEUE_ACTIVE >= 3:
+                    break
+            _time.sleep(0.02)
+        third_error = ""
+        try:
+            with router_mod._local_slot():
+                pass
+            third_error = "trzecie weszło"
+        except RuntimeError as e:
+            third_error = str(e)
+        if "kolejka pełna" not in third_error:
+            problems.append(f"trzecie żądanie: {third_error!r}")
+    finally:
+        release.set()
+        for t in locals().get("waiters", []):
+            t.join(timeout=3)
+        try:
+            t0.join(timeout=3)
+        except Exception:
+            pass
+        router_mod._LOCAL_QUEUE_TIMEOUT = old_timeout
+    if errors:
+        problems.append("; ".join(errors))
+    return (not problems), "; ".join(problems) if problems else "2 czekających, trzecie odpada bez crasha"
+
+
+def _check_local_retry() -> tuple[bool, str]:
+    """1.37.0 #7: po timeoucie jedna próba bez ulotnego bloku (faktów)."""
+    import router as router_mod
+
+    problems = []
+    router_mod._BIG_WARM_DONE.set()
+    reply, bodies = _fake_ollama([TimeoutError("timed out"), _reply("Odpowiedź po timeoucie, po polsku.")],
+                                 lambda: router_mod._ollama_chat("SYS", [], "Pytanie", volatile="TAJNE_NOTATKI"))
+    if reply != "Odpowiedź po timeoucie, po polsku.":
+        problems.append(f"wynik {reply!r}")
+    if len(bodies) != 2:
+        problems.append(f"{len(bodies)} żądań zamiast 2")
+    else:
+        first = json.dumps(bodies[0].get("messages") or [], ensure_ascii=False)
+        second = json.dumps(bodies[1].get("messages") or [], ensure_ascii=False)
+        if "TAJNE_NOTATKI" not in first:
+            problems.append("pierwsze żądanie bez bloku")
+        if "TAJNE_NOTATKI" in second:
+            problems.append("retry nadal niesie notatki")
+    return (not problems), "; ".join(problems) if problems else "timeout -> retry bez notatek, potem wynik"
+
+
+def _check_local_session() -> tuple[bool, str]:
+    """1.37.0 #8: licznik dzisiejszej sesji i ostrzeżenia 5000/10000 tokenów."""
+    import router as router_mod
+    import tempfile as _tf
+
+    old = router_mod.OLLAMA_LOG_PATH
+    tmp = Path(_tf.mkdtemp(prefix="gregai-sesja-")) / "uzycie.jsonl"
+    today = time.strftime("%Y-%m-%d")
+    rows = [
+        {"ts": today + "T10:00:00", "tokeny": 3000, "tok_s": 5.0},
+        {"ts": today + "T10:05:00", "tokeny": 4000, "tok_s": 7.0},
+        {"ts": "2020-01-01T10:00:00", "tokeny": 9999, "tok_s": 1.0},
+    ]
+    problems = []
+    try:
+        tmp.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        router_mod.OLLAMA_LOG_PATH = tmp
+        st = router_mod.local_session_stats()
+        if (st["tokeny"], st["inferencje"], st["tok_s_mediana"]) != (7000, 2, 7.0):
+            problems.append(f"licznik: {st}")
+        if "5000" not in st["ostrzezenie"]:
+            problems.append("brak ostrzeżenia po 5000")
+        rows.append({"ts": today + "T11:00:00", "tokeny": 4000, "tok_s": 6.0})
+        tmp.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        st2 = router_mod.local_session_stats()
+        if "10000" not in st2["ostrzezenie"] or "restart" not in st2["ostrzezenie"].lower():
+            problems.append("brak propozycji restartu po 10000")
+    finally:
+        router_mod.OLLAMA_LOG_PATH = old
+    return (not problems), "; ".join(problems) if problems else "7000 tokenów, mediana 7 tok/s, progi 5000/10000"
+
+
+def _check_local_warmup() -> tuple[bool, str]:
+    """1.37.0 #9: keep_alive 30m w instalatorze i nota o wolnym starcie."""
+    import router as router_mod
+
+    problems = []
+    installer = (ROOT / "install.sh").read_text(encoding="utf-8", errors="replace")
+    if "OLLAMA_KEEP_ALIVE=30m" not in installer:
+        problems.append("install.sh bez OLLAMA_KEEP_ALIVE=30m")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8", errors="replace")
+    if "OLLAMA_KEEP_ALIVE=30m" not in env_example:
+        problems.append(".env.example bez OLLAMA_KEEP_ALIVE")
+    original = dict(router_mod._WARM_STATE)
+    try:
+        router_mod._WARM_STATE.update(state="gotowe", detail="qwen2.5:3b gotowy", started=time.time() - 200,
+                                      finished=time.time())
+        st = router_mod.warm_status()
+        if st.get("seconds") != 200 or "wolny start" not in (st.get("detail") or ""):
+            problems.append(f"warm_status: {st}")
+    finally:
+        router_mod._WARM_STATE.clear()
+        router_mod._WARM_STATE.update(original)
+    return (not problems), "; ".join(problems) if problems else "keep_alive 30m + nota po 120 s"
+
+
+def _check_spoleczne_1380() -> tuple[bool, str]:
+    """1.38.0 #21: "dzięki"/"cześć" -> krótka odpowiedź z kodu, bez modelu."""
+    import namysl as namysl_mod
+    import router as router_mod
+    import standing as standing_mod
+
+    problems: list[str] = []
+    settings = {"tryb": "zawsze", "material_do_sieci": False}
+    expected = {
+        "dzięki": "Nie ma za co!",
+        "Dziękuję bardzo": "Nie ma za co!",
+        "Dzięki za pomoc": "Nie ma za co!",
+        "cześć": "Cześć! W czym mogę pomóc?",
+        "hej": "Cześć! W czym mogę pomóc?",
+    }
+    for msg, want in expected.items():
+        got = router_mod._social_reply(msg, settings)
+        if got != want:
+            problems.append(f"{msg!r} -> {got!r}, oczekiwano {want!r}")
+    for msg in ("dzięki, zrób mi plan na jutro", "hej, przeczytaj to", "hej, co u ciebie?"):
+        if router_mod._social_reply(msg, settings) is not None:
+            problems.append(f"{msg!r} niesłusznie przechwycone")
+
+    original = (router_mod._ollama_chat, router_mod.ollama_available, namysl_mod.load_settings,
+                standing_mod.pop_pending_alerts)
+    calls: list[int] = []
+
+    def fake_chat(*_a, **_k):
+        calls.append(1)
+        return "ODPOWIEDŹ MODELU"
+
+    try:
+        router_mod._ollama_chat = fake_chat
+        router_mod.ollama_available = lambda: True
+        namysl_mod.load_settings = lambda: settings
+        standing_mod.pop_pending_alerts = lambda: []
+        vault = type("V", (), {"notes": {}})()
+        t0 = time.monotonic()
+        res = router_mod.route(vault, "SYS", [], "dzięki", nie_ucz=True, nie_zapisuj_sladu=True)
+        took = time.monotonic() - t0
+        speech = res.get("_speech_bez_alertu") or res.get("speech") or ""
+        if speech != "Nie ma za co!":
+            problems.append(f"route: {speech!r}")
+        if calls:
+            problems.append(f"model wywołany {len(calls)} raz")
+        if took >= 1.0:
+            problems.append(f"odpowiedź trwała {took:.2f} s")
+        if "Internet działa" in speech or "WARP" in speech or "koryto" in speech.lower():
+            problems.append("w odpowiedzi opis koryta zamiast podziękowania")
+    finally:
+        (router_mod._ollama_chat, router_mod.ollama_available, namysl_mod.load_settings,
+         standing_mod.pop_pending_alerts) = original
+    return (not problems), "; ".join(problems) if problems else "dzięki/cześć bez modelu, <1 s"
+
+
+def _check_czas_1380() -> tuple[bool, str]:
+    """1.38.0 #22: warianty pytania o godzinę/datę trafiają w szybką ścieżkę."""
+    import namysl as namysl_mod
+    import router as router_mod
+    import standing as standing_mod
+
+    problems: list[str] = []
+    time_cases = ("Która godzina?", "Która jest godzina?", "Jaka jest aktualna godzina?",
+                  "Jaka jest aktualna godzina w Polsce?", "aktualna godzina", "ile jest?",
+                  "Podaj godzinę.")
+    for msg in time_cases:
+        got = router_mod._time_answer(msg)
+        if not re.match(r"^Jest \d{2}:\d{2}( \w+)?\.$", got or ""):
+            problems.append(f"{msg!r} -> {got!r}")
+    date_cases = ("Jaka jest data?", "Jaki jest dzisiaj dzień?", "Który jest dzień?",
+                  "Jaki mamy dziś dzień?", "Podaj dzisiejszą datę.")
+    for msg in date_cases:
+        got = router_mod._time_answer(msg)
+        if not (got or "").startswith("Dziś:"):
+            problems.append(f"{msg!r} -> {got!r}")
+    for msg in ("w jakich godzinach otwarte?", "Która godzina w strefie UTC?",
+                "ile jest osób w pokoju?", "ile godzin ma doba?"):
+        if router_mod._time_answer(msg) is not None:
+            problems.append(f"{msg!r} niesłusznie odpowiedziane jako zegar")
+
+    settings = {"tryb": "zawsze", "material_do_sieci": False}
+    original = (router_mod._ollama_chat, router_mod.ollama_available, namysl_mod.load_settings,
+                standing_mod.pop_pending_alerts)
+    calls: list[int] = []
+
+    def fake_chat(*_a, **_k):
+        calls.append(1)
+        return "ODPOWIEDŹ MODELU"
+
+    try:
+        router_mod._ollama_chat = fake_chat
+        router_mod.ollama_available = lambda: True
+        namysl_mod.load_settings = lambda: settings
+        standing_mod.pop_pending_alerts = lambda: []
+        vault = type("V", (), {"notes": {}})()
+        t0 = time.monotonic()
+        res = router_mod.route(vault, "SYS", [], "Jaka jest aktualna godzina w Polsce?",
+                               nie_ucz=True, nie_zapisuj_sladu=True)
+        took = time.monotonic() - t0
+        speech = res.get("_speech_bez_alertu") or res.get("speech") or ""
+        if not re.match(r"^Jest \d{2}:\d{2}( \w+)?\.$", speech):
+            problems.append(f"route: {speech!r}")
+        if calls:
+            problems.append(f"model wywołany {len(calls)} raz")
+        if took >= 1.0:
+            problems.append(f"odpowiedź trwała {took:.2f} s")
+    finally:
+        (router_mod._ollama_chat, router_mod.ollama_available, namysl_mod.load_settings,
+         standing_mod.pop_pending_alerts) = original
+    return (not problems), "; ".join(problems) if problems else "godzina/data z kodu, bez modelu, <1 s"
+
+
+def _check_plik_1380() -> tuple[bool, str]:
+    """1.38.0 #20: "PLIKI: to" z rozpoznania nie robi "pominięty" dla załącznika."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import namysl as namysl_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1380-"))
+    fake = tmp / "fake.txt"
+    fake.write_text("SUROWY WYCIAG 77", encoding="utf-8")
+
+    originals = (analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand,
+                 analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks, namysl_mod.parse_plan)
+
+    def read_document(_path):
+        return {"ok": True, "text": "SUROWY WYCIAG 77", "name": "fake.txt", "kind": "txt",
+                "chars": 16, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "krótki plik tekstowy"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 3, "streszczone": 3, "doslownie": False}
+
+    def make_ctx(local_recheck, events, seen):
+        def local_chat(_system, _history, message):
+            seen.append(message)
+            return "ODPOWIEDZ LOKALNA"
+
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=[str(fake)], sys_local="SYS", sys_cloud="SYS", local_up=False,
+            local_chat=local_chat, local_recheck=local_recheck,
+            cloud_chat=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("bez sieci")),
+            cloud_pool=lambda: [],
+            research=None, search_notes=lambda _v, _q: [], research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": False},
+            progress=events.append,
+        )
+
+    def bogus_plan(text, message):
+        plan = namysl_mod.default_plan(message)
+        plan.pliki = ["to", "przeczytaj to"]
+        return plan
+
+    try:
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1, lambda _text: ["a", "b", "c"]
+        namysl_mod.parse_plan = bogus_plan
+
+        events, seen = [], []
+        out = namysl_mod.run(make_ctx(lambda: True, events, seen))
+        labels = [str(e.get("label") or "") for e in events]
+        if out is None:
+            problems.append("Namysł nie zwrócił odpowiedzi")
+        if not any("Czytam plik fake.txt" in label for label in labels):
+            problems.append("brak „Czytam plik fake.txt”")
+        if any("pominięty" in label for label in labels):
+            problems.append(f"błędna etykieta: {[l for l in labels if 'pominięty' in l][:2]}")
+        if any("Plik to" in label for label in labels):
+            problems.append("wpis „to” z rozpoznania trafił do plików")
+        if not any("DIGEST:ODPOWIEDZ LOKALNA" in prompt for prompt in seen):
+            problems.append("digest nie trafił do promptu lokalnego")
+
+        events2, seen2 = [], []
+        namysl_mod.run(make_ctx(lambda: False, events2, seen2))
+        labels2 = [str(e.get("label") or "") for e in events2]
+        if not any("nie mogę przeczytać" in label for label in labels2):
+            problems.append("brak „nie mogę przeczytać” bez lokalnego i bez zgody")
+
+        if namysl_mod._plausible_file_ref("to"):
+            problems.append("filtr przepuścił „to”")
+        if namysl_mod._plausible_file_ref("przeczytaj to"):
+            problems.append("filtr przepuścił prozę „przeczytaj to”")
+        if not namysl_mod._plausible_file_ref("raport.pdf"):
+            problems.append("filtr odrzucił prawdziwy plik")
+        # Fix #19b w Zbieraniu musi omijać 5-sekundowy cache ollama_available(),
+        # inaczej stary "nie działa" nadal blokuje plik mimo działającej Ollamy.
+        router_src = (ROOT / "agent" / "router.py").read_text(encoding="utf-8")
+        if "ollama_available(fresh=True)" not in router_src:
+            problems.append("Zbieranie nie robi świeżego sprawdzenia Ollamy")
+    finally:
+        (analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand,
+         analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks, namysl_mod.parse_plan) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "załącznik czytany, śmieci z PLIKI odfiltrowane"
+
+
+def _check_plik_upload_1381() -> tuple[bool, str]:
+    """1.38.1 #23: plik z data/wgrane/<chat>/<data>-<nazwa> jest znajdowany
+    po oryginalnej nazwie z wiadomości; Zbieranie czyta go z częściami 1/N."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import namysl as namysl_mod
+    import sources as sources_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1381-"))
+    chat = "test-1381"
+    original = "Chronologia fabularna.txt"
+    upload_dir = tmp / chat
+    upload_dir.mkdir(parents=True)
+    stored = upload_dir / f"2026-11-05-{original}"
+    stored.write_text("STARY PLIK " * 20, encoding="utf-8")
+
+    originals = (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+                 analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+                 namysl_mod.parse_plan)
+
+    def read_document(path):
+        p = Path(path)
+        return {"ok": True, "text": "TRESC PLIKU " * 20, "name": p.name, "kind": "txt",
+                "chars": len(p.name) * 20, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "plik tekstowy z wgranych"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 3, "streszczone": 3, "doslownie": False}
+
+    def plan_with_original(_text, message):
+        plan = namysl_mod.default_plan(message)
+        plan.pliki = [original]
+        return plan
+
+    def make_ctx(events, seen):
+        def local_chat(_system, _history, message):
+            seen.append(message)
+            return "ODPOWIEDZ LOKALNA"
+
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=[], sys_local="SYS", sys_cloud="SYS", local_up=False, chat=chat,
+            local_chat=local_chat, local_recheck=lambda: True,
+            cloud_chat=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("bez sieci")),
+            cloud_pool=lambda: [],
+            research=None, search_notes=lambda _v, _q: [], research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": False},
+            progress=events.append,
+        )
+
+    try:
+        sources_mod.UPLOAD_DIR = tmp
+        resolved, note = namysl_mod._resolve_file(original, chat, sources_mod.chat_roots(chat))
+        if resolved != stored:
+            problems.append(f"nie znaleziono wgranego pliku po oryginalnej nazwie ({note})")
+        found = sources_mod.find_upload_by_name(chat, original)
+        if stored not in found:
+            problems.append("find_upload_by_name nie widzi pliku z prefiksem daty")
+
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1, lambda _text: ["a", "b", "c"]
+        namysl_mod.parse_plan = plan_with_original
+        events, seen = [], []
+        out = namysl_mod.run(make_ctx(events, seen))
+        labels = [str(e.get("label") or "") for e in events]
+        if out is None:
+            problems.append("Namysł nie zwrócił odpowiedzi")
+        if not any(("Czytam plik" in label and "część 1/" in label) for label in labels):
+            problems.append(f"brak „Czytam plik ... część 1/N”: {labels[:4]}")
+        if any(("nie znaleziony" in label or "pominięty" in label) for label in labels):
+            problems.append("plik z wgranych oznaczony jako nieznaleziony/pominięty")
+        if not any("DIGEST:ODPOWIEDZ LOKALNA" in prompt for prompt in seen):
+            problems.append("digest z wgranego pliku nie trafił do promptu lokalnego")
+
+        missing, why = namysl_mod._resolve_file("nie-ma-takiego.txt", chat, sources_mod.chat_roots(chat))
+        if missing is not None or "nie znalazłem" not in why:
+            problems.append(f"brak poprawnego komunikatu dla nieistniejącego pliku: {why}")
+    finally:
+        (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+         analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+         namysl_mod.parse_plan) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "data/wgrane/<chat>/<data>-nazwa czytane po oryginalnej nazwie"
+
+
+def _check_namysl_413_1382() -> tuple[bool, str]:
+    """1.38.2 #24: plik z data/wgrane + 413 u Groqa -> szkic liczy lokalny
+    model, a plik jest w jego promptcie (nie odpowiedź z notatek)."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import main as main_mod
+    import namysl as namysl_mod
+    import sources as sources_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1382-"))
+    chat = "test-1382"
+    original = "Chronologia fabularna.txt"
+    upload_dir = tmp / chat
+    upload_dir.mkdir(parents=True)
+    stored = upload_dir / f"2026-11-05-{original}"
+    stored.write_text("TRESC PLIKU O CHRONOLOGII " * 100, encoding="utf-8")
+
+    originals = (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+                 analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks)
+    calls = {"cloud": 0, "local": 0}
+    local_prompts: list[str] = []
+    read_paths: list[str] = []
+    events: list[dict] = []
+
+    def read_document(path):
+        read_paths.append(str(path))
+        return {"ok": True, "text": "TRESC PLIKU O CHRONOLOGII " * 100,
+                "name": Path(path).name, "kind": "txt", "chars": 2400, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "plik tekstowy o chronologii"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 3, "streszczone": 3, "doslownie": False}
+
+    def cloud_fail(_s, _m, _u, **_kw):
+        calls["cloud"] += 1
+        raise RuntimeError('HTTP 413: Request too large for model "openai/gpt-oss-20b"')
+
+    def local_chat(_system, _history, message):
+        calls["local"] += 1
+        local_prompts.append(message)
+        return "ODPOWIEDZ LOKALNA NA PODSTAWIE PLIKU"
+
+    def make_ctx(files):
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=files, sys_local="SYS", sys_cloud="SYS", local_up=False, chat=chat,
+            local_chat=local_chat, local_recheck=lambda: True,
+            cloud_chat=cloud_fail, cloud_pool=lambda: ["groq"],
+            research=None, search_notes=lambda _v, _q: [], research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": True},
+            progress=events.append,
+        )
+
+    try:
+        sources_mod.UPLOAD_DIR = tmp
+        recovered = main_mod._recent_read_attachment(chat, "hej, przeczytaj to")
+        if [str(stored)] != recovered:
+            problems.append(f"odzyskiwanie świeżego pliku: {recovered}")
+        if main_mod._recent_read_attachment(chat, "opowiedz o pogodzie"):
+            problems.append("plik odzyskany bez prośby o przeczytanie")
+
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1, lambda _text: ["a", "b", "c"]
+        out = namysl_mod.run(make_ctx(recovered))
+        if out is None:
+            problems.append("Namysł nie zwrócił odpowiedzi po 413")
+        speech = (out or {}).get("speech", "")
+        if speech != "ODPOWIEDZ LOKALNA NA PODSTAWIE PLIKU":
+            problems.append(f"szkic nie przeszedł na lokalny: {speech!r}")
+        if not calls["cloud"] or not calls["local"]:
+            problems.append(f"wywołania cloud/local: {calls}")
+        if not any("DIGEST:ODPOWIEDZ LOKALNA" in p for p in local_prompts):
+            problems.append("plik/digest nie trafił do promptu lokalnego")
+        if str(stored) not in read_paths:
+            problems.append(f"nie czytano wgranego pliku: {read_paths[:2]}")
+        labels = [str(e.get("label") or "") for e in events]
+        if not any("Sieć nie odpowiedziała - liczę lokalnie" in label for label in labels):
+            problems.append("brak komunikatu „Sieć nie odpowiedziała - liczę lokalnie”")
+        zrodla = (out or {}).get("card", {}).get("zrodla") or []
+        if not any("plik:" in str(z) for z in zrodla):
+            problems.append(f"plik nie jest źródłem odpowiedzi: {zrodla}")
+    finally:
+        (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+         analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "413 -> szkic lokalnie, plik w promptcie"
+
+
+def _check_awaryjny_1382() -> tuple[bool, str]:
+    """1.38.2 #24: po porażce wszystkich etapów sieciowych lokalny jest
+    ostatnią szansą także przy KORYTO_LOKALNIE=bez_internetu."""
+    import namysl as namysl_mod
+    import netguard as netguard_mod
+    import router as router_mod
+    import juggler as juggler_mod
+    import standing as standing_mod
+    import trace as trace_mod
+
+    problems: list[str] = []
+    local_calls: list[str] = []
+    traced: list[dict] = []
+    original = (router_mod._ollama_chat, router_mod.ollama_available, router_mod.STUDENT_MODEL,
+                juggler_mod.providers_pool, juggler_mod.chat, juggler_mod.rozdzielnica,
+                juggler_mod.is_risky, netguard_mod.internet_allowed,
+                standing_mod.pop_pending_alerts, trace_mod.record, namysl_mod.load_settings)
+    old_local = os.environ.get("KORYTO_LOKALNIE")
+    old_koryto = os.environ.get("KORYTO")
+
+    def bad_chat(*_a, **_k):
+        raise RuntimeError('HTTP 413: Request too large for model "openai/gpt-oss-20b"')
+
+    try:
+        os.environ["KORYTO"] = "darmowe,lokalnie"
+        os.environ["KORYTO_LOKALNIE"] = "bez_internetu"
+        router_mod._ollama_chat = lambda system, history, message, **kw: (local_calls.append(message)
+                                                                         or "Odpowiedź lokalna po awarii sieci.")
+        router_mod.ollama_available = lambda: True
+        router_mod.STUDENT_MODEL = ""
+        juggler_mod.providers_pool = lambda etap=None: ["groq"]
+        juggler_mod.chat = bad_chat
+        juggler_mod.rozdzielnica = lambda _poziom: {"etapy": ["darmowe"], "model": None}
+        juggler_mod.is_risky = lambda _m: False
+        netguard_mod.internet_allowed = lambda: (True, "")
+        standing_mod.pop_pending_alerts = lambda: []
+        trace_mod.record = lambda stage, message, **kw: traced.append({"stage": stage, **kw})
+        namysl_mod.load_settings = lambda: {"tryb": "zawsze", "material_do_sieci": False}
+        res = router_mod.route(type("V", (), {"notes": {}})(), "SYS", [], "ok",
+                               nie_ucz=True, nie_zapisuj_sladu=True)
+        speech = res.get("_speech_bez_alertu") or res.get("speech") or ""
+        if speech != "Odpowiedź lokalna po awarii sieci.":
+            problems.append(f"brak lokalnej odpowiedzi: {speech!r}")
+        if not local_calls:
+            problems.append("lokalny model nie został wywołany awaryjnie")
+        extra = {}
+        for row in traced:
+            if isinstance(row.get("extra"), dict):
+                extra.update(row["extra"])
+        if "Sieć nie odpowiedziała" not in str(extra.get("lokalnie_awaryjnie", "")):
+            problems.append(f"brak komunikatu awaryjnego: {extra.get('lokalnie_awaryjnie')!r}")
+        note = router_mod._network_failure_note({"cloud_error": "HTTP 413", "ollama_error": "TimeoutError"})
+        if "nie użyłem" in note or "też nie odpowiedział" not in note:
+            problems.append(f"zły komunikat po nieudanej próbie lokalnej: {note!r}")
+    finally:
+        (router_mod._ollama_chat, router_mod.ollama_available, router_mod.STUDENT_MODEL,
+         juggler_mod.providers_pool, juggler_mod.chat, juggler_mod.rozdzielnica,
+         juggler_mod.is_risky, netguard_mod.internet_allowed,
+         standing_mod.pop_pending_alerts, trace_mod.record, namysl_mod.load_settings) = original
+        if old_local is None:
+            os.environ.pop("KORYTO_LOKALNIE", None)
+        else:
+            os.environ["KORYTO_LOKALNIE"] = old_local
+        if old_koryto is None:
+            os.environ.pop("KORYTO", None)
+        else:
+            os.environ["KORYTO"] = old_koryto
+    return (not problems), "; ".join(problems) if problems else "sieć 413 -> lokalny awaryjnie, uczciwy komunikat"
+
+
+def _check_duplikat_1383() -> tuple[bool, str]:
+    """1.38.3 #25a: ta sama ścieżka z wielu referencji = JEDEN odczyt i jedna
+    narracja, bez duplikatów materiału i powtórzonego „Notatki: nic”."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import namysl as namysl_mod
+    import sources as sources_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1383-"))
+    chat = "test-1383"
+    original = "Chronologia fabularna.txt"
+    upload_dir = tmp / chat
+    upload_dir.mkdir(parents=True)
+    stored = upload_dir / f"2026-11-05-{original}"
+    stored.write_text("TRESC PLIKU " * 100, encoding="utf-8")
+
+    originals = (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+                 analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+                 namysl_mod.parse_plan)
+    reads: list[str] = []
+
+    def read_document(path):
+        reads.append(str(path))
+        return {"ok": True, "text": "TRESC PLIKU " * 100, "name": Path(path).name, "kind": "txt",
+                "chars": 1200, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "plik tekstowy"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 1, "streszczone": 1, "doslownie": False}
+
+    def plan(_text, message):
+        p = namysl_mod.default_plan(message)
+        # Trzy różne zapisy tego samego pliku + proza z polecenia.
+        p.pliki = [original, stored.name, str(stored), "przeczytaj to"]
+        return p
+
+    def make_ctx(events):
+        def local_chat(_system, _history, _message):
+            return "ODPOWIEDZ LOKALNA"
+
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=[str(stored)], sys_local="SYS", sys_cloud="SYS", local_up=False, local_recheck=lambda: True,
+            chat=chat, local_chat=local_chat, cloud_chat=lambda *_a, **_k: ("", ""),
+            cloud_pool=lambda: [], research=None, search_notes=lambda _v, _q: [], research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": False},
+            progress=events.append,
+        )
+
+    try:
+        sources_mod.UPLOAD_DIR = tmp
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1000, lambda _text: ["a"]
+        namysl_mod.parse_plan = plan
+        events: list[dict] = []
+        out = namysl_mod.run(make_ctx(events))
+        labels = [str(e.get("label") or "") for e in events]
+        if len(reads) != 1:
+            problems.append(f"odczytów pliku: {len(reads)}")
+        if sum(1 for label in labels if "Czytam plik" in label) != 1:
+            problems.append(f"narracji „Czytam plik”: {[l for l in labels if 'Czytam plik' in l]}")
+        if sum(1 for label in labels if "Notatki: nic" in label) != 1:
+            problems.append("„Notatki: nic” nie raz")
+        zrodla = (out or {}).get("card", {}).get("zrodla") or []
+        if sum(1 for z in zrodla if "plik:" in str(z)) != 1:
+            problems.append(f"duplikaty źródeł: {zrodla}")
+    finally:
+        (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+         analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+         namysl_mod.parse_plan) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "jeden odczyt, jedna narracja, jedno źródło"
+
+
+def _check_prompt_ctx_1383() -> tuple[bool, str]:
+    """1.38.3 #25b, próg 12000 od 1.38.4: prompt > 12000 tokenów jest cięty,
+    a pusty wynik nie ma retry."""
+    import router as router_mod
+
+    problems: list[str] = []
+    router_mod._BIG_WARM_DONE.set()
+    system = "Słowo " * 4800          # ok. 10,7 tys. tokenów
+    user = "U" * 12000                # _build_messages i tak utnie do 2000
+    reply, bodies = _fake_ollama([_reply("")],
+                                 lambda: router_mod._ollama_chat(system, [], user, _allow_retry=True))
+    if reply != "":
+        problems.append(f"pusta odpowiedź: {reply!r}")
+    if len(bodies) != 1:
+        problems.append(f"pusta odpowiedź ponowiona: {len(bodies)} żądań")
+    if not bodies:
+        return False, "brak żądania do Ollamy"
+    messages = bodies[0].get("messages") or []
+    last = str(messages[-1].get("content") or "") if messages else ""
+    total = router_mod._est_tokens(messages[0].get("content", "")) + router_mod._est_tokens(last)
+    if "materiał ucięty - za długi dla kontekstu" not in last:
+        problems.append("brak znacznika ucięcia materiału")
+    if total > router_mod.LOCAL_PROMPT_SAFE_TOKENS:
+        problems.append(f"system+user nadal {total} tokenów")
+    if router_mod.local_last_quality().get("powod") != "prompt-ctx":
+        problems.append(f"kod jakości: {router_mod.local_last_quality()}")
+    # Faza Namysłu ma dostać czytelny komunikat, nie ogólne „Model nie odpowiedział”.
+    try:
+        _fake_ollama([_reply("")], lambda: router_mod._namysl_local_chat(system, [], user))
+    except RuntimeError as e:
+        if "prompt za długi" not in str(e):
+            problems.append(f"komunikat: {e}")
+    else:
+        problems.append("brak wyjątku o za długim promptcie")
+    return (not problems), "; ".join(problems) if problems else "12000 tokenów, znacznik, bez retry, jasny komunikat"
+
+
+def _check_notatki_1384() -> tuple[bool, str]:
+    """1.38.4 #26: nazwa załącznika rozbita na słowa nie uruchamia szukania
+    w notatkach; plik jest czytany raz, bez drugiego „Czytam plik”."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import namysl as namysl_mod
+    import sources as sources_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1384-"))
+    chat = "test-1384"
+    original = "2026-11-05-Chronologia fabularna.txt"
+    upload_dir = tmp / chat
+    upload_dir.mkdir(parents=True)
+    stored = upload_dir / original
+    stored.write_text("TRESC PLIKU " * 100, encoding="utf-8")
+
+    files = [str(stored)]
+    if namysl_mod._notes_query_without_attachment("Chronologia fabularna", files) != "":
+        problems.append("zapytanie z samych słów nazwy pliku nie zostało wycięte")
+    if namysl_mod._notes_query_without_attachment("notatki o chronologii", files) == "":
+        problems.append("prawdziwe zapytanie o notatki zostało wycięte")
+
+    originals = (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+                 analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+                 namysl_mod.parse_plan)
+    reads: list[str] = []
+    note_searches: list[str] = []
+    events: list[dict] = []
+
+    def read_document(path):
+        reads.append(str(path))
+        return {"ok": True, "text": "TRESC PLIKU " * 100, "name": Path(path).name, "kind": "txt",
+                "chars": 1200, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "plik tekstowy"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 1, "streszczone": 1, "doslownie": False}
+
+    def plan(_text, message):
+        p = namysl_mod.default_plan(message)
+        p.notatki = "Chronologia fabularna"  # dokładnie to zrobiło rozpoznanie 3B
+        return p
+
+    def search_notes(_vault, query):
+        note_searches.append(query)
+        return []
+
+    def make_ctx():
+        def local_chat(_system, _history, _message):
+            return "ODPOWIEDZ LOKALNA"
+
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=files, sys_local="SYS", sys_cloud="SYS", local_up=False, local_recheck=lambda: True,
+            chat=chat, local_chat=local_chat, cloud_chat=lambda *_a, **_k: ("", ""),
+            cloud_pool=lambda: [], research=None, search_notes=search_notes, research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": False},
+            progress=events.append,
+        )
+
+    try:
+        sources_mod.UPLOAD_DIR = tmp
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1, lambda _text: ["a"]
+        namysl_mod.parse_plan = plan
+        out = namysl_mod.run(make_ctx())
+        labels = [str(e.get("label") or "") for e in events]
+        if note_searches:
+            problems.append(f"szukano w notatkach po nazwie pliku: {note_searches}")
+        if any("Czytam notatki" in label for label in labels):
+            problems.append("zbędne „Czytam notatki” dla nazwy załącznika")
+        if sum(1 for label in labels if "Czytam plik" in label) != 1:
+            problems.append(f"narracji „Czytam plik”: {[l for l in labels if 'Czytam plik' in l]}")
+        if len(reads) != 1:
+            problems.append(f"odczytów pliku: {len(reads)}")
+        if out is None:
+            problems.append("Namysł nie zwrócił odpowiedzi")
+    finally:
+        (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+         analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+         namysl_mod.parse_plan) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "nazwa pliku nie uruchamia notatek, jeden odczyt"
+
+
+def _check_normalizacja_1385() -> tuple[bool, str]:
+    """1.38.5 #27: prefiks daty i numer kolizji nie tworzą drugiego pliku."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import analiza as analiza_mod
+    import namysl as namysl_mod
+    import sources as sources_mod
+
+    problems: list[str] = []
+    cases = {
+        "2026-11-05-Chronologia fabularna.txt": "chronologia fabularna.txt",
+        "2026-11-05-Chronologia fabularna-2.txt": "chronologia fabularna.txt",
+        "Chronologia fabularna.txt": "chronologia fabularna.txt",
+        "2026-11-05-Chronologia fabularna-3": "chronologia fabularna",
+    }
+    for raw, want in cases.items():
+        got = namysl_mod._normalize_name(raw)
+        if got != want:
+            problems.append(f"{raw!r} -> {got!r}, oczekiwano {want!r}")
+
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1385-"))
+    chat = "test-1385"
+    original = "Chronologia fabularna.txt"
+    upload_dir = tmp / chat
+    upload_dir.mkdir(parents=True)
+    stored = upload_dir / f"2026-11-05-{original}"
+    stored.write_text("TRESC PLIKU " * 100, encoding="utf-8")
+
+    originals = (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+                 analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+                 namysl_mod.parse_plan, namysl_mod._resolve_file)
+    reads: list[str] = []
+    resolve_calls: list[str] = []
+
+    def read_document(path):
+        reads.append(str(path))
+        return {"ok": True, "text": "TRESC PLIKU " * 100, "name": Path(path).name, "kind": "txt",
+                "chars": 1200, "truncated": False, "why": ""}
+
+    def describe(_doc):
+        return "plik tekstowy"
+
+    def understand(_doc, _cel, ask, progress=None, should_stop=None):
+        got = ask("SYS", "PYTANIE O PLIK")
+        return {"digest": "DIGEST:" + got, "pominiete": 0, "czesci": 1, "streszczone": 1, "doslownie": False}
+
+    def plan(_text, message):
+        p = namysl_mod.default_plan(message)
+        p.pliki = [original, f"{Path(original).stem}-2{Path(original).suffix}"]
+        return p
+
+    def resolve_counted(ref, chat_id, roots):
+        resolve_calls.append(str(ref))
+        return None, "nie powinno być wołane"
+
+    def make_ctx(events):
+        def local_chat(_system, _history, _message):
+            return "ODPOWIEDZ LOKALNA"
+
+        return namysl_mod.Context(
+            vault=type("V", (), {"notes": {}})(), message="hej, przeczytaj to", history_local=[], history_cloud=[],
+            files=[str(stored)], sys_local="SYS", sys_cloud="SYS", local_up=False, local_recheck=lambda: True,
+            chat=chat, local_chat=local_chat, cloud_chat=lambda *_a, **_k: ("", ""),
+            cloud_pool=lambda: [], research=None, search_notes=lambda _v, _q: [], research_web=None,
+            wiki_lookup=None, market_quote=None, market_history=None, read_page=None,
+            internet_allowed=lambda: (True, ""), sanitize=lambda text: text,
+            violates_style=lambda _text: [],
+            settings={"tryb": "zawsze", "material_do_sieci": False},
+            progress=events.append,
+        )
+
+    try:
+        sources_mod.UPLOAD_DIR = tmp
+        analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand = read_document, describe, understand
+        analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks = 1, lambda _text: ["a"]
+        namysl_mod.parse_plan = plan
+        namysl_mod._resolve_file = resolve_counted
+        events: list[dict] = []
+        out = namysl_mod.run(make_ctx(events))
+        labels = [str(e.get("label") or "") for e in events]
+        if resolve_calls:
+            problems.append(f"plan szukał pliku mimo załącznika: {resolve_calls}")
+        if len(reads) != 1:
+            problems.append(f"odczytów pliku: {len(reads)}")
+        if sum(1 for label in labels if "Czytam plik" in label) != 1:
+            problems.append(f"narracji „Czytam plik”: {[l for l in labels if 'Czytam plik' in l]}")
+        if out is None:
+            problems.append("Namysł nie zwrócił odpowiedzi")
+    finally:
+        (sources_mod.UPLOAD_DIR, analiza_mod.read_document, analiza_mod.describe,
+         analiza_mod.understand, analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks,
+         namysl_mod.parse_plan, namysl_mod._resolve_file) = originals
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "data-/kolizja znormalizowane, jeden odczyt"
+
+
+def _check_dedup_1386() -> tuple[bool, str]:
+    """1.38.6 #29: ta sama ścieżka w ctx.files (UI race) liczona raz."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import main as main_mod
+
+    problems: list[str] = []
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1386-"))
+    a = tmp / "a.txt"
+    b = tmp / "b.txt"
+    a.write_text("A", encoding="utf-8")
+    b.write_text("B", encoding="utf-8")
+    try:
+        got = main_mod._dedup_upload_paths([str(a), str(a), str(a).upper(), str(b)])
+        if got != [str(a), str(b)]:
+            problems.append(f"dedup: {got}")
+        if main_mod._dedup_upload_paths([]) != []:
+            problems.append("pusta lista nie jest pusta")
+        if main_mod._dedup_upload_paths([str(a), "", None]) != [str(a)]:
+            problems.append("puste/nie-tekstowe wpisy nie są odsiewane")
+        src = (ROOT / "agent" / "main.py").read_text(encoding="utf-8")
+        if "files = _dedup_upload_paths(files)" not in src:
+            problems.append("main.py nie woła deduplikacji po odzyskaniu załącznika")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "duplikaty ctx.files usuwane po resolve().lower()"
+
+
+def _check_namysl_once_1387() -> tuple[bool, str]:
+    """1.38.7 #30: Namysł (i Zbieranie pliku) uruchamia się RAZ na wiadomość."""
+    import juggler as juggler_mod
+    import namysl as namysl_mod
+    import netguard as netguard_mod
+    import router as router_mod
+    import standing as standing_mod
+
+    problems: list[str] = []
+    run_calls: list[str] = []
+    original = (namysl_mod.run, namysl_mod.load_settings, router_mod._ollama_chat,
+                router_mod.ollama_available, router_mod.STUDENT_MODEL,
+                juggler_mod.providers_pool, juggler_mod.rozdzielnica, juggler_mod.is_risky,
+                netguard_mod.internet_allowed, standing_mod.pop_pending_alerts)
+    old_local = os.environ.get("KORYTO_LOKALNIE")
+    old_koryto = os.environ.get("KORYTO")
+
+    def fake_run(_ctx):
+        run_calls.append("raz")
+        return None
+
+    try:
+        os.environ["KORYTO"] = "darmowe,lokalnie"
+        os.environ["KORYTO_LOKALNIE"] = "bez_internetu"
+        namysl_mod.run = fake_run
+        namysl_mod.load_settings = lambda: {"tryb": "zawsze", "material_do_sieci": False}
+        router_mod._ollama_chat = lambda *_a, **_k: "Odpowiedź lokalna"
+        router_mod.ollama_available = lambda: True
+        router_mod.STUDENT_MODEL = ""
+        juggler_mod.providers_pool = lambda etap=None: []
+        juggler_mod.rozdzielnica = lambda _p: {"etapy": ["darmowe"], "model": None}
+        juggler_mod.is_risky = lambda _m: False
+        netguard_mod.internet_allowed = lambda: (True, "")
+        standing_mod.pop_pending_alerts = lambda: []
+        res = router_mod.route(type("V", (), {"notes": {}})(), "SYS", [], "hej, przeczytaj to",
+                               files=["fake.txt"], nie_ucz=True, nie_zapisuj_sladu=True)
+        if len(run_calls) != 1:
+            problems.append(f"Namysł uruchomiony {len(run_calls)}× zamiast 1")
+        if not (res.get("speech") or res.get("_speech_bez_alertu")):
+            problems.append("brak odpowiedzi po nieudanym Namysłie")
+    finally:
+        (namysl_mod.run, namysl_mod.load_settings, router_mod._ollama_chat,
+         router_mod.ollama_available, router_mod.STUDENT_MODEL,
+         juggler_mod.providers_pool, juggler_mod.rozdzielnica, juggler_mod.is_risky,
+         netguard_mod.internet_allowed, standing_mod.pop_pending_alerts) = original
+        if old_local is None:
+            os.environ.pop("KORYTO_LOKALNIE", None)
+        else:
+            os.environ["KORYTO_LOKALNIE"] = old_local
+        if old_koryto is None:
+            os.environ.pop("KORYTO", None)
+        else:
+            os.environ["KORYTO"] = old_koryto
+    return (not problems), "; ".join(problems) if problems else "jeden przebieg Namysłu na wiadomość"
+
+
 def _check_offline(case: dict) -> tuple[bool, str]:
     typ = case["typ"]
     if typ == "izolacja":
@@ -988,6 +2212,48 @@ def _check_offline(case: dict) -> tuple[bool, str]:
         return _check_audyt_1351()
     if typ == "lokalny_timeout":
         return _check_local_timeout()
+    if typ == "lokalny_cache":
+        return _check_local_cache()
+    if typ == "lokalny_budzet":
+        return _check_local_budget()
+    if typ == "lokalny_styl":
+        return _check_local_style()
+    if typ == "lokalny_parametry":
+        return _check_local_params()
+    if typ == "lokalny_walidacja":
+        return _check_local_validation()
+    if typ == "lokalny_kolejka":
+        return _check_local_queue()
+    if typ == "lokalny_retry":
+        return _check_local_retry()
+    if typ == "lokalny_sesja":
+        return _check_local_session()
+    if typ == "lokalny_warmup":
+        return _check_local_warmup()
+    if typ == "spoleczne_1380":
+        return _check_spoleczne_1380()
+    if typ == "czas_1380":
+        return _check_czas_1380()
+    if typ == "plik_1380":
+        return _check_plik_1380()
+    if typ == "plik_upload_1381":
+        return _check_plik_upload_1381()
+    if typ == "namysl_413_1382":
+        return _check_namysl_413_1382()
+    if typ == "awaryjny_1382":
+        return _check_awaryjny_1382()
+    if typ == "duplikat_1383":
+        return _check_duplikat_1383()
+    if typ == "prompt_ctx_1383":
+        return _check_prompt_ctx_1383()
+    if typ == "notatki_1384":
+        return _check_notatki_1384()
+    if typ == "normalizacja_1385":
+        return _check_normalizacja_1385()
+    if typ == "dedup_1386":
+        return _check_dedup_1386()
+    if typ == "namysl_once_1387":
+        return _check_namysl_once_1387()
     if typ == "devtools":
         return _check_devtools()
     if typ == "routing":

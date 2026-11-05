@@ -578,39 +578,133 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--crack-cyan); out
 }
 .chat-input-row.zaproszenie .chat-input { animation: none; }
 
-/* ---------- Stepper Namysłu: kwadratowe diody, twardy skok -------------- */
+/* ---------- Stepper Namysłu: oddech, łączniki, faza aktywna -------------- */
 .nt-track {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 16px 0;
   background: var(--crack-card);
   border: 1px solid var(--crack-line);
   border-radius: 0;
 }
-.nt-track-title { color: var(--crack-cyan); font-size: 11px; }
-.nt-track-step { transition: none; animation: none; }
-.nt-track-step.active { animation: none; color: var(--crack-cyan); }
+.nt-track.done { opacity: 1; }
+.nt-track-head { padding: 0 14px; }
+.nt-track-title {
+  color: var(--crack-cyan);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.nt-track-timer {
+  color: #00d4ff;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+.nt-track-steps {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 24px;
+  margin: 0;
+  padding: 16px 14px;
+  list-style: none;
+}
+.nt-track-step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  color: var(--crack-dim);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  transition: none;
+  animation: none;
+}
+.nt-track-step.active { color: #00d4ff; animation: none; }
+.nt-track-step.active .nt-track-name { color: #00d4ff; }
 .nt-track-step.active .nt-track-name::before { content: none; }
 .nt-track-step.done .nt-track-name::before { content: none; }
 .nt-track-step.skip .nt-track-name::before { content: none; }
 .nt-track-step.err .nt-track-name::before { content: none; }
 .nt-track-dot {
+  position: relative;
+  flex: none;
   width: 8px;
   height: 8px;
+  margin-bottom: 8px;
   border: 1px solid var(--crack-dim);
   border-radius: 0;
   background: transparent;
   transition: none;
   animation: none;
 }
+.nt-track-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+/* Numer fazy (1-6) jest pierwszą literą etykiety - zawsze cyjan, także done. */
+.nt-track-name::first-letter {
+  font-weight: 500;
+  color: #00d4ff;
+}
+.nt-track-time {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--crack-dim);
+}
+
+/* Łącznik między fazami. Stan bierzemy z <li>, bo tam siedzą klasy active/done. */
+.nt-track-step:not(:last-child) .nt-track-dot::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  width: 40px;
+  height: 1px;
+  margin: 0 8px;
+  background: #2a2a3a;
+  transform: translateY(-50%);
+}
+.nt-track-step.done:not(:last-child) .nt-track-dot::after { background: #00d4ff; }
+.nt-track-step.active:not(:last-child) .nt-track-dot::after {
+  background: linear-gradient(90deg, #00d4ff 50%, #2a2a3a 50%);
+}
+
 .nt-track-step.active .nt-track-dot {
-  background: var(--crack-cyan);
-  border-color: var(--crack-cyan);
-  box-shadow: 0 0 4px rgba(0, 212, 255, 0.5);
-  animation: crack-dot-pulse 2s ease-in-out infinite;
+  background: #00d4ff;
+  border-color: #00d4ff;
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
+  animation: none;
+}
+/* Podkreślenie aktywnej fazy: krótka, pulsująca kreska pod diodą. */
+.nt-track-step.active .nt-track-dot::before {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 24px;
+  height: 2px;
+  background: #00d4ff;
+  transform: translateX(-50%);
+  animation: nt-underline-pulse 2s ease-in-out infinite;
 }
 .nt-track-step.done .nt-track-dot {
-  background: var(--crack-ok);
-  border-color: var(--crack-ok);
+  background: #00ff88;
+  border-color: #00ff88;
   opacity: 1;
+  box-shadow: none;
 }
+.nt-track-step.done .nt-track-name,
+.nt-track-step.done .nt-track-time { color: #6a6a80; }
 .nt-track-step.skip .nt-track-dot {
   background: transparent;
   border: 1px solid #3a3a4a;
@@ -621,9 +715,28 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--crack-cyan); out
 }
 .nt-track.nt-track-clickable:hover { border-color: var(--crack-line-strong); }
 
-@keyframes crack-dot-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(0, 212, 255, 0.3); }
-  50% { box-shadow: 0 0 4px rgba(0, 212, 255, 0.7); }
+/* Po zakończeniu tytuł niesie czas: "Namysł — 28s" (tekst ustawia JS). */
+.nt-track.done .nt-track-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #00d4ff;
+  letter-spacing: 0.05em;
+  text-transform: none;
+}
+.nt-track.done .nt-track-title::before {
+  content: "";
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin-right: 8px;
+  background: #00d4ff;
+}
+
+@keyframes nt-underline-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 /* Oś faz w dymku: te same kwadraty. */
@@ -731,6 +844,17 @@ html.booted #chat-menu-btn {
   clip-path: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .nt-track-step.active .nt-track-dot {
+    animation: none !important;
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.25);
+  }
+  .nt-track-step.active .nt-track-dot::before {
+    animation: none !important;
+    opacity: 1;
+  }
+}
+
 /* ---------- Fallback: brak clip-path (starsze przeglądarki) -------------- */
 @supports not (clip-path: inset(0)) {
   .resp-frag { display: none; }
@@ -753,8 +877,18 @@ html.booted #chat-menu-btn {
   .straz-toast-actions button,
   .straz-toast-close { min-height: 44px; }
   .straz-toast-close { min-width: 44px; }
-  .nt-track-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 6px; }
+  .nt-track { gap: 16px; padding: 12px 0; }
+  .nt-track-head { padding: 0 10px; }
+  .nt-track-steps {
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 12px 10px;
+  }
+  .nt-track-step { flex: 1 1 calc(33.333% - 11px); }
+  .nt-track-step:not(:last-child) .nt-track-dot::after { width: 20px; }
+  .nt-track-step:nth-child(3) .nt-track-dot::after { display: none; }
   .nt-track-name { font-size: 10px; }
+  .nt-track-time { font-size: 9px; }
   .rail-name { font-size: 18px; }
   body { font-size: 14px; }
 }

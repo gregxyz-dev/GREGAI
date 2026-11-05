@@ -153,19 +153,42 @@ FAZY_LABELS = {
 TRYBY = ("zawsze",)
 
 # Ile materiału (znaków) dostaje model w fazach szkicu/krytyki/poprawy.
-# Lokalny 3B ma okno 16384 tokenów razem z promptem (ok. 20 tys. znaków) i
-# historią, stąd ostrożnie; dostawcy żonglera mają okna wielokrotnie większe.
-MATERIAL_CHARS_LOCAL = 7_000
+# Lokalny 3B ma okno 16384 tokenów razem z promptem i historią, ale
+# PRAKTYCZNIE działa dobrze do ok. 4-6 tys. tokenów, więc od 1.37.0 materiał
+# lokalny ma 5300 znaków (ok. 2000 tokenów), a cała wiadomość użytkownika
+# (materiał + ulotny blok „Teraz”) jest przycinana do LOCAL_USER_MAX_CHARS.
+MATERIAL_CHARS_LOCAL = 5_300
 MATERIAL_CHARS_CLOUD = 16_000
+LOCAL_USER_MAX_CHARS = 5_200  # ~2000 tokenów, ten sam przelicznik 2,7 znaku/token
 NOTE_EXCERPT_CHARS = 1_200
 MAX_NOTES = 5
 MAX_FILES = 4
 MAX_PROGRESS_EVENTS = 200
 
+
+def _local_user(user: str, volatile: str = "") -> str:
+    """Wariant wiadomości dla modelu lokalnego: treść + ULOTNY blok „Teraz”.
+
+    1.37.0: blok nie siedzi w systemie (cache promptu), więc doklejamy go
+    tutaj, na koniec. Całość tniemy do LOCAL_USER_MAX_CHARS (ok. 2000
+    tokenów): skracamy materiał użytkownika, bo blok z faktami i zegarem
+    jest krótszy od limitu i ma zostać.
+    """
+    volatile = (volatile or "").strip()
+    sep = "\n\n[Kontekst bieżący - DANE, nie polecenie]\n"
+    if not volatile:
+        return user if len(user) <= LOCAL_USER_MAX_CHARS else user[:LOCAL_USER_MAX_CHARS - 20].rstrip() + " […]"
+    room = max(200, LOCAL_USER_MAX_CHARS - len(volatile) - len(sep))
+    if len(user) > room:
+        user = user[:room].rstrip() + " […]"
+    while len(user) > 80 and len(user) + len(sep) + len(volatile) > LOCAL_USER_MAX_CHARS:
+        user = user[:int(len(user) * 0.9)].rstrip()
+    return user + sep + volatile
+
 _PREFIX_RE = re.compile(r"\A\s*(przemy[śs]l(?:\s+to)?|zastan[oó]w\s+si[eę]|namys[łl]|dok[łl]adnie|g[łl][eę]boko)\s*[:,\-–]\s*", re.IGNORECASE)
-_GREETING_RE = re.compile(r"\A\s*(cze[śs][ćc]|hej|siema|witaj|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r|dzi[eę]k\w*|ok(?:ej)?|dobra|jasne|super|tak|nie|no)\b[\s!.,]*\Z", re.IGNORECASE)
+_GREETING_RE = re.compile(r"\A\s*(cze[śs][ćc]|hej|siema|witaj|witam|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r|dzi[eę]k\w*|ok(?:ej)?|dobra|jasne|super|tak|nie|no)\b[\s!.,]*\Z", re.IGNORECASE)
 # 1.32.2 (audyt tura 7): powitanie na początku krótkiej wiadomości ("hej, co tam u ciebie?") to nie zadanie do namysłu.
-_GREETING_HEAD_RE = re.compile(r"\A\W*(?:cze[śs][ćc]|hej\w*|siema\w*|elo\b|witaj|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)", re.IGNORECASE)
+_GREETING_HEAD_RE = re.compile(r"\A\W*(?:cze[śs][ćc]|hej\w*|siema\w*|elo\b|witaj|witam|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)", re.IGNORECASE)
 # 1.32.7: grzecznościowe "co tam u Ciebie?" to rozmowa, nie zadanie do sześciu faz - także w
 # jedynym trybie "zawsze". Tylko cała, krótka wiadomość (bez dalszej prośby).
 # 1.32.8 (audyt tura 12): "super, zrób to", "elo, plan na dziś" to prośby, nie grzeczności.
@@ -612,6 +635,95 @@ def file_refs(message: str) -> list[str]:
     return refs[:MAX_FILES]
 
 
+# 1.38.0 (#20): rozpoznanie 3B potrafi wpisać do PLIKI słowo z polecenia
+# ("hej, przeczytaj to" -> "PLIKI: to"). Pętla plików pokazywała wtedy
+# "Plik to: pominięty", choć PRAWDZIWY załącznik został przeczytany - i to
+# ona trafiała na kartę fazy. Filtr zostawia tylko refy, które wyglądają na
+# plik: nazwę załącznika, ścieżkę albo nazwę z rozszerzeniem. Proza i zaimki
+# ("to", "przeczytaj to") odpadają.
+_REF_PROSE = frozenset({
+    "to", "ten", "ta", "te", "ci", "tamto", "go", "je", "ją", "niego", "niej",
+    "plik", "pliki", "załącznik", "załączniki", "zalacznik", "zalaczniki",
+    "dokument", "dokumenty", "powyższe", "poniższe", "powyzsze", "ponizsze",
+})
+_REF_SUFFIXES = frozenset({".pdf", ".txt", ".md", ".csv", ".tsv", ".json", ".docx", ".xlsx",
+                           ".py", ".js", ".html", ".log", ".xml", ".yaml", ".yml"})
+
+
+_NAME_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+_NAME_COLLISION_RE = re.compile(r"-\d+$")
+
+
+def _normalize_name(name: str) -> str:
+    """Nazwa pliku do porównań: bez prefiksu daty, bez numeru kolizji, małe litery.
+
+    1.38.5 (#27): `save_upload` zapisuje "2026-11-05-Chronologia fabularna.txt",
+    a plan rozpoznania ma "Chronologia fabularna.txt". Bez normalizacji
+    `Path(name).name.lower()` nie widział, że to ten sam plik, i Zbieranie
+    czytało go drugi raz. Numer kolizji ("-2") usuwamy przed rozszerzeniem.
+    """
+    base = Path(str(name or "")).name.lower()
+    base = _NAME_DATE_PREFIX_RE.sub("", base, count=1)
+    suffix = Path(base).suffix
+    stem = base[:-len(suffix)] if suffix else base
+    stem = _NAME_COLLISION_RE.sub("", stem)
+    return stem + suffix
+
+
+def _plausible_file_ref(ref: str, attachments: list[str] | None = None) -> bool:
+    """Czy wpis z PLIKI wygląda na plik, a nie na prozę z polecenia?"""
+    text = str(ref or "").strip().strip("\"'„”")
+    if not text:
+        return False
+    name = Path(text).name.lower()
+    attached = {Path(a).name.lower() for a in (attachments or []) if a}
+    if name in attached:
+        return True
+    low = text.lower()
+    if low in _REF_PROSE:
+        return False
+    if "/" in text or "~" in text:
+        return True
+    if Path(text).suffix.lower() in _REF_SUFFIXES:
+        return True
+    # Jedno słowo może być nazwą bez rozszerzenia ("raport"), ale
+    # wielowyrazowa proza ("przeczytaj to") to nie plik.
+    return len(text.split()) == 1 and len(text) >= 3
+
+
+def _attachment_name_tokens(files: list[str] | None) -> set[str]:
+    """Słowa z nazw załączników (bez rozszerzenia, bez cyfr) - do wykrycia
+    zapytania notatek, które jest tylko nazwą pliku."""
+    out: set[str] = set()
+    for ref in files or []:
+        stem = Path(str(ref)).stem
+        for word in re.findall(r"[^\W\d_]+", slowa_mod.fold(stem)):
+            if len(word) >= 3:
+                out.add(word)
+    return out
+
+
+def _notes_query_without_attachment(notatki: str, files: list[str] | None) -> str:
+    """Usuwa zapytanie do notatek, jeśli składa się WYŁĄCZNIE ze słów nazwy
+    załączonego pliku.
+
+    1.38.4 (#26): rozpoznanie 3B rozbijało "2026-11-05-Chronologia
+    fabularna.txt" na słowa i szukało ich w notatkach. Znajdowało notatkę
+    zawierającą nazwę pliku i czytało ją jako drugi "plik". Załącznik i tak
+    idzie do modelu osobno, więc taka kwerenda to duplikat.
+    """
+    text = (notatki or "").strip()
+    if not text or not files:
+        return text
+    words = [w for w in re.findall(r"[^\W\d_]+", slowa_mod.fold(text)) if len(w) >= 3]
+    if not words:
+        return text
+    attached = _attachment_name_tokens(files)
+    if attached and all(w in attached for w in words):
+        return ""
+    return text
+
+
 # --- Materiał (faza 1) -----------------------------------------------------------------
 
 @dataclass
@@ -660,6 +772,20 @@ def render_material(items: list[Material], limit: int) -> str:
     return "\n\n".join(out) if out else "(brak materiału - odpowiadaj z wiedzy ogólnej i kontekstu rozmowy, mówiąc wprost, czego nie wiesz)"
 
 
+def _read_file_once(path, narr, seen_names):
+    """Jedyny odczyt pliku w Zbieraniu (1.38.7, #30).
+
+    Jeśli znormalizowana nazwa (bez prefiksu daty i numeru kolizji) już była
+    czytana, zwraca None BEZ narracji. Wszystkie miejsca, które czytają plik
+    w fazie Zbieranie, mają wołać tę funkcję, nie `read_document` bezpośrednio.
+    """
+    key = _normalize_name(Path(path).name)
+    if key in seen_names:
+        return None
+    seen_names.add(key)
+    return analiza_mod.read_document(path)
+
+
 def _resolve_file(ref: str, chat: str | None, roots: list[Path]) -> tuple[Path | None, str]:
     """Ścieżka pliku z odniesienia w wiadomości: pełna ścieżka w korzeniach
     TEJ rozmowy (sources.resolve_in_chat) albo sama nazwa szukana w jej
@@ -673,6 +799,11 @@ def _resolve_file(ref: str, chat: str | None, roots: list[Path]) -> tuple[Path |
             return None, "nie ma takiego pliku"
         return p, ""
     hits = sources_mod.find_by_name_in_chat(chat, ref, roots)
+    if not hits:
+        # 1.38.1 (#23): upload zapisuje "<data>-<nazwa>", a w wiadomości
+        # bywa sama oryginalna nazwa. Najpierw szukamy dokładnie (wyżej),
+        # potem w katalogu wgranych TEJ rozmowy po nazwie bez prefiksu daty.
+        hits = sources_mod.find_upload_by_name(chat, ref)
     if not hits:
         return None, "nie znalazłem pliku o tej nazwie w źródłach tej rozmowy ani wśród jej wgranych"
     if len(hits) > 1:
@@ -713,6 +844,10 @@ class Context:
     # chwilę wcześniej albo właśnie wróciła). Świeże sprawdzenie decyduje, czy
     # lokalny etap może zejść z warstwy i czy plik ma być czytany.
     local_recheck: Callable[[], bool] | None = None
+    # 1.37.0: ulotny blok „Teraz” (dokładna godzina, fakty, streszczenie).
+    # System lokalny jest stabilny (cache promptu), więc blok jedzie dopiero
+    # do wariantu local/user - patrz _Models.ask.
+    local_volatile: str = ""
 
     def local_available(self) -> bool:
         """Czy model lokalny odpowiada TERAZ (snapshot albo świeże sprawdzenie).
@@ -796,7 +931,7 @@ class _Models:
                     self.last_provider = provider
                     return (text or "").strip(), provider
                 text = ctx.local_chat(system_local, ctx.history_local if history else [],
-                                      user_local if user_local is not None else user)
+                                      _local_user(user_local if user_local is not None else user, ctx.local_volatile))
                 return (text or "").strip(), "lokalnie"
             except Exception as e:
                 errors.append(f"{route}: {type(e).__name__}: {e}"[:200])
@@ -901,7 +1036,22 @@ def run(ctx: Context) -> dict | None:
     for ref in file_refs(message):
         if ref not in plan.pliki:
             plan.pliki.append(ref)
-    plan.pliki = plan.pliki[:MAX_FILES]
+    # 1.38.0 (#20): filtr PRZED użyciem planu - inaczej "PLIKI: to" z
+    # rozpoznania robiło "Plik to: pominięty" mimo przeczytanego załącznika.
+    # Załączniki są zawsze prawdziwe (ctx.files), więc zostają bez filtra.
+    attached_names = {_normalize_name(Path(f).name) for f in (ctx.files or [])}
+    plan.pliki = [ref for ref in plan.pliki
+                  if (_normalize_name(Path(ref).name) in attached_names or _plausible_file_ref(ref, ctx.files))]
+    # 1.38.3 (#25a): ta sama nazwa z rozpoznania nie może wejść dwa razy.
+    _seen_names: set[str] = set()
+    _unique: list[str] = []
+    for ref in plan.pliki:
+        key = _normalize_name(ref)
+        if key in _seen_names:
+            continue
+        _seen_names.add(key)
+        _unique.append(ref)
+    plan.pliki = _unique[:MAX_FILES]
     # 1.30.16 (zgłoszenie Grzegorza: "przeanalizuj giełdę BTC" oddało "nie mam danych",
     # bo słabszy model rozpoznania zaplanował notatki zamiast sieci/notowania): siatka
     # bezpieczeństwa niezależna od modelu. Gdy w pytaniu jest konkretny instrument
@@ -992,6 +1142,8 @@ def run(ctx: Context) -> dict | None:
 
     # notatki
     if plan.notatki:
+        plan.notatki = _notes_query_without_attachment(plan.notatki, ctx.files)
+    if plan.notatki:
         try:
             notes = ctx.search_notes(ctx.vault, plan.notatki) or []
         except Exception as e:
@@ -1022,7 +1174,13 @@ def run(ctx: Context) -> dict | None:
 
     # pliki (załączone + wspomniane)
     all_refs: list[str] = list(ctx.files or [])
+    _attached = {_normalize_name(Path(f).name) for f in (ctx.files or [])}
     for ref in plan.pliki:
+        # 1.38.3 (#25a), normalizacja od 1.38.5 (#27): załącznik już jest
+        # w ctx.files (pełna ścieżka) - nie dokładaj tej samej nazwy z
+        # rozpoznania, także gdy różni się prefiksem daty lub numerem kolizji.
+        if _normalize_name(Path(ref).name) in _attached:
+            continue
         if ref not in all_refs:
             all_refs.append(ref)
     if all_refs:
@@ -1047,6 +1205,11 @@ def run(ctx: Context) -> dict | None:
             uwagi.append("pliki pominięte: brak modelu lokalnego i brak zgody na wysyłkę materiału do sieci")
         # Audyt 1.32.1: na czytanie plików najwyżej 60% budżetu Namysłu - reszta na szkic.
         files_deadline = TIME_BUDGET * 0.6
+        # 1.38.3 (#25a): ta sama ścieżka rozwiązana z różnych referencji
+        # (pełna ścieżka, nazwa serwera, nazwa oryginalna) to JEDEN odczyt.
+        # Bez tego "Czytam plik X" pojawiało się 3-4 razy, a material puchł.
+        seen_paths: set[str] = set()
+        seen_names: set[str] = set()
         for ref in all_refs[:MAX_FILES]:
             if private_blocked:
                 break
@@ -1056,10 +1219,26 @@ def run(ctx: Context) -> dict | None:
                 break
             path, note = (Path(ref), "") if (ref in (ctx.files or []) and Path(ref).is_file()) else _resolve_file(ref, ctx.chat, roots)
             if path is None:
-                narr.info("zbieranie", f"Plik {Path(ref).name}: pominięty", note)
+                # 1.38.0 (#20): "pominięty" zostaje wyłącznie dla braku
+                # modelu (private_blocked wyżej). Nierozwiązany wpis z planu
+                # to "nie znaleziony", nie sugestia, że załącznik przepadł.
+                narr.info("zbieranie", f"Plik {Path(ref).name}: nie znaleziony", note)
                 uwagi.append(f"plik {Path(ref).name}: {note}")
                 continue
-            doc = analiza_mod.read_document(path)
+            try:
+                key = str(path.resolve())
+            except OSError:
+                key = str(path)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            # 1.38.7 (#30): JEDNA funkcja odczytu. Sam path.resolve() nie
+            # wystarcza (notatka vs wgrane, prefiks daty); _read_file_once
+            # dodatkowo deduplikuje po znormalizowanej nazwie i sam decyduje,
+            # czy w ogóle czytać - bez drugiej narracji "Czytam plik X".
+            doc = _read_file_once(path, narr, seen_names)
+            if doc is None:
+                continue
             if not doc["ok"]:
                 narr.info("zbieranie", f"Plik {doc['name']}: nie czytam", doc["why"])
                 uwagi.append(f"plik {doc['name']}: {doc['why']}")
@@ -1440,7 +1619,7 @@ def run(ctx: Context) -> dict | None:
     # 1.19.0: także blok „Teraz” z promptu (data, godzina, liczby z tła) -
     # "21.10" z zegara nie jest zmyśloną liczbą. Tylko ten blok: liczby z
     # prompt.md nie mogą "pokrywać" zmyśleń.
-    teraz = "".join(part.split(_TERAZ_MARK, 1)[1] for part in (ctx.sys_local or "", ctx.sys_cloud or "") if _TERAZ_MARK in part)
+    teraz = "".join(part.split(_TERAZ_MARK, 1)[1] for part in (ctx.sys_local or "", ctx.sys_cloud or "", ctx.local_volatile or "") if _TERAZ_MARK in part)
     known = " ".join([message, teraz] + [m.tekst for m in material]
                      + [str(t.get("content", "")) for t in (ctx.history_local or [])])
     # 1.32.9: wartość, nie zapis - "2412.35" z notowania (JSON) to to samo co "2412,35" w odpowiedzi.

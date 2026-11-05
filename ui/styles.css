@@ -140,6 +140,10 @@ html, body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  .nt-track-step.active .nt-track-dot::before {
+    animation: none !important;
+    opacity: 1;
+  }
 }
 
 /* --- Poświata w tle (czysto dekoracyjna, za canvasem, nie wpływa na współrzędne) ---

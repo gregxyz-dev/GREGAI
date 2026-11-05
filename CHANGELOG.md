@@ -2,6 +2,341 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.38.8
+
+Wizualny lifting steppera Namysłu. Wyłącznie CSS (`ui/crack.css` + wpis
+w globalnym `prefers-reduced-motion` w `ui/styles.css`), zero zmian w JS
+i HTML.
+
+**Oddech.** `.nt-track` ma `gap: 24px` i `padding: 16px 0`, lista faz
+`gap: 24px` i `padding: 16px 14px`, dioda `margin-bottom: 8px`, czas
+`margin-top: 4px`.
+
+**Łączniki.** Między fazami jest 40px linia `#2a2a3a` (stan bierze się
+z `<li class="nt-track-step">`, bo tam siedzą klasy active/done): done -
+`#00d4ff`, active - gradient 50/50. W mobilnym 20px, a po trzeciej fazie
+łącznik jest ukryty, żeby nie przechodził przez zawinięcie wiersza.
+
+**Aktywna faza.** Dioda `#00d4ff` z `box-shadow: 0 0 8px rgba(0,212,255,.4)`,
+etykieta cyjan, pod diodą 24×2px pulsujące podkreślenie
+(`nt-underline-pulse` 2s).
+
+**Zakończone fazy.** Dioda `#00ff88` bez cienia, etykieta i czas
+`#6a6a80`. Numery 1-6 zawsze cyjan (`::first-letter`, bo markup trzyma
+numer w etykiecie `.nt-track-name`).
+
+**Timer.** Tytuł po zakończeniu („Namysł — 28s”, tekst ustawia istniejący
+JS) ma 13px, cyjan, `letter-spacing: .05em` i 1×16px separator po lewej.
+`.nt-track.done` nie jest już przygaszany do 0.62.
+
+**Mobile.** `.nt-track-steps` przechodzi na `flex-wrap: wrap`, 3+3
+(`flex: 1 1 calc(33.333% - 11px)`), gap 16px, etykieta 10px, czas 9px.
+
+**Reduced motion.** Pulsowanie podkreślenia i animacja diody wyłączone,
+box-shadow zostaje statyczny - w `ui/crack.css` i globalnym bloku
+`ui/styles.css`.
+
+**Weryfikacja.** Składnia CSS sprawdzona bilansem nawiasów (0), JS bez
+zmian. `bash weryfikuj.sh` i `bash wydaj.sh` na czystym rozpakowaniu.
+Kontrole `check.sh` bez zmian (101).
+
+## Co nowego w 1.38.7
+
+Audyt „Czytam plik X” 2×: w kodzie jest tylko JEDNO `read_document` i jedno
+miejsce narracji „Czytam plik” (`_read_file_once`, long/short wzajemnie
+wykluczające). Duplikat nie pochodził z dwóch sekcji Zbierania - to były
+DWA PRZEBIEGI Namysłu dla tej samej wiadomości:
+
+1. przy załączniku `_try_namysl` startował przed szybkimi ścieżkami
+   (`router.py`, ~3471),
+2. gdy pierwszy szkic nie wyszedł i zwrócił None, ścieżka rozmowy wołała
+   `_try_namysl` drugi raz (~3783) - całe Zbieranie czytało plik ponownie,
+   a „Notatki: nic” z drugiego przebiegu trafiało między dwa odczyty.
+
+**Fix.**
+- `_try_namysl` ma flagę `namysl_tried`: pierwsze wywołanie (bez `force`)
+  ustawia ją, kolejne zwracają None. Komendy `force` nadal mogą wymusić
+  Namysł świadomie.
+- Odczyt pliku w Zbieraniu idzie przez jedną funkcję `_read_file_once(path,
+  narr, seen_names)`: normalizuje nazwę, sprawdza `seen_names`, dopiero potem
+  czyta. Drugie miejsce nie może już ominąć deduplikacji.
+
+**Weryfikacja.** Nowy przypadek `gregai eval` (dwa wywołania Namysłu dla
+jednej wiadomości -> tylko jedno uruchomienie) na atrapie, bez modeli, sieci
+i zapisu do `data/`: szybki eval 89/89. Nowa kontrola 101 w `check.sh`
+(101 kontroli razem). Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu.
+
+## Co nowego w 1.38.6
+
+Ostatnia warstwa deduplikacji załączników: przeglądarka może wysłać ten sam
+plik 2× (race między uploadem a wysłaniem wiadomości), więc `ctx.files` miało
+dwa identyczne wpisy, zanim cokolwiek zdążyło je porównać.
+
+**Fix.** W `agent/main.py`, zaraz po `_upload_paths` / `_recent_read_attachment`,
+lista przechodzi przez `_dedup_upload_paths`: klucz to
+`str(Path(f).resolve()).lower()`, pierwszy wpis wygrywa. Puste i nie-tekstowe
+wpisy są odsiewane. Uwaga: wersja z `Path(f).resolve().lower()` nie działa -
+`Path` nie ma metody `lower()`, dlatego wynik `resolve()` jest rzutowany na
+`str` PRZED `lower()`.
+
+**Weryfikacja.** Nowy przypadek `gregai eval` (duplikat, wariant wielkości
+liter, dwa różne pliki, puste wpisy) na atrapie, bez modeli i sieci: szybki
+eval 88/88. Nowa kontrola 100 w `check.sh` (100 kontroli razem). Paczkę
+sprawdza `bash wydaj.sh` na czystym rozpakowaniu.
+
+## Co nowego w 1.38.5
+
+Domknięcie deduplikacji plików: „Czytam plik X” nadal mogło pojawić się
+dwa razy, gdy jedna referencja miała nazwę z prefiksem daty, a druga bez.
+
+**Przyczyna.** `save_upload` zapisuje `2026-11-05-Chronologia fabularna.txt`,
+a plan rozpoznania ma `Chronologia fabularna.txt`. `Path(name).name.lower()`
+porównywał różne stringi, więc `_attached` nie blokował duplikatu, `all_refs`
+miał dwa wpisy, a pętla renderowała „Czytam plik” dwa razy (i puchł prompt).
+
+**Fix.** Nowa `_normalize_name` w `agent/namysl.py`: usuwa prefiks daty
+(`YYYY-MM-DD-`), numer kolizji przed rozszerzeniem (`-2`, `-3`), zamienia
+na małe litery. Używana w trzech miejscach:
+- przy budowaniu `attached_names` i filtrowaniu `plan.pliki`,
+- przy budowaniu `all_refs` (plan nie dubluje załącznika),
+- w `_seen_names` i `seen_names` w pętli odczytu.
+
+Efekt: wgrany plik i jego warianty `data-...` / `-2` to jeden odczyt,
+jedna narracja, jedno źródło.
+
+**Weryfikacja.** Nowy przypadek `gregai eval` (prefiks daty i kolizja
+normalizowane, plan nie woła resolvera, jeden odczyt) na atrapach, bez
+modeli, sieci i zapisu do `data/`: szybki eval 87/87. Nowa kontrola 99 w
+`check.sh` (99 kontroli razem). Paczkę sprawdza `bash wydaj.sh` na czystym
+rozpakowaniu.
+
+## Co nowego w 1.38.4
+
+Domknięcie #25: „Czytam plik X” nadal pojawiało się dwa razy, mimo
+deduplikacji po `path.resolve()`.
+
+**Przyczyna.** Rozpoznanie 3B rozbijało `2026-11-05-Chronologia fabularna.txt`
+na słowa i wpisywało je do `NOTATKI`. Faza notatek znajdowała wtedy notatkę
+zawierającą nazwę pliku i czytała ją jako drugi „plik”. `seen_paths`
+porównywał pełne ścieżki, a `data/wgrane/...` i `notatki/...` to różne
+pliki - więc bezpiecznik nie mógł tego złapać.
+
+**Fix.**
+- `_notes_query_without_attachment`: jeśli zapytanie do notatek składa się
+  WYŁĄCZNIE ze słów nazwy załączonego pliku (`ctx.files`), jest pomijane -
+  plik i tak idzie do modelu osobno.
+- `seen_names` w pętli plików: drugi odczyt o tej samej nazwie bazowej jest
+  pomijany, nawet jeśli leży w innym katalogu (np. notatka o tej samej nazwie
+  co wgrany plik).
+- Próg bezpiecznika promptu obniżony z **14000 do 12000** tokenów
+  (`LOCAL_PROMPT_SAFE_TOKENS`): przypadek 786 (system) + 13000 (user) = 13786
+  przechodził poniżej starego progu i kończył się pustym stringiem. Teraz user
+  jest cięty do `min(12000, 12000 - system)`, z markerem.
+
+**Weryfikacja.** Nowy przypadek `gregai eval` (nazwa pliku nie uruchamia
+notatek, jeden odczyt, jedno „Czytam plik”) na atrapach, bez modeli, sieci
+i zapisu do `data/`: szybki eval 86/86. Nowa kontrola 98 w `check.sh`
+(98 kontroli razem). Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu.
+
+## Co nowego w 1.38.3
+
+Dwie poprawki z objawu „plik czytany 4× -> prompt za długi -> pusty string ->
+Model nie odpowiedział ×2”.
+
+**#25a: jeden plik, jeden odczyt.** Ta sama ścieżka mogła przyjść z kilku
+miejsc: `ctx.files` (pełna ścieżka), plan rozpoznania (nazwa serwera i nazwa
+oryginalna) oraz `file_refs(message)`. Każda referencja przechodziła przez
+`_resolve_file` i rozwiązywała się do TEGO SAMEGO pliku, więc Zbieranie
+czytało go 3-4 razy, dodawało 3-4 materiały i tyle samo razy pokazywało
+„Czytam plik X”. Teraz:
+- nazwy załącznika z planu są odsiewane, jeśli plik już jest w `ctx.files`,
+- plan jest deduplikowany po nazwie,
+- pętla plików prowadzi `seen_paths` po **rozwiązanej ścieżce** (`path.resolve()`);
+  drugi hit tego samego pliku jest pomijany bez czytania i bez narracji.
+Efekt: jedno „Czytam plik X”, jedno źródło w karcie, jedno „Notatki: nic”.
+
+**#25b: bezpiecznik kontekstu.** W `_ollama_chat`, przed wysłaniem do Ollamy:
+jeśli `_est_tokens(system) + _est_tokens(user) > 14000`, user jest cięty od
+końca (materiał, notatki) do `min(12000, 14000 - system)` i dostaje znacznik
+`[materiał ucięty - za długi dla kontekstu]`. Pusta odpowiedź modelu nie jest
+ponawiana (retry z tym samym promptem dałby ten sam błąd); trafia do logu
+jakości jako `prompt-ctx`, a Namysł i rozmowa mówią „Lokalny model nie
+odpowiada (prompt za długi dla kontekstu)” zamiast ogólnego „Model nie
+odpowiedział”.
+
+**Weryfikacja.** Dwa nowe przypadki `gregai eval` (jeden odczyt z czterech
+referencji; guard 14000 + brak retry + komunikat) na atrapach, bez modeli,
+sieci i zapisu do `data/`: szybki eval 85/85. Nowe kontrole 96-97 w
+`check.sh` (97 kontroli razem). Paczkę sprawdza `bash wydaj.sh` na czystym
+rozpakowaniu.
+
+## Co nowego w 1.38.2
+
+Poprawka z life-hacka „hej, przeczytaj to” + załącznik: faza Szkic dostawała
+HTTP 413 od Groqa, a zamiast odpowiedzi z pliku pojawiał się komunikat
+„Lokalnego modelu nie użyłem, bo internet działa (KORYTO_LOKALNIE=bez_internetu)”
+i treść z notatek.
+
+**Co naprawdę się działo.** Fallback 1.32.31 jest w `_Models.ask` i przy
+porażce chmury naprawdę próbuje lokalnego (potwierdzone testem z plikiem
+i 413). Problem był szerzej: po nieudanych etapach sieciowych **rozmowa**
+nie sięgała po lokalny, gdy `KORYTO_LOKALNIE=bez_internetu` - wymagała
+twardego „wszyscy wyczerpani”, a zwykły 413/429 tylko cooldown. Dodatkowo
+interfejs mógł wysłać „przeczytaj to” bez nazwy załącznika (wyścig z
+uploadem albo przełączenie rozmowy), więc Namysł w ogóle nie startował
+i odpowiedź pochodziła z wyszukiwania notatek.
+
+**Fix.**
+- Rozmowa: po porażce WSZYSTKICH etapów sieciowych `_rozmowa_korytem` próbuje
+  lokalnego awaryjnie, także przy `KORYTO_LOKALNIE=bez_internetu` (o ile
+  „lokalnie” jest w KORYTO). Ślad dostaje `lokalnie_awaryjnie` = „Sieć nie
+  odpowiedziała - liczę lokalnie”.
+- Gdy awaryjny lokalny też zawiedzie, komunikat mówi prawdę: „Sieć nie
+  odpowiedziała, a lokalny model też nie odpowiedział”, zamiast „nie użyłem
+  lokalnego”.
+- `main._recent_read_attachment`: jeśli wiadomość prosi o przeczytanie
+  „to/ten plik/załącznik”, a UI nie przekazało nazwy, serwer bierze najnowszy
+  plik z `data/wgrane/<chat_id>/` z ostatnich 30 minut. Tylko bieżąca rozmowa.
+- Fallback lokalny w Namyśle dostaje wariant `user_local` z plikiem; test
+  sprawdza, że plik jest w promptcie lokalnego, a nie tylko w notatkach.
+
+**Weryfikacja.** Dwa nowe przypadki `gregai eval` (plik w `data/wgrane/` +
+413 Groqa -> szkic lokalnie; rozmowa przy `KORYTO_LOKALNIE=bez_internetu` ->
+awaryjny lokalny i uczciwy komunikat) na atrapach, bez modeli, sieci i zapisu
+do `data/`: szybki eval 83/83. Nowe kontrole 94-95 w `check.sh` (95 kontroli
+razem). Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu.
+
+## Co nowego w 1.38.1
+
+Jedna poprawka z życia: plik wgrany spinaczem w UI nie był znajdowany
+w fazie Zbieranie, choć leżał w `data/wgrane/<chat_id>/`.
+
+**Przyczyna.** `sources.save_upload` zapisuje plik jako
+`<data>-<oryginalna nazwa>` (np. `2026-11-05-Chronologia fabularna.txt`).
+W wiadomości i w planie rozpoznania zostaje jednak sama oryginalna nazwa
+(`Chronologia fabularna.txt`). `find_by_name` porównywał nazwy dokładnie,
+więc datowany plik nie pasował; wyszukiwanie szło po korzeniach projektu
+i notatkach, a na końcu meldowało „nie znaleziony”.
+
+**Fix.** Nowe `sources.find_upload_by_name(chat, name)` szuka WYŁĄCZNIE
+w katalogu wgranych TEJ rozmowy, zdejmuje prefiks daty i akceptuje numer
+kolizji (`-2`, `-3`), zwracając najnowsze pierwsze. `namysl._resolve_file`
+używa tego jako drugiego kroku, po dokładnym `find_by_name_in_chat` - więc
+ścieżki i pliki z notatek działają jak dotąd, a wgrane są wreszcie widoczne
+po oryginalnej nazwie. Gdy pliku nie ma nigdzie, komunikat pozostaje
+„nie znaleziony”.
+
+**Weryfikacja.** Nowy przypadek `gregai eval` (plik w `data/wgrane/` +
+„przeczytaj to” -> „Czytam plik ... część 1/N”) na atrapie, bez modeli,
+sieci i zapisu do `data/`: szybki eval 81/81. Nowa kontrola 93 w `check.sh`
+(93 kontrole razem). Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu.
+
+## Co nowego w 1.38.0
+
+Trzy poprawki z codziennego użycia. Bez zmian w Korycie, modelach, SYSOP-ie
+i polityce prywatności.
+
+**#20: załączony plik nie jest już „pominięty”.** Prawdziwy plik był czytany,
+ale rozpoznanie 3B dopisywało do `PLIKI` słowo z polecenia („hej, przeczytaj
+to” -> `PLIKI: to`). Pętla plików próbowała wtedy otworzyć „to”, nie znajdowała
+i dopisywała na kartę fazy `Plik to: pominięty` - jako OSTATNI krok Zbierania,
+co wyglądało, jakby przepadł załącznik. Teraz wpisy z planu przechodzą filtr
+`_plausible_file_ref` (nazwa załącznika, ścieżka, znane rozszerzenie albo
+jedno słowo; proza i zaimki odpadają), a nierozwiązany wpis jest oznaczany
+jako „nie znaleziony”. Etykieta „pominięty” zostaje wyłącznie dla sytuacji,
+w której nie ma ani chmury (zgody), ani lokalnego modelu. Dodatkowo recheck
+w Zbieraniu robi `ollama_available(fresh=True)` - omija 5-sekundowy cache,
+więc nieaktualne „nie działa” sprzed chwili nie blokuje już załącznika.
+
+**#21: „dzięki” i „cześć” mają krótką odpowiedź z kodu.** `namysl.wants()`
+poprawnie wyłączał Namysł dla podziękowań, ale router nie miał własnej
+odpowiedzi społecznej - wiadomość szła do Koryta, a przy wolnym modelu
+interfejs pokazywał narrację trasy („Internet działa (WARP połączony), więc
+to pytanie najpierw dostają darmowi dostawcy...”). Teraz `_social_reply`
+odpowiada natychmiast: „dzięki” -> „Nie ma za co!”, „cześć”/„hej” ->
+„Cześć! W czym mogę pomóc?”. Nie przechwytuje pytań, załączników, spraw
+czekających na zgodę ani poleceń z czasownikiem („dzięki, zrób plan” idzie
+normalną drogą).
+
+**#22: godzina i data bez modelu, dla wszystkich wariantów.** „Która godzina?”
+działało, ale „Jaka jest aktualna godzina w Polsce?”, „Jaka jest data?”,
+„Który jest dzień?”, „Jaki mamy dziś dzień?” mogły iść do modelu albo
+Namysłu. `_time_answer` rozpoznaje te warianty (także bez ogonków, przez
+`slowa.fold`) i odpowiada w milisekundach z jednego źródła czasu:
+`Jest HH:MM CET.` albo `Dziś: ...` z `awareness.today_line`. Pytania
+o godziny otwarcia, strefy czasowe i odległości w czasie nie są przechwytywane.
+
+**Weryfikacja.** Trzy nowe przypadki `gregai eval` (społeczne, zegar, plik)
+na atrapach, bez modeli, sieci i zapisu do `data/`: szybki eval 80/80. Nowe
+kontrole 90-92 w `check.sh` (92 kontrole razem). Test zegara i podziękowania
+mierzy też czas reakcji przez prawdziwy `router.route` (bez modelu, <1 s).
+Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu (`weryfikuj.sh`,
+składnia, szybki eval).
+
+## Co nowego w 1.37.0
+
+Wydanie dopasowuje lokalny model (qwen2.5:3b na CPU i7-6600U) do realnych
+ograniczeń 3B: stabilny cache promptu, twarde budżety, walidacja śmieci,
+kolejka i retry. Bez zmian w Korycie, SYSOP-ie i polityce prywatności.
+
+**Cache promptu.** Blok „Teraz” nie jest już częścią promptu systemowego
+modelu lokalnego. System ma osobowość, zasady i datę z porą dnia (zmiana
+najwyżej 6 razy na dobę), a dokładna godzina, fakty z `memory/` i streszczenie
+rozmowy idą do OSTATNIEJ wiadomości użytkownika. Wcześniej każda zmiana faktu
+albo minuty kasowała Ollamie pamięć podręczną całej historii. Rozgrzewanie po
+starcie używa dokładnie tego stabilnego systemu, więc pierwsza rozmowa trafia
+w cache.
+
+**Budżety.** System 800 tokenów, wiadomość użytkownika 2000, całość 3000.
+Materiał lokalny Namysłu zmniejszony z 7000 do 5300 znaków (ok. 2000 tokenów).
+Cięcie zawsze od końca (starsze notatki), z jawnym znacznikiem; notatka i plik
+ponad limit są ucinane, a plik zachowuje odesłanie do pełnej treści na dysku
+(bez dodatkowego wywołania modelu na streszczenie).
+
+**Instrukcje pod 3B.** `awareness._local_rules` to teraz 8 numerowanych,
+krótkich zasad: konkretne zakazy („NIE zgaduj nazw, cen, dat ani liczb”),
+„NIE pisz, że coś zrobiłeś, jeśli tego nie zrobiłeś”, a dla obliczeń, kodu
+dłuższego niż 30 linii i tłumaczeń - „to zadanie wymaga mocniejszego modelu”.
+`persona.py` nie została zmieniona, więc manifest ucznia pozostaje ważny
+(żadnego retreningu).
+
+**Parametry i jakość.** Do żądania do Ollamy dochodzą `top_p=0.85`,
+`top_k=40`, `repeat_penalty=1.2`, stop `User:`/`Asystent:` oraz
+`num_predict=1024` dla rozmowy (było 400; 200 ucinało odpowiedzi w połowie
+słowa). `temperature` zostaje 0.2, `num_ctx` zostaje 16384 - decyzja
+z 2026-10-19 nie została zmieniona, bo nowy budżet promptu mieści historię
+z zapasem. Odpowiedź dużego modelu jest walidowana: pusty tekst, powtórzenie
+promptu, >80% angielskiego i urwanie bez końca zdania. Jest dokładnie jeden
+retry (dla angielskiego z jawnym „Odpowiedz po polsku”), a „urwane” trafia do
+śladu decyzji i `/debug`. Halucynacji cen i dat nie wykrywamy automatycznie -
+pilnuje ich instrukcja.
+
+**Kolejka i timeout.** Lokalnie liczy jedno żądanie naraz; dwóch może czekać,
+trzecie dostaje czytelny błąd zamiast wisieć (cała kolejka ma 30 s, zmienne
+`OLLAMA_QUEUE_TIMEOUT`). Po timeoucie jest jedna próba z krótszym promptem,
+bez ulotnego bloku z notatkami i faktami; po niej koryto przechodzi dalej.
+
+**Sesja i warmup.** `/debug` pokazuje dzisiejsze tokeny lokalnego modelu,
+liczbę inferencji i medianę tok/s, a po 5000 i 10000 tokenach - uczciwe
+ostrzeżenie (przy 10000 propozycję restartu Ollamy). Instalator wpisuje
+`OLLAMA_KEEP_ALIVE=30m` do drop-inu systemd Ollamy, a `warm_status` jawnie
+mówi „wolny start”, gdy model wczytywał się dłużej niż 120 s. Dodane
+zmienne `.env`: `OLLAMA_TOP_P`, `OLLAMA_TOP_K`, `OLLAMA_REPEAT_PENALTY`,
+`OLLAMA_NUM_PREDICT`, `OLLAMA_QUEUE_TIMEOUT`.
+
+**Weryfikacja.** Dziewięć nowych przypadków `gregai eval` (cache, budżety,
+styl, parametry, walidacja, kolejka, retry, sesja, warmup) działa na atrapach
+Ollamy, bez sieci, modeli i zapisu do `data/`: szybki eval 77/77. Cache
+sprawdzony też na żywym qwen2.5:3b (bez sieci): system 786 tokenów, pierwsze
+zapytanie 78,64 s, drugie 0,72 s - 109 razy szybciej, bo system trafia w
+pamięć podręczną Ollamy. W `check.sh` dochodzą kontrole 81-89 (89 kontroli
+razem), kontrola 9 pilnuje też `OLLAMA_KEEP_ALIVE=30m`, a kontrola 46 -
+rozgrzewania stabilnego systemu. Naprawiono też niedomknięty string w teście
+maskowania klucza OpenRouter w `agent/ewaluacja.py` (plik w 1.36.0 nie
+kompilował się). Paczkę sprawdza `bash wydaj.sh` na czystym rozpakowaniu
+(`weryfikuj.sh`, składnia, szybki eval). Pełny `check.sh` z sudo wymaga żywej
+instalacji, WARP i Ollamy.
+
 ## Co nowego w 1.36.0
 
 Wydanie przygotowujące repozytorium do publikacji. Bez zmian w logice
