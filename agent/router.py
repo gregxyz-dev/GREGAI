@@ -313,9 +313,12 @@ def _namysl_local_timeout() -> int:
     return env_int("LOKALNY_TIMEOUT", 180, 60, 3600)
 
 
-def _namysl_local_chat(system: str, history: list, message: str) -> str:
-    """Lokalny krok Namyslu, zawsze z LOKALNY_TIMEOUT przekazanym do Ollamy."""
-    text = _ollama_chat(system, history, message, timeout=_namysl_local_timeout())
+def _namysl_local_chat(system: str, history: list, message: str, on_token=None) -> str:
+    """Lokalny krok Namyslu, zawsze z LOKALNY_TIMEOUT przekazanym do Ollamy.
+
+    1.39.0: `on_token` tylko dla fazy Szkicu - reszta faz nie wysyła
+    podglądu, żeby dymek nie mieszał szkicu z krytyką i poprawą."""
+    text = _ollama_chat(system, history, message, timeout=_namysl_local_timeout(), on_token=on_token)
     if not text and local_last_quality().get("powod") == "prompt-ctx":
         # 1.38.3 (#25b): pusta odpowiedź przy za długim promptcie ma jasny
         # komunikat w fazie, zamiast ogólnego "Model nie odpowiedział".
@@ -938,15 +941,19 @@ def _unframe(text) -> str:
     return re.sub(r"[<>]{3,}", " ", str(text or ""))
 
 
-def namysl_cloud_call(rozdz: dict, system, msgs, msg, exclude=None, prefer=None):
+def namysl_cloud_call(rozdz: dict, system, msgs, msg, exclude=None, prefer=None, on_token=None):
     """Jedno wywołanie sieciowe Namysłu według rozdzielnicy. Audyt 1.32.1: pusta lista
     etapów znaczy "żadnego etapu sieciowego" (np. KORYTO bez darmowej puli, a waga 1-2
     wyklucza płatny). Dawniej `[] or None` zamieniało to na pełne koryto i Namysł wołał
-    płatnego Claude'a."""
+    płatnego Claude'a.
+
+    1.39.0: `on_token` (tylko Szkic) - najlepsza próba podglądu; dostawca, który
+    go nie wspiera, po prostu odda całość na końcu."""
     if rozdz.get("etapy") == []:
         raise RuntimeError("rozdzielnica: przy tej wadze żaden etap sieciowy nie jest dozwolony")
     return juggler_mod.chat(system, msgs, msg, timeout=JUGGLER_TIMEOUT, preferred_provider=prefer,
-                            exclude_provider=exclude, etapy=rozdz.get("etapy") or None, model=rozdz.get("model"))
+                            exclude_provider=exclude, etapy=rozdz.get("etapy") or None,
+                            model=rozdz.get("model"), on_token=on_token)
 
 
 def _stage_order_for(poziom: int) -> list:
@@ -1491,6 +1498,69 @@ def _ollama_request(payload: dict, timeout: int, quality: str = "") -> dict:
     return data
 
 
+class _StreamBroken(RuntimeError):
+    """Strumień urwany albo nieparsowalny (1.39.0). Wołający robi wtedy to
+    samo zapytanie w całości - streaming jest dodatkiem, nie warunkiem
+    odpowiedzi."""
+
+
+def _parse_ollama_stream(lines, on_token) -> dict:
+    """Scala NDJSON Ollamy (`stream: true`) w jeden kształt jak z _ollama_request.
+
+    Każdy wiersz to osobny JSON: `{"message":{"content":"..."}}` z przyrostem
+    tekstu, ostatni ma `done: true` i statystyki. `on_token(None)` znaczy
+    "wyczyść podgląd" (używane przy ponowieniu po walidacji) - treść nie
+    trafia do takiego wywołania. Brak `done` to strumień urwany.
+    """
+    parts: list[str] = []
+    last: dict = {}
+    done = False
+    for raw in lines:
+        try:
+            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        except UnicodeDecodeError as e:
+            raise _StreamBroken(f"strumień Ollamy: nieczytelny wiersz ({e})") from e
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError as e:
+            raise _StreamBroken(f"strumień Ollamy: nie JSON ({e})") from e
+        if not isinstance(obj, dict):
+            raise _StreamBroken("strumień Ollamy: wiersz nie jest obiektem")
+        if obj.get("error"):
+            raise RuntimeError(str(obj.get("error"))[:300])
+        delta = (obj.get("message") or {}).get("content") or ""
+        if delta:
+            parts.append(delta)
+            on_token(delta)
+        last = obj
+        if obj.get("done"):
+            done = True
+            break
+    if not done:
+        raise _StreamBroken("strumień Ollamy urwał się przed done")
+    data = dict(last)
+    data["message"] = {"content": "".join(parts)}
+    return data
+
+
+def _ollama_stream_request(payload: dict, timeout: int, quality: str, on_token) -> dict:
+    """To samo /api/chat, ale `stream: true` i `on_token` per przyrost (1.39.0)."""
+    payload = dict(payload, stream=True)
+    req = urllib.request.Request(
+        OLLAMA_HOST.rstrip("/") + "/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with netguard_mod.local_urlopen(req, timeout=timeout) as resp:
+        data = _parse_ollama_stream(netguard_mod.iter_lines(resp, deadline=timeout), on_token)
+    _log_ollama_use(payload.get("model"), data, quality)
+    return data
+
+
+
 def _ollama_chat(
     system_prompt: str,
     history: list,
@@ -1502,6 +1572,7 @@ def _ollama_chat(
     _warmup: bool = False,
     volatile: str = "",
     _allow_retry: bool = True,
+    on_token=None,
 ) -> str:
     """Jedno zapytanie /api/chat do lokalnej Ollamy, wspólne dla wszystkich
     modeli (duży, router, uczeń, planer), żeby każda poprawka (limity,
@@ -1517,7 +1588,15 @@ def _ollama_chat(
     kandydatem do odrzucenia w jednej próbie ponowienia.
 
     Okno (num_ctx) i keep_alive są stałe dla danego modelu: zmiana num_ctx
-    między zapytaniami zmusiłaby Ollamę do przeładowania modelu."""
+    między zapytaniami zmusiłaby Ollamę do przeładowania modelu.
+
+    `on_token` (1.39.0): opcjonalny podgląd na żywo. Gdy podany, to samo
+    zapytanie idzie z `stream: true`, a każdy przyrost tekstu trafia do
+    `on_token(delta)`; `on_token(None)` czyści podgląd (ponowienie po
+    walidacji albo urwany strumień). Zwracany jest nadal PEŁNY tekst, więc
+    walidacja, ponowienia i wszystkie dotychczasowe wywołania bez tego
+    parametru działają jak dawniej. Urwany/nieparsowalny strumień = jedno
+    powtórzenie w całości (bez streamingu), nie błąd odpowiedzi."""
     big = _is_big(model)
     settings = model_settings(model)
     num_ctx = settings["num_ctx"]
@@ -1566,13 +1645,26 @@ def _ollama_chat(
                 payload = {
                     "model": model or OLLAMA_MODEL,
                     "messages": messages,
-                    "stream": False,
+                    "stream": bool(on_token),
                     "options": dict(options, temperature=temperature),
                     "keep_alive": settings["keep_alive"],
                 }
                 try:
-                    data = _ollama_request(payload, timeout, quality)
+                    if on_token is not None:
+                        try:
+                            data = _ollama_stream_request(payload, timeout, quality, on_token)
+                        except _StreamBroken:
+                            # 1.39.0: podgląd był dodatkiem - zdejmujemy go i
+                            # robimy to samo zapytanie w całości, jak przed
+                            # streamingiem. Połowiczny tekst nie jest odpowiedzią.
+                            on_token(None)
+                            payload["stream"] = False
+                            data = _ollama_request(payload, timeout, quality)
+                    else:
+                        data = _ollama_request(payload, timeout, quality)
                 except Exception as e:
+                    if on_token is not None:
+                        on_token(None)
                     # Jeden retry po timeoucie: bez ulotnego bloku (fakty,
                     # notatki, streszczenie). Dalsze próby tylko wydłużają
                     # ciszę - wołający ma własny fallback.
@@ -1595,8 +1687,12 @@ def _ollama_chat(
                     # Pusty/angielski po drugiej próbie: oddajemy puste, żeby
                     # koryto przeszło do następnego etapu (pusty dymek gorszy).
                     if not ok and reason in ("pusty", "angielski", "powtorzenie promptu"):
+                        if on_token is not None:
+                            on_token(None)
                         return ""
                     break
+                if on_token is not None:
+                    on_token(None)  # ponowienie: stary podgląd nie jest odpowiedzią
                 if reason == "angielski":
                     msg = "Odpowiedz po polsku (krótko, po polsku):\n" + message
                 temperature = 0.1
@@ -2532,7 +2628,7 @@ def _market_next_steps(card) -> list | None:
 
 def route(vault, system_prompt: str, history: list, message: str, pending_clarify: list | None = None,
           pending_action: dict | None = None, progress=None, files: list | None = None, chat: str | None = None,
-          nie_ucz: bool = False, nie_zapisuj_sladu: bool = False) -> dict:
+          nie_ucz: bool = False, nie_zapisuj_sladu: bool = False, on_token=None) -> dict:
     """Jedna wiadomość = jeden zakres koryta (1.18.0, juggler.request_scope):
     wspólny termin dla wszystkich łańcuchów sieciowych tej wiadomości (krok 1,
     fazy Namysłu, rozmowa) i zbiór dostawców, którzy w niej już zawiedli.
@@ -2550,13 +2646,14 @@ def route(vault, system_prompt: str, history: list, message: str, pending_clarif
                 if nie_ucz:
                     stack.enter_context(learning_mod.suppress_learning())
                 return _route(vault, system_prompt, history, message, pending_clarify, pending_action,
-                              progress=progress, files=files, chat=chat)
+                              progress=progress, files=files, chat=chat, on_token=on_token)
     finally:
         agentloop_mod._CHAT.id = None
 
 
 def _route(vault, system_prompt: str, history: list, message: str, pending_clarify: list | None = None,
-           pending_action: dict | None = None, progress=None, files: list | None = None, chat: str | None = None) -> dict:
+           pending_action: dict | None = None, progress=None, files: list | None = None, chat: str | None = None,
+           on_token=None) -> dict:
     """Zwraca {"speech": ..., "card": {...}, "model_active": bool}.
 
     `pending_clarify` to echo pola o tej samej nazwie z poprzedniej
@@ -2675,10 +2772,16 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
             # 1.38.0 (#20): fresh=True, bo ollama_available() ma 5-sekundowy
             # cache - stary "nie działa" blokował plik mimo działającej Ollamy.
             local_recheck=lambda: ollama_available(fresh=True),
+            # 1.39.0: podgląd tokenów tylko dla fazy Szkic; `local_stream` to
+            # ten sam lokalny krok co `local_chat`, z opcjonalnym callbackiem.
+            on_token=on_token,
+            local_stream=_namysl_local_chat,
             # 1.30.23: rozdzielnica - waga uwagi decyduje, którą szyną (darmowa
             # pula / płatny Claude) i jakim modelem puścić KAŻDE wywołanie Namysłu.
-            cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, _rozdz=juggler_mod.rozdzielnica(skup_poziom): namysl_cloud_call(
-                _rozdz, system, msgs, msg, exclude, prefer or _last_juggler_provider(history)),
+            cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, on_token=None,
+            _rozdz=juggler_mod.rozdzielnica(skup_poziom): namysl_cloud_call(
+                _rozdz, system, msgs, msg, exclude, prefer or _last_juggler_provider(history),
+                on_token=on_token),
             cloud_pool=lambda: juggler_mod.providers_pool(),
             research=lambda msg: juggler_mod.research(msg, timeout=JUGGLER_TIMEOUT),
             search_notes=lambda v, q: v.search(q, limit=namysl_mod.MAX_NOTES),
@@ -3119,7 +3222,7 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
     router_used: str | None = None
     _koryto_errors: dict = {}
 
-    def _rozmowa_lokalnie(errors: dict) -> tuple[str | None, str, dict]:
+    def _rozmowa_lokalnie(errors: dict, on_token=None) -> tuple[str | None, str, dict]:
         """Etap "lokalnie" koryta: uczeń (STUDENT_MODEL, jeśli włączony i
         aktualny: krótki prompt osobowości, ta sama historia; pusta
         odpowiedź/błąd/timeout = cicho dalej), potem OLLAMA_MODEL z pełnym
@@ -3138,7 +3241,8 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                     extra["style_problems"] = problems
                 return reply, "uczen_rozmowa", extra
         try:
-            reply = _ollama_chat(_sys(cloud=False), history, message, timeout=RICH_TIMEOUT, volatile=_volatile())
+            reply = _ollama_chat(_sys(cloud=False), history, message, timeout=RICH_TIMEOUT,
+                                 volatile=_volatile(), on_token=on_token)
             if not reply:
                 # 1.38.3 (#25b): pusta odpowiedź po za długim promptcie ma
                 # własny komunikat; nie udajemy zwykłego "model milczy".
@@ -3208,7 +3312,7 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                     else:
                         errors["lokalnie"] = "pominięty: internet działa, a KORYTO_LOKALNIE=bez_internetu (lokalny tylko bez sieci)"
                         continue
-                reply, stage, extra = _rozmowa_lokalnie(errors)
+                reply, stage, extra = _rozmowa_lokalnie(errors, on_token=on_token)
                 if reply is None:
                     continue
                 extra.update(extra_base)
@@ -3244,17 +3348,22 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                     errors["juniorzy_error"] = f"{type(e).__name__}: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             try:
                 reply, provider = juggler_mod.chat(_sys(cloud=True), _cloud_history(history), message, timeout=JUGGLER_TIMEOUT,
-                                                    preferred_provider=_last_juggler_provider(history), etapy=[etap])
+                                                    preferred_provider=_last_juggler_provider(history), etapy=[etap],
+                                                    on_token=on_token)
             except netguard_mod.NetGuardBlocked as e:
                 # 1.32.30 (audyt #4): WARP padł w trakcie - kolejni dostawcy
                 # zawiedliby tak samo, a to nie ich wina. Lokalny etap (jeśli
                 # jest dalej w kolejności) dostanie zgodę poniżej.
+                if on_token is not None:
+                    on_token(None)
                 warp_blocked = True
                 errors["juggler_error" if etap == "darmowe" else "cloud_error"] = f"NetGuardBlocked: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             except Exception as e:
                 # str(e), nie tylko type(e).__name__: juggler.chat() pakuje PRAWDZIWY
                 # powód (per dostawca: "groq:HTTPError ...") w treść wyjątku, nie w jego
                 # typ. _finish()->trace_mod.record() maskuje sekrety w `extra`.
+                if on_token is not None:
+                    on_token(None)
                 errors["juggler_error" if etap == "darmowe" else "cloud_error"] = f"{type(e).__name__}: {e}"[:_DEBUG_ERROR_PREVIEW_LIMIT]
             else:
                 # 1.20.0: odpowiedź dostawcy jest już OPŁACONA. Zapis pary i _finish()
@@ -3302,7 +3411,7 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                               and "lokalnie" in koryto_mod.order())
         if emergency_by_cloud or emergency_local_allowed(local_now, local_ok_now, koryto_mod.order(), allowed_pool,
                                                          warp_blocked, exhausted_names):
-            reply, stage, extra = _rozmowa_lokalnie(errors)
+            reply, stage, extra = _rozmowa_lokalnie(errors, on_token=on_token)
             if reply is not None:
                 extra.update(extra_base)
                 extra.update({k: v for k, v in errors.items() if v})

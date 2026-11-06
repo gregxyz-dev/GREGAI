@@ -177,8 +177,11 @@ nie zgłasza - broni się sam.
   z sumami z paczki (`GREGAI.sha256`) przy starcie i w każdym obchodzie. Podmiana
   pliku = anomalia. Brak albo wyczyszczenie manifestu = anomalia (nie ciche
   wyłączenie). Podmiana samego manifestu przy tej samej wersji = anomalia (skrót
-  manifestu trzymany z kluczem w kotwicy, patrz niżej). To integralność, nie
-  autentyczność: podpis manifestu to osobny krok (dług §9).
+  manifestu trzymany z kluczem w kotwicy, patrz niżej). Sumy dają integralność;
+  autentyczność wydania potwierdza podpis GPG manifestu (`GREGAI.sha256.asc`),
+  sprawdzany przez `aktualizuj.sh` przed podmianą kodu (1.39.0). Straż w
+  działającej usłudze nadal porównuje tylko sumy - klucz publiczny i gpg nie
+  są potrzebne w procesie usługi.
 - **Dziennik bezpieczeństwa** (`straz.log_security`, `data/straz/bezpieczenstwo.jsonl`):
   każde zdarzenie w łańcuchu KLUCZOWANYM (`h = HMAC(klucz, poprzedni + wpis)`).
   Klucz i kotwica (licznik + ostatni skrót) żyją POZA `data/`
@@ -193,7 +196,9 @@ nie zgłasza - broni się sam.
 
 Uczciwa granica: pełne przejęcie konta usługi (atakujący z prawami usługi) defeat
 uje każdy mechanizm w procesie - przeczyta klucz z kotwicy i klucze z `.env`.
-Twardsza granica to osobny użytkownik systemowy `gregai` i podpis manifestu (§9).
+Od 1.39.0 usługa działa jako osobny użytkownik systemowy `gregai`, a wydania
+mają podpisany manifest; atakujący musi więc najpierw przejąć to konto albo
+klucz wydawcy. To podnosi poprzeczkę, nie czyni procesu nieomylnym (patrz §9).
 
 ## 5. Granice prywatności
 
@@ -333,7 +338,10 @@ Twardsza granica to osobny użytkownik systemowy `gregai` i podpis manifestu (§
 
 ## 9. Znany dług (świadomie odłożony)
 
-- (1.21.0) Manifest paczki daje integralność, nie autentyczność (brak podpisu).
+- (1.39.0) Podpis manifestu i osobny użytkownik `gregai` są wdrożone, ale
+  klucz publiczny wydawcy jest przypinany przy pierwszej aktualizacji jako
+  TOFU (zaufanie do paczki, którą i tak się instaluje). Kolejne paczki muszą
+  już pasować do przypiętego klucza; wymiana klucza wymaga `install.sh`.
 - (1.28.0) Wiedza sprawdzona z aktualnymi źródłami 2026-10-22 (prawo e-roweru,
   prawa konsumenta, KSeF, OWASP 2025, Ubuntu 26.04, Python 3.14, pisownia 2026).
 - (1.21.0) Wiedza (`notatki/wiedza`) pisana jednorazowo przez Claude: daty,
@@ -366,9 +374,13 @@ Twardsza granica to osobny użytkownik systemowy `gregai` i podpis manifestu (§
   czyta już własnej notatki jako "wyniku".)
 - Fakty z „Zapamiętaj” (memory/) nie idą do sieci, więc Claude ich nie
   zna; widzi je tylko lokalny model. Do decyzji: przełącznik w `.env`.
-- Tryb pełny działa na koncie Grzegorza (`NOPASSWD: ALL` dla jego konta);
-  osobny użytkownik systemowy `gregai` dałby twardszą granicę. Do decyzji.
-- Klucze API leżą w czytelnym dla usługi `.env`. Klasyfikator łapie
+- Tryb pełny działa na koncie użytkownika (`NOPASSWD: ALL` dla jego konta);
+  usługa ma od 1.39.0 osobne konto systemowe `gregai`, ale reguła sudo dla
+  człowieka zostaje, bo ręczne polecenia i testy nadal są potrzebne.
+- Klucze API leżą w czytelnym dla usługi `.env` (0600/640, grupa `gregai`).
+  Klasyfikator łapie typowe próby wyniesienia, ale skrypt, który sam czyta
+  `.env`, przejdzie; jedyna mocna poprawka to klucze w pliku tylko dla roota
+  (`EnvironmentFile=`). Do decyzji.
   typowe próby wyniesienia, ale skrypt, który sam czyta `.env`, przejdzie;
   jedyna mocna poprawka to klucze w pliku tylko dla roota
   (`EnvironmentFile=`). Do decyzji.

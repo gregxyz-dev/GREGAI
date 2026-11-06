@@ -4614,6 +4614,43 @@ async function waitForChatJob(job) {
   }
 }
 
+// 1.39.0: podgląd tokenów na żywo (GET /api/chat/stream, text/event-stream).
+// EventSource nie potrafi wysłać nagłówka X-Gregai-Token, więc czytamy ten
+// sam format SSE ręcznie przez fetch+ReadableStream. To TYLKO podgląd:
+// kanoniczna odpowiedź zawsze przychodzi przez /api/chat/wait, więc zerwany
+// strumień niczego nie gubi (bąbelek i tak powstaje z pełnego wyniku).
+async function readChatTokenStream(jobId, onEvent) {
+  try {
+    const res = await gregaiFetch(`/api/chat/stream?job=${encodeURIComponent(jobId)}`);
+    if (!res.ok || !res.body || typeof res.body.getReader !== "function") return;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        let event = "message";
+        const dataLines = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        if (!dataLines.length) continue;
+        let payload = null;
+        try { payload = JSON.parse(dataLines.join("\n")); } catch (e) { continue; }
+        if (event === "token") onEvent(payload);
+      }
+    }
+  } catch (e) {
+    // Podgląd jest dodatkiem - bez niego czekanie i wynik działają jak dotąd.
+  }
+}
+
 // {cancelled, jobId, cancel()} trwającej odpowiedzi żyje w SWOJEJ rozmowie
 // (conv.run, 1.19.0) - patrz activeRun().
 
@@ -4723,6 +4760,55 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   // tu przebieg Namysłu z POPRZEDNIEJ wiadomości, nawet gdy ta nowa w ogóle
   // nie wejdzie w Namysł.
   resetProgressPanel();
+
+  // Podgląd tokenów (1.39.0): dopisujemy przyrosty do dymka-czekania, a pełny,
+  // kanoniczny tekst i tak zastępuje go po odebraniu wyniku. `reset` czyści
+  // podgląd, gdy serwer zmienia drogę modelu albo ponawia odpowiedź.
+  let tokenPreview = null;
+  let streamText = "";
+  let tokenStreamStarted = false;
+  const showTypingDots = () => {
+    pending.textContent = "";
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    for (let i = 0; i < 3; i++) dots.appendChild(document.createElement("span"));
+    pending.appendChild(dots);
+    pending.classList.remove("streaming");
+    tokenPreview = null;
+  };
+  const renderTokenPreview = () => {
+    if (!shown() || !pending.isConnected) return;
+    if (!tokenPreview) {
+      pending.textContent = "";
+      pending.classList.add("streaming");
+      tokenPreview = document.createElement("div");
+      tokenPreview.className = "stream-preview";
+      pending.appendChild(tokenPreview);
+    }
+    tokenPreview.textContent = streamText;
+    const scroller = pending.parentElement;
+    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  };
+  const applyToken = (payload) => {
+    if (!payload) return;
+    if (payload.reset) {
+      streamText = "";
+      if (tokenPreview) tokenPreview.textContent = "";
+      if (tokenPreview && pending.isConnected) showTypingDots();
+      return;
+    }
+    if (typeof payload.t === "string" && payload.t) {
+      streamText += payload.t;
+      renderTokenPreview();
+    }
+  };
+  const startTokenStream = (jobId) => {
+    if (tokenStreamStarted) return;
+    tokenStreamStarted = true;
+    readChatTokenStream(jobId, applyToken);
+  };
 
   async function fetchNetworkState() {
     try {
@@ -5043,6 +5129,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       if (run.cancelled) { await cancelJob(); data = { anulowano: true }; break; }
       addPendingNote();
       startProgress(data.pending_job);
+      startTokenStream(data.pending_job);
       data = await waitForChatJob(data.pending_job);
     }
     // 1.17.3 (zgłoszenie Grzegorza): odpowiedź zwykle przychodzi przez

@@ -44,9 +44,12 @@ wykryte), ponowny atak czerwonego zespołu.
 ## Uczciwa granica
 
 Pełne przejęcie konta usługi GREGAI defeat uje każdy mechanizm w procesie:
-atakujący z prawami usługi przeczyta klucz z kotwicy i klucze z `.env`. Twardsza
-granica to osobny użytkownik systemowy `gregai` i podpis manifestu - osobne,
-większe kroki na liście długu (FUNDAMENT §9), do Twojej decyzji.
+atakujący z prawami usługi przeczyta klucz z kotwicy i klucze z `.env`. Od
+1.39.0 usługa działa jako osobny użytkownik systemowy `gregai` (jądro odcina
+mu `~/.ssh`, `~/.gnupg` i profile przeglądarek człowieka), a manifest każdego
+wydania jest podpisany GPG i weryfikowany przed aktualizacją. Atakujący musi
+więc najpierw przejąć konto `gregai` albo klucz wydawcy - to podnosi
+poprzeczkę, nie czyni procesu nieomylnym (patrz FUNDAMENT §9).
 
 Czego GREGAI świadomie NIE robi: nie kontratakuje (to w Polsce przestępstwo i
 uderzyłoby w niewinnych, bo napastnik działa z cudzego sprzętu), nie zgłasza

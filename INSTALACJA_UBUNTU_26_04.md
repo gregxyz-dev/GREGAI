@@ -222,7 +222,8 @@ dysku z systemem (ten ma `TRAN` = `sata` albo `nvme`).
    **Zapisz je na papierze w bezpiecznym miejscu** - bez niego dane są
    nie do odzyskania, także dla Ciebie.
 7. **Konto:** imię Grzegorz, nazwa komputera `gregai`, nazwa użytkownika i
-   hasło. Ten użytkownik będzie właścicielem usługi GREGAI.
+   hasło. Ten użytkownik będzie właścicielem danych i `.env` GREGAI;
+   sama usługa działa od 1.39.0 jako osobne konto systemowe `gregai`.
 8. **Strefa czasowa:** Warszawa.
 9. Instalacja -> "Uruchom ponownie" -> wyjmij pendrive.
 

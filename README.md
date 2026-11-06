@@ -1,4 +1,6 @@
-# GREGAI 1.38.9
+# GREGAI 1.39.0
+
+[![CI](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml)
 
 Osobista inteligencja strategiczna jednej osoby. Rozmówca nazywa się **GREGAI**
 i mieszka na laptopie: zna Twoje notatki, pamięta to, co mu powiesz
@@ -12,9 +14,33 @@ Bez frameworków, bez procesu budowania.
 - Adres: **http://localhost:7777** (tylko na tym laptopie)
 - Instalacja: **jedna komenda, z dowolnego folderu**: `bash <folder>/install.sh`
   (niżej); system od zera: `INSTALACJA_UBUNTU_26_04.md`
-- Kontrola po instalacji: **`bash check.sh`** (101 kontroli; `install.sh` odpala ją sam)
+- Kontrola po instalacji: **`bash check.sh`** (106 kontroli; `install.sh` odpala ją sam)
 - Decyzje, zakres i bramki 1.0.0 (historia stabilizacji): **`ROADMAP_1.0.md`**
 - Licencja: **MIT** (`LICENSE`)
+
+## Quick Start (10 minut)
+
+Wymagania: Ubuntu 22.04-26.04, konto z `sudo` i internet na czas instalacji
+(instalator stawia obowiązkowy Cloudflare WARP, Ollamę i usługę systemd).
+~10 GB wolnego miejsca, 8 GB RAM (16 GB zalecane).
+
+```bash
+git clone https://github.com/gregxyz-dev/GREGAI.git
+cd GREGAI
+bash install.sh
+```
+
+Po instalacji otwórz **http://localhost:7777** i napisz cokolwiek - także
+bez żadnego klucza API: **GREGAI działa lokalnie na `qwen2.5:3b`** (pierwsza
+odpowiedź po wczytaniu modelu może potrwać 30-90 s, kolejne są szybsze).
+Klucz Anthropic (albo darmowe klucze Groq/Gemini/OpenRouter) jest opcjonalny -
+wpisany w `.env` daje szybsze i mocniejsze odpowiedzi, pusty zostawia tryb
+lokalny i awaryjny.
+
+Instalator na końcu sam odpala `bash check.sh` (pełny audyt instalacji, wymaga
+sudo, może potrwać minutę). Szybka kontrola bez sudo: `bash check.sh --no-sudo`.
+Pełny opis opcji instalatora (`--train`, `--no-host`, `--here`, `--yes`):
+sekcja "Instalacja jedną komendą" niżej.
 
 ## Dokumentacja
 
@@ -40,7 +66,11 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.38.9 - konfiguracja AI w plikach:
+**`CHANGELOG.md`**. Najnowsze: 1.39.0 - odpowiedź pisze się na żywo
+(strumień tokenów z lokalnej Ollamy i najlepsza próba z Groqa), CI na GitHub
+Actions, Quick Start w 10 minut, dedykowany użytkownik systemowy `gregai`,
+podpisany manifest wydania (GPG) i watchdog systemd. Wcześniej 1.38.9 -
+konfiguracja AI w plikach:
 `prompts/*.md` i `config/*.json`, loader z hot-reloadem 5 s i fallbackiem
 do kodu; `tools.json`/`persona.md` to read-only snapshoty. Wcześniej
 1.38.8 - wizualny lifting steppera Namysłu. Wcześniej 1.38.7 - Namysł raz
@@ -138,7 +168,10 @@ usługi systemd, poprawia `SYSOP_ROOTS` w `.env`, wypisuje **starą i nową
 WARP (obowiązkowy), Ollamę i model 3B, tworzy `.env` z `.env.example` (pyta o
 klucz Anthropic, bez echa; Enter = pomiń), zakłada usługi, sudo dla listy
 usług, zaporę, swap 8 GB i ustawienia "laptop nie zasypia" (pokrywa, zasilanie), na końcu odpala
-`check.sh`. Opcje: `--train` (trening router + planer + uczeń w tle),
+`check.sh`. Usługa działa jako dedykowany użytkownik systemowy `gregai`
+(bez logowania), z `Type=notify` i `WatchdogSec=300`; klucz publiczny wydawcy
+ląduje w `/usr/share/keyrings/gregai.gpg`, więc `aktualizuj.sh` może sprawdzać
+podpis paczki. Opcje: `--train` (trening router + planer + uczeń w tle),
 `--no-host` (bez ustawień laptopa), `--here` (instaluj dokładnie tu), `--yes`
 (bez pytań o klucz Anthropic i trening; hasło do `sudo` i rejestracja WARP
 nadal mogą zapytać), `--help`. Jeśli folder leży na **dysku USB / wymiennym**, w katalogu

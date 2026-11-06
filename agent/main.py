@@ -207,6 +207,11 @@ CHAT_ABANDON_AFTER = CHAT_WAIT + 30
 MAX_CHAT_CHARS = 20000
 # Ile rozmów może naraz czekać w kolejce na model (wykonują się po kolei).
 MAX_ACTIVE_CHAT_JOBS = 8
+# Podgląd tokenów (1.39.0): SSE żyje najwyżej tyle, a co tyle sekund wysyła
+# komentarz `: ping` - po drodze może stać proxy/telefon, które zamyka ciche
+# połączenie. Sam wynik i tak przychodzi przez /api/chat/wait.
+CHAT_STREAM_MAX_S = 1800
+CHAT_STREAM_PING_S = 15.0
 
 
 def _pl_count(n, one: str, few: str, many: str) -> str:
@@ -502,6 +507,7 @@ def _run_chat(payload: dict, job: dict | None = None) -> dict:
     # 1.38.6 (#29): UI może wysłać ten sam plik 2× (race w przeglądarce).
     files = _dedup_upload_paths(files)
     progress = (lambda ev: _job_progress(job, ev)) if job is not None else None
+    token_cb = (lambda delta: _job_token(job, delta)) if job is not None else None
     with _CHAT_LOCK:
         # Rozmowa, o którą nikt nie pyta od dawna (karta przeglądarki zamknięta,
         # zanim kolejka doszła do niej), nie zajmuje modelu na minuty ani nie
@@ -527,7 +533,7 @@ def _run_chat(payload: dict, job: dict | None = None) -> dict:
         router_mod._CANCEL.check = (lambda: job["cancel"].is_set()) if job is not None else None
         try:
             result = router_mod.route(route_vault, system_prompt, history, message, pending_clarify, pending_action,
-                                      progress=progress, files=files, chat=chat)
+                                      progress=progress, files=files, chat=chat, on_token=token_cb)
         finally:
             router_mod._CANCEL.check = None
         if job is not None and job["cancel"].is_set():
@@ -685,6 +691,22 @@ def _job_progress(job: dict, ev: dict) -> None:
         pass
 
 
+def _job_token(job: dict, delta) -> None:
+    """Token podglądu na żywo (1.39.0) przy zadaniu czatu.
+
+    `delta` to przyrost tekstu, a None znaczy "wyczyść podgląd" (zmiana
+    drogi modelu, ponowienie po walidacji, urwany strumień). Lista jest
+    tylko podglądem: kanoniczna odpowiedź zawsze przychodzi przez
+    /api/chat/wait, więc zerwane SSE niczego nie gubi."""
+    try:
+        with _CHAT_JOBS_LOCK:
+            tokens = job.setdefault("tokens", [])
+            if len(tokens) < 20000:
+                tokens.append(delta)
+    except Exception:
+        pass
+
+
 _CLIENT_JOBS: dict[str, tuple[str, float]] = {}  # client_id -> (job_id, kiedy)
 
 
@@ -720,7 +742,7 @@ def _start_chat_job_new(payload: dict) -> str:
     now0 = time.monotonic()
     job_chat = sources_mod.chat_id(payload.get("project") if isinstance(payload, dict) else None)
     job = {"done": threading.Event(), "cancel": threading.Event(), "result": None, "created": now0,
-           "last_poll": now0, "progress": [], "chat": job_chat}
+           "last_poll": now0, "progress": [], "tokens": [], "chat": job_chat}
 
     def _work():
         try:
@@ -1343,6 +1365,13 @@ class Handler(BaseHTTPRequestHandler):
                 since_i = 0
             events = list(job.get("progress") or [])
             self._send_json({"events": events[since_i:], "total": len(events), "done": job["done"].is_set()})
+            return
+
+        if route == "/api/chat/stream":
+            # 1.39.0: podgląd tokenów (text/event-stream). To dodatek do
+            # kanonicznej odpowiedzi z /api/chat/wait - nie zastępuje jej.
+            job_id = (parse_qs(parsed.query).get("job") or [""])[0]
+            self._handle_chat_stream(job_id)
             return
 
         if route == "/api/namysl/settings":
@@ -2112,6 +2141,81 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": _error_text(e)}, status=500)
 
+    def _handle_chat_stream(self, job_id: str):
+        """GET /api/chat/stream?job=... - tokeny podglądu jako SSE (1.39.0).
+
+        Zdarzenia: `token` {"t": "..."} albo {"reset": true}, `done` na
+        końcu. Klient (ui/app.js) czyta to przez fetch+ReadableStream, bo
+        EventSource nie umie wysłać nagłówka X-Gregai-Token. Klient może
+        zniknąć w każdej chwili: to tylko podgląd, a zadanie i jego wynik
+        żyją dalej (CHAT_JOB_TTL), więc zerwanie niczego nie anuluje.
+        """
+        with _CHAT_JOBS_LOCK:
+            job = _CHAT_JOBS.get(job_id)
+        if job is None:
+            self._send_json({"error": "Nie ma takiej rozmowy w toku"}, status=404)
+            return
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            # Bez Content-Length: treść kończy się zamknięciem połączenia.
+            self.send_header("X-Accel-Buffering", "no")
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
+            self.end_headers()
+        except self.CLIENT_DISCONNECT_ERRORS:
+            return
+
+        def send(event: str, payload: dict) -> None:
+            body = (f"event: {event}\ndata: "
+                    + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8", "replace")
+            self.wfile.write(body)
+            self.wfile.flush()
+
+        dead = (OSError, ValueError)
+        sent = 0
+        last_write = time.monotonic()
+        deadline = last_write + CHAT_STREAM_MAX_S
+        try:
+            while True:
+                job["last_poll"] = time.monotonic()
+                with _CHAT_JOBS_LOCK:
+                    tokens = list(job.get("tokens") or [])
+                    done = job["done"].is_set()
+                while sent < len(tokens):
+                    delta = tokens[sent]
+                    sent += 1
+                    if delta is None:
+                        send("token", {"reset": True})
+                    else:
+                        send("token", {"t": str(delta)})
+                    last_write = time.monotonic()
+                if done:
+                    # Tokeny, które doszły między odczytem a done, też oddajemy.
+                    with _CHAT_JOBS_LOCK:
+                        tokens = list(job.get("tokens") or [])
+                    while sent < len(tokens):
+                        delta = tokens[sent]
+                        sent += 1
+                        send("token", {"reset": True} if delta is None else {"t": str(delta)})
+                    send("done", {"ok": True})
+                    return
+                now = time.monotonic()
+                if now > deadline:
+                    send("err", {"error": "podgląd zamknięty po 30 minutach"})
+                    return
+                if now - last_write >= CHAT_STREAM_PING_S:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    last_write = now
+                time.sleep(0.06)
+        except dead:
+            # Klient zamknął kartę/połączenie - podgląd nie jest potrzebny,
+            # a wynik i tak czeka w zadaniu.
+            return
+
     def _send_chat_result(self, job_id: str, wait: float = CHAT_WAIT):
         with _CHAT_JOBS_LOCK:
             job = _CHAT_JOBS.get(job_id)
@@ -2510,6 +2614,14 @@ class BoundedServer(ThreadingHTTPServer):
         self._local_slots = threading.BoundedSemaphore(self.LOCAL_RESERVED)
         self._per_ip: dict = {}
         self._per_ip_lock = threading.Lock()
+        # 1.39.0: dowód życia głównej pętli dla watchdoga systemd. serve_forever
+        # woła service_actions() co poll_interval (5 s); wątek strażnika wysyła
+        # WATCHDOG=1 tylko wtedy, gdy ten znacznik jest świeży. Zamrożona pętla =
+        # cisza = systemd restartuje usługę po WatchdogSec.
+        self.last_service = time.monotonic()
+
+    def service_actions(self):
+        self.last_service = time.monotonic()
 
     @staticmethod
     def _is_local(client_address) -> bool:
@@ -2565,6 +2677,55 @@ class BoundedServer(ThreadingHTTPServer):
             self._drop_ip(client_address[0] if client_address else "", self._is_local(client_address))
 
 
+# --- Watchdog systemd (1.39.0) ------------------------------------------------
+# Minimalny sd_notify bez zależności (python3-systemd nie jest wymagany):
+# NOTIFY_SOCKET to gniazdo domeny uniksowej; nazwa zaczynająca się od "@"
+# oznacza gniazdo abstrakcyjne (systemd używa go domyślnie).
+WATCHDOG_INTERVAL_S = 60.0
+WATCHDOG_STALE_S = 45.0
+
+
+def sd_notify(state: str) -> bool:
+    """Wyślij stan do systemd przez NOTIFY_SOCKET. Brak zmiennej = no-op
+    (uruchomienie ręczne, Windows, inny system). Nigdy nie rzuca."""
+    addr = os.environ.get("NOTIFY_SOCKET", "")
+    if not addr:
+        return False
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.settimeout(1.0)
+            s.sendto(state.encode("utf-8"), addr)
+        return True
+    except OSError:
+        return False
+
+
+def start_watchdog(server) -> threading.Thread | None:
+    """READY=1 i WATCHDOG=1 co 60 s, dopóki główna pętla serwera odpowiada.
+
+    WatchdogSec=300 w gregai.service: po ~5 minutach ciszy systemd uznaje
+    proces za zawieszony i restartuje usługę (Restart=always). Wątek nie
+    wysyła WATCHDOG=1, gdy `server.last_service` jest starszy niż 45 s
+    (serve_forever stoi), więc zamrożenie pętli naprawdę wywołuje restart.
+    """
+    if not os.environ.get("NOTIFY_SOCKET"):
+        return None
+    sd_notify("READY=1\nSTATUS=GREGAI działa")
+    stopped = threading.Event()
+
+    def _loop():
+        while not stopped.wait(WATCHDOG_INTERVAL_S):
+            age = time.monotonic() - getattr(server, "last_service", 0.0)
+            if age <= WATCHDOG_STALE_S:
+                sd_notify("WATCHDOG=1")
+
+    thread = threading.Thread(target=_loop, name="watchdog", daemon=True)
+    thread.start()
+    return thread
+
+
 def main():
     if LAN_MODE and not GREGAI_TOKEN:
         print("UWAGA: GREGAI_LAN=1, ale GREGAI_TOKEN nie jest ustawiony w .env: "
@@ -2611,6 +2772,10 @@ def main():
     router_mod.warm_up_async(_warm_prompt)
     router_mod.start_warm_watch(get_system_prompt)  # 1.26.0: rozgrzej bez internetu, zwolnij po powrocie
     tryby_mod.SYSTEM_PROMPT = get_system_prompt  # fullon rozgrzewa ten sam prompt (agent/tryby.py)
+    # 1.39.0: Type=notify + WatchdogSec=300 w gregai.service. READY idzie po
+    # zajęciu portu i starcie wątków w tle; WATCHDOG co 60 s tylko przy żywej
+    # pętli serve_forever (patrz BoundedServer.service_actions).
+    start_watchdog(server)
     try:
         server.serve_forever(poll_interval=5)  # nic nie woła shutdown(); 0,5 s budziło proces dwa razy na sekundę
     except KeyboardInterrupt:

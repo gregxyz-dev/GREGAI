@@ -2,6 +2,107 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.39.0
+
+Odpowiedź przestaje być jednym wielkim JSON-em na końcu: lokalny model pisze
+na żywo, a przeglądarka dopisuje tokeny do dymka. Do tego CI na GitHubie,
+Quick Start w README, dedykowany użytkownik systemowy, podpisany manifest
+wydania i watchdog systemd. Cztery zmiany niezależne, każda ma własny
+fallback, więc awaria jednej nie odbiera odpowiedzi.
+
+**Streaming lokalny (obowiązkowy).** `router._ollama_chat` dostał opcjonalny
+`on_token`; gdy jest podany, to samo zapytanie idzie z `stream: true`, a
+przyrosty NDJSON Ollamy (`{"message":{"content":...}}`, koniec `done: true`)
+są składane w całość i przekazywane po kawałku. Zwracany jest nadal pełny
+string, więc walidacja odpowiedzi (pusty/echo/angielski/urwane), ponowienia
+i wszystkie pozostałe wywołania bez `on_token` działają jak dotąd. Urwany
+albo nieparsowalny strumień (`_StreamBroken`) zdejmuje podgląd i robi to
+samo zapytanie w całości - streaming jest dodatkiem, nie warunkiem
+odpowiedzi. Nowy `netguard.iter_lines` czyta linie z tym samym limitem
+rozmiaru i deadline co `read_capped`, więc serwer sączący bajty nie trzyma
+rozmowy. Kolejka (1 liczy + 2 czekają) bez zmian.
+
+**Streaming chmury (best-effort).** Groq przez httpx/HTTP/2 dostaje
+`stream: true` i parser SSE (`data: {...delta.content}`, `[DONE]`) tylko
+wtedy, gdy wołający prosi o podgląd. Faza Namysłu "Szkic" pokazuje tokeny
+zarówno z lokalnego, jak i z Groqa; chmurna rozmowa również. Gdy SSE Groqa
+się nie parsuje (brak `[DONE]`, nie JSON, HTTP błąd), `_groq_http2_chat`
+woła `on_token(None)` i wraca do zwykłego zapytania w całości - to nie
+regresja, tylko brak podglądu. Inni dostawcy oddają całość na końcu.
+
+**SSE do przeglądarki.** Nowy `GET /api/chat/stream?job=...`
+(`text/event-stream`) wysyła `token` (`{"t": ...}` albo `{"reset": true}`)
+i na końcu `done`; co 15 s leci `: ping`, a po 30 minutach strumień się
+zamyka. Autoryzacja jest ta sama co reszta API (`_auth_gate`,
+`_browser_origin_ok`), dlatego frontend czyta strumień przez
+`fetch`+`ReadableStream`, a nie `EventSource` (który nie umie wysłać
+nagłówka `X-Gregai-Token`). Tokeny są tylko podglądem: kanoniczna
+odpowiedź zawsze przychodzi przez `/api/chat/wait`, więc zerwane SSE
+niczego nie gubi. `ui/app.js` dopisuje je do dymka-czekania (bez
+`innerHTML`, przez `textContent`), a pełny tekst zastępuje podgląd po
+odpowiedzi; `reset` czyści podgląd przy zmianie drogi modelu.
+
+**CI/CD.** `.github/workflows/ci.yml`: push do `main` i pull request na
+`ubuntu-24.04`, Python 3.12, Node 20, `bash weryfikuj.sh` i nowe
+`bash check.sh --no-sudo`. Ten tryb uruchamia wyłącznie kontrole offline
+(45-106), bez sudo, systemd, WARP, sieci i usługi na porcie 7777; kontrola
+89 (drop-in Ollamy) jest jawnie pominięta. Badge CI pod tytułem README.
+Przy okazji naprawione stare kontrole, które na czystym checkoutcie były
+niespójne: 46 (dopuszczanie linii "Przeładowano" przed `OK`), 61 (Namysł
+"zawsze" i prawdziwi dostawcy z kluczy w środowisku - test wymusza atrapy),
+77 (sprawdzał nieistniejący układ kolumnowy zamiast zakładek) oraz nazwa
+zmiennej `NAMYSŁ_ONCE_CHECK` z polskim znakiem, której bash nie przyjmuje.
+
+**Quick Start.** README ma na górze sekcję "Quick Start (10 minut)":
+`git clone` -> `cd` -> `bash install.sh`, uczciwe wymagania (Ubuntu, sudo,
+internet na czas instalacji, WARP) i zdanie "Bez kluczy: działa lokalnie
+(qwen2.5:3b)". Instalator na końcu odpala pełny `check.sh` - to też jest
+napisane.
+
+**Dedykowany użytkownik `gregai`.** `install.sh` tworzy systemowe konto
+`gregai` (bez logowania, bez powłoki) i uruchamia usługę jako `gregai`; kod i
+dane zostają właściciela, grupa `gregai` ma prawo zapisu (`g+rwX`, `UMask=0002`),
+`.env` to `640 RUN_USER:gregai`. Sudo dla SYSOP i panicmode dostają oba
+konta (`gregai` dla usługi, człowiek dla ręcznych prób). `aktualizuj.sh`
+migruje istniejące instalacje: tworzy konto, przepisuje własność i
+jednostkę, a przy błędzie zostawia stary stan zamiast migrować połowicznie.
+Po 1.39.0 ręczny start to `sudo -u gregai .venv/bin/python agent/main.py`.
+
+**GPG.** `wydaj.sh` przy pierwszym wydaniu tworzy klucz ed25519 wydawcy
+(albo bierze `GREGAI_GPG_KEY`/pierwszy klucz sekretny), eksportuje
+`GREGAI.klucz.asc`, podpisuje `GREGAI.sha256` jako `GREGAI.sha256.asc` i
+wkłada oba pliki do paczki; świeże rozpakowanie jest weryfikowane w osobnym
+tymczasowym keyringu. `install.sh` zapisuje klucz publiczny w
+`/usr/share/keyrings/gregai.gpg`, a `aktualizuj.sh` domyślnie **odmawia**
+instalacji bez weryfikowalnego podpisu (fail-closed); pierwsza aktualizacja
+instalacji sprzed 1.39.0 robi jednorazowy bootstrap TOFU kluczem z paczki,
+kolejne już muszą pasować do przypiętego klucza. Świadome obejście:
+`--bez-podpisu`. Klucz prywatny zostaje u wydawcy; usługa ma `~/.gnupg`
+w `InaccessiblePaths` i nigdy go nie widzi.
+
+**Watchdog systemd.** `agent/main.py` ma minimalny `sd_notify` bez
+zależności (stdlib, `NOTIFY_SOCKET`, gniazda abstrakcyjne). Po zajęciu
+portu i starcie wątków idzie `READY=1`, a wątek strażnika co 60 s wysyła
+`WATCHDOG=1` tylko wtedy, gdy `BoundedServer.service_actions` (wołane przez
+`serve_forever` co 5 s) potwierdza życie pętli. Jednostka:
+`Type=notify`, `WatchdogSec=300`, `NotifyAccess=main`; zamrożony proces
+przestaje wysyłać i systemd restartuje usługę po 5 minutach. Brak
+`NOTIFY_SOCKET` (ręczny start) to no-op.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE (składnia + pełny szybki eval,
+w tym kontrole 1.38.x). `bash check.sh --no-sudo` na czystym checkoutcie
+bez `data/`: z 62 kontroli offline (45-106) 61 OK i 1 pominięta (kontrola
+drop-inu Ollamy) - żadnej sieci ani sudo. Nowe kontrole 102-106 sprawdzają
+na atrapach: parser NDJSON i fallback strumienia Ollamy, parser SSE Groqa,
+zdarzenia token/reset/done w handlerze SSE, sd_notify/READY/WATCHDOG oraz
+spójność plików user+GPG+watchdog. Ręcznie na żywej Ollamie
+(`qwen2.5:3b`, ten laptop): "Napisz krótki wiersz o kotach" - pierwszy
+token po **1,40 s** przy ciepłym modelu (33 s przy zimnym), całość 92,6 s;
+to jest miara, której nie da się zastąpić atrapą. Nie testowano na żywo
+Groqa (best-effort) ani pełnej migracji użytkownika na istniejącej
+instalacji - oba mają atrapy i ścieżki awaryjne, a prawdziwy test wykonuje
+`install.sh`/`aktualizuj.sh` na laptopie.
+
 ## Co nowego w 1.38.9
 
 Konfiguracja warstwy AI wychodzi z kodu do plików. Powłoka (API, UI,

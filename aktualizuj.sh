@@ -41,6 +41,17 @@ fi
 
 MODE=normal
 ZIP=""
+# 1.39.0: --bez-podpisu świadomie dopuszcza paczkę bez weryfikowalnego podpisu
+# GPG (np. odzyskiwanie starej kopii). Domyślnie brak podpisu = odmowa.
+ALLOW_UNSIGNED=0
+_ARGS=()
+for _a in "$@"; do
+  case "$_a" in
+    --bez-podpisu) ALLOW_UNSIGNED=1 ;;
+    *) _ARGS+=("$_a") ;;
+  esac
+done
+set -- "${_ARGS[@]}"
 case "${1:-}" in
   "") ;;
   --rollback|rollback|cofnij) MODE=rollback ;;
@@ -48,9 +59,10 @@ case "${1:-}" in
   # .env, ostrzeżenia, restart z automatycznym powrotem) robi już NOWY skrypt.
   --po-paczce) MODE=zip; POST_ZIP=1; SNAP="${GREGAI_AKT_SNAP:-}" ;;
   -h|--help)
-    echo "Użycie: bash aktualizuj.sh [PLIK.zip | --rollback]"
+    echo "Użycie: bash aktualizuj.sh [--bez-podpisu] [PLIK.zip | --rollback]"
     echo "  bez argumentu  po ręcznym wgraniu nowej wersji: przepięcie usług, .env, restart i sprawdzenie"
-    echo "  PLIK.zip       bezpieczna aktualizacja z paczki (kopia obecnego kodu, automatyczny powrót)"
+    echo "  PLIK.zip       bezpieczna aktualizacja z paczki (kopia obecnego kodu, podpis GPG, automatyczny powrót)"
+    echo "  --bez-podpisu  dopuść paczkę bez weryfikowalnego podpisu (świadome ryzyko)"
     echo "  --rollback     powrót do kodu sprzed ostatniej aktualizacji z paczki"
     exit 0 ;;
   *.zip|*.ZIP)
@@ -246,7 +258,8 @@ for line in (src / "GREGAI.sha256").read_text(encoding="utf-8").splitlines():
     if name:
         listed.add(name)
 extra = sorted(str(p.relative_to(src)) for p in src.rglob("*")
-               if p.is_file() and "__pycache__" not in p.parts and p.name != "GREGAI.sha256"
+               if p.is_file() and "__pycache__" not in p.parts
+               and p.name not in {"GREGAI.sha256", "GREGAI.sha256.asc"}
                and str(p.relative_to(src)) not in listed)
 if extra:
     print("   pliki spoza listy sum kontrolnych:", ", ".join(extra[:5]))
@@ -279,6 +292,58 @@ PY
   for sh in "$SRC"/install.sh "$SRC"/aktualizuj.sh "$SRC"/check.sh "$SRC"/gregai; do
     if [ -f "$sh" ] && ! bash -n "$sh" 2>/dev/null; then echo "Błąd składni w $(basename "$sh"). Nie aktualizuję."; exit 1; fi
   done
+  # 1.39.0: podpis manifestu. Zaufany klucz publiczny jest instalowany przez
+  # install.sh w /usr/share/keyrings/gregai.gpg. Gdy go jeszcze nie ma (pierwsza
+  # aktualizacja instalacji sprzed 1.39.0), dopuszczamy JEDNORAZOWY bootstrap
+  # kluczem z paczki (TOFU) i od razu go instalujemy; kolejne paczki muszą już
+  # pasować do przypiętego klucza. --bez-podpisu to świadome obejście.
+  GPG_KEYRING=/usr/share/keyrings/gregai.gpg
+  if [ "$ALLOW_UNSIGNED" = 1 ]; then
+    echo "UWAGA: --bez-podpisu - pomijam weryfikację podpisu GPG (świadome ryzyko)."
+  elif [ ! -f "$SRC/GREGAI.sha256.asc" ]; then
+    echo "Paczka nie ma podpisu GREGAI.sha256.asc - nie da się potwierdzić wydawcy. Nie aktualizuję."
+    echo "        Świadome obejście: bash aktualizuj.sh --bez-podpisu PLIK.zip"
+    exit 1
+  elif need_sudo test -f "$GPG_KEYRING"; then
+    if ! gpg --batch --no-default-keyring --keyring "$GPG_KEYRING" \
+         --verify "$SRC/GREGAI.sha256.asc" "$SRC/GREGAI.sha256" >/dev/null 2>&1; then
+      echo "Podpis paczki NIE pasuje do klucza wydawcy ($GPG_KEYRING). Nie aktualizuję."
+      echo "        Jeśli klucz wydawcy się zmienił, uruchom najpierw: bash install.sh"
+      exit 1
+    fi
+    echo "Podpis GPG manifestu: zweryfikowany kluczem wydawcy."
+  else
+    CUR_V="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0)"
+    if [ ! -f "$SRC/GREGAI.klucz.asc" ]; then
+      echo "Brak klucza publicznego wydawcy (ani w systemie, ani w paczce). Nie aktualizuję."
+      echo "        Świadome obejście: bash aktualizuj.sh --bez-podpisu PLIK.zip"
+      exit 1
+    fi
+    if [ "$(printf '%s\n%s\n' "$CUR_V" "1.39.0" | sort -V | head -1)" != "1.39.0" ]; then
+      echo "Brak przypiętego klucza wydawcy, a instalacja jest starsza niż 1.39.0 - jednorazowy bootstrap (TOFU)."
+      TMPG="$(mktemp -d)"
+      chmod 700 "$TMPG"
+      if ! GNUPGHOME="$TMPG" gpg --batch --quiet --import "$SRC/GREGAI.klucz.asc" 2>/dev/null \
+         || ! GNUPGHOME="$TMPG" gpg --batch --quiet --verify "$SRC/GREGAI.sha256.asc" "$SRC/GREGAI.sha256" >/dev/null 2>&1; then
+        rm -rf "$TMPG"
+        echo "Podpis paczki nie zgadza się z kluczem publicznym w paczce. Nie aktualizuję."
+        exit 1
+      fi
+      rm -rf "$TMPG"
+      need_sudo mkdir -p /usr/share/keyrings
+      if gpg --batch --dearmor < "$SRC/GREGAI.klucz.asc" | need_sudo sh -c 'cat > /usr/share/keyrings/gregai.gpg.tmp' \
+         && need_sudo chmod 644 /usr/share/keyrings/gregai.gpg.tmp \
+         && need_sudo mv -f /usr/share/keyrings/gregai.gpg.tmp "$GPG_KEYRING"; then
+        echo "Klucz wydawcy zapisany w $GPG_KEYRING (kolejne aktualizacje już bez bootstrapu)."
+      else
+        echo "UWAGA: nie udało się zapisać klucza wydawcy w $GPG_KEYRING (podpis tej paczki sprawdzony)."
+      fi
+    else
+      echo "Brak przypiętego klucza wydawcy ($GPG_KEYRING), a instalacja to 1.39.0+."
+      echo "        Uruchom: bash install.sh (zainstaluje klucz), albo świadomie: --bez-podpisu"
+      exit 1
+    fi
+  fi
   echo "Paczka sprawdzona (sumy kontrolne, składnia)."
   SNAP="$(snapshot_current)" || { echo "Nie udało się zrobić kopii obecnego kodu. Nie aktualizuję."; exit 1; }
   echo "Kopia obecnego kodu: $SNAP"
@@ -459,6 +524,78 @@ fix_unit() {  # $1 = nazwa pliku usługi, $2 = skrypt względem ROOT
 }
 fix_unit gregai.service agent/main.py
 fix_unit gregai-siec.service agent/siec.py
+
+# 1.39.0: migracja istniejącej instalacji na dedykowanego użytkownika gregai.
+# To samo, co robi install.sh przy świeżej instalacji: user systemowy, grupa,
+# własność danych (RUN_USER:gregai + g+rwX) i przepisanie jednostek na
+# Type=notify + WatchdogSec=300. Idempotentnie; przy błędzie NIE migrujemy
+# połowicznie - zostaje stary unit i usługa wstaje jak dotąd.
+SERVICE_USER=gregai
+migrate_service_user() {
+  local f=/etc/systemd/system/gregai.service sec=/etc/systemd/system/gregai-siec.service
+  local changed=0 d
+  if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+    need_sudo groupadd --system "$SERVICE_USER" 2>/dev/null || {
+      echo "UWAGA: nie udało się utworzyć grupy $SERVICE_USER - usługa zostaje na $RUN_USER."
+      return 1
+    }
+  fi
+  if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    if ! need_sudo useradd --system --gid "$SERVICE_USER" --home-dir /var/lib/gregai --create-home \
+         --shell /usr/sbin/nologin "$SERVICE_USER"; then
+      echo "UWAGA: nie udało się utworzyć użytkownika $SERVICE_USER - usługa zostaje na $RUN_USER."
+      return 1
+    fi
+    echo "Utworzono użytkownika systemowego $SERVICE_USER."
+  fi
+  if ! id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$SERVICE_USER"; then
+    need_sudo usermod -aG "$SERVICE_USER" "$RUN_USER" 2>/dev/null \
+      && echo "Konto $RUN_USER dopisane do grupy $SERVICE_USER (zadziała po ponownym zalogowaniu)."
+  fi
+  for d in "$ROOT/.venv" "$ROOT/data" "$ROOT/memory" "$ROOT/notatki"; do
+    [ -e "$d" ] || continue
+    need_sudo chown -R "$RUN_USER:$SERVICE_USER" "$d" 2>/dev/null || true
+    need_sudo chmod -R g+rwX "$d" 2>/dev/null || true
+  done
+  if [ -f "$ROOT/.env" ]; then
+    need_sudo chown "$RUN_USER:$SERVICE_USER" "$ROOT/.env" 2>/dev/null || true
+    need_sudo chmod 640 "$ROOT/.env" 2>/dev/null || true
+  fi
+  if [ -f "$f" ]; then
+    if ! need_sudo grep -q "^User=$SERVICE_USER$" "$f" 2>/dev/null; then
+      need_sudo sed -i -E "s|^User=.*|User=$SERVICE_USER|" "$f" && changed=1
+    fi
+    if ! need_sudo grep -q '^Group=' "$f" 2>/dev/null; then
+      need_sudo sed -i -E "s|^User=$SERVICE_USER$|User=$SERVICE_USER\\nGroup=$SERVICE_USER|" "$f" && changed=1
+    fi
+    if ! need_sudo grep -q '^Type=notify' "$f" 2>/dev/null; then
+      need_sudo sed -i -E 's|^Type=simple$|Type=notify|' "$f" && changed=1
+    fi
+    if ! need_sudo grep -q '^WatchdogSec=' "$f" 2>/dev/null; then
+      need_sudo sed -i -E "s|^(ExecStart=)|WatchdogSec=300\\nNotifyAccess=main\\nUMask=0002\\n\\1|" "$f" && changed=1
+    fi
+    # Znacznik szablonu: bez tego aktualizuj.sh dalej ostrzegałby, że unit jest
+    # z poprzedniej wersji instalatora, choć właśnie go przepisaliśmy.
+    TPL_NOW="$(grep -m1 -E '^GREGAI_SZABLON=[0-9]+' "$ROOT/install.sh" 2>/dev/null | cut -d= -f2)"
+    if [ -n "$TPL_NOW" ]; then
+      need_sudo sed -i -E "s|gregai-szablon: [0-9]+|gregai-szablon: $TPL_NOW|" "$f" 2>/dev/null || true
+    fi
+    if [ "$changed" = 1 ]; then
+      echo "Jednostka gregai.service przepisana na użytkownika $SERVICE_USER, Type=notify, WatchdogSec=300."
+      CHANGED=1
+    fi
+  fi
+  if [ -f "$sec" ]; then
+    if ! need_sudo grep -q "^User=$SERVICE_USER$" "$sec" 2>/dev/null; then
+      need_sudo sed -i -E "s|^User=.*|User=$SERVICE_USER|" "$sec" && CHANGED=1
+    fi
+    if ! need_sudo grep -q '^Group=' "$sec" 2>/dev/null; then
+      need_sudo sed -i -E "s|^User=$SERVICE_USER$|User=$SERVICE_USER\\nGroup=$SERVICE_USER|" "$sec" && CHANGED=1
+    fi
+  fi
+}
+migrate_service_user || true
+
 if [ "$CHANGED" = 1 ]; then
   if need_sudo systemctl daemon-reload; then echo "Usługi przepięte na nową ścieżkę."; else echo "UWAGA: systemctl daemon-reload nie powiódł się."; FAIL=1; fi
 fi

@@ -1107,6 +1107,14 @@ select.modal-input {
   color: var(--text-dim);
 }
 
+/* Podgląd tokenów na żywo (1.39.0): dymek-czekanie zamienia kropki na tekst
+   strumienia; pełna odpowiedź i tak zastępuje go po odebraniu wyniku. */
+.chat-bubble.streaming .stream-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
 /* Zwarty, klikalny pasek statusu czekania (ui/app.js: sendChatMessage) -
    kropka + krótka etykieta + żywo tykający czas + strzałka, rozwijany do
    pełniejszego wyjaśnienia. Wzorowany na zrzucie ekranu paska postępu

@@ -15,13 +15,28 @@ export LC_ALL=C.UTF-8   # komunikaty narzędzi po angielsku (stałe do porówna�
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ENV_FILE="$ROOT/.env"
 PORT=7777
+DROPIN=/etc/systemd/system/ollama.service.d/gregai.conf
 PASS=0
 FAIL=0
+SKIPPED=0
 FAILED=()
 
 ok()   { PASS=$((PASS + 1)); printf '  \033[32mOK  \033[0m %2d. %s\n' "$1" "$2"; }
 bad()  { FAIL=$((FAIL + 1)); FAILED+=("$1"); printf '  \033[31mBŁĄD\033[0m %2d. %s\n        -> %s\n' "$1" "$2" "$3"; }
+skip() { SKIPPED=$((SKIPPED + 1)); printf '  \033[36m--  \033[0m %2d. %s (pominięte w trybie CI)\n' "$1" "$2"; }
 RUN_USER="${SUDO_USER:-$(id -un)}"
+SERVICE_USER=gregai
+# 1.39.0: --no-sudo = tryb CI. Uruchamia tylko kontrole offline (45+), bez
+# sudo, systemd, WARP, sieci i usługi na porcie 7777 - na świeżym checkout
+# z GitHuba nie ma czego sprawdzać w warstwie systemowej.
+CI_NO_SUDO=0
+case "${1:-}" in
+  --no-sudo) CI_NO_SUDO=1 ;;
+  "") ;;
+  -h|--help) echo "Użycie: bash check.sh [--no-sudo]"; echo "  --no-sudo  tylko kontrole offline (CI: bez sudo i usług)"; exit 0 ;;
+  *) echo "Nieznana opcja: $1 (bash check.sh --help)"; exit 2 ;;
+esac
+TOTAL=106
 # Czy WSZYSTKIE adresy z listy to ta maszyna (127.0.0.1 / ::1)? Pusta = nie.
 all_local() {
   [ -n "${1// /}" ] || return 1
@@ -33,11 +48,17 @@ envval() { grep -E "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$ENV_FIL
 
 # Kontrole nie zapisują do prawdziwego dziennika Koryta (1.20.0).
 export KORYTO_DZIENNIK_PLIK="$(mktemp -u /tmp/gregai-koryto-XXXXXX.json)"
-printf '\n\033[1;36m== GREGAI: 101 kontroli (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
-sudo -v || { echo "Bez sudo nie da się sprawdzić wszystkiego. Uruchom ponownie i podaj hasło."; exit 1; }
+if [ "$CI_NO_SUDO" = 1 ]; then
+  printf '\n\033[1;36m== GREGAI: kontrole offline (tryb CI, bez sudo) (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
+  printf 'Pominięte: 1-44 (system, WARP, usługa, sieć) - sprawdzane tylko na prawdziwym laptopie.\n\n'
+else
+  printf '\n\033[1;36m== GREGAI: 106 kontroli (%s)\033[0m\n\n' "$(date '+%Y-%m-%d %H:%M')"
+  sudo -v || { echo "Bez sudo nie da się sprawdzić wszystkiego. Uruchom ponownie i podaj hasło."; exit 1; }
+fi
 
 # 1. System
 . /etc/os-release 2>/dev/null || true
+if [ "$CI_NO_SUDO" = 0 ]; then
 # install.sh obsługuje Ubuntu 22.04-26.04 (plan: 26.04 LTS), więc tyle samo akceptujemy tutaj.
 OS_MAJOR="${VERSION_ID:-}"; OS_MAJOR="${OS_MAJOR%%.*}"
 if [ "${ID:-}" = "ubuntu" ] && [[ "$OS_MAJOR" =~ ^[0-9]+$ ]] && [ "$OS_MAJOR" -ge 22 ]; then ok 1 "System: ${PRETTY_NAME:-Ubuntu}"
@@ -185,9 +206,12 @@ if [ "$NG" = "tak" ]; then ok 15 "Strażnik internetu: WARP połączony, GREGAI 
 else bad 15 "Strażnik internetu: ${NG#nie|}" "warp-cli connect; jeśli WARP działa, a to dalej błąd: sudo systemctl restart gregai"; fi
 
 # 16. .env: tylko dla właściciela
-PERM="$(stat -c '%a %U' "$ENV_FILE" 2>/dev/null)"
-if [ "${PERM%% *}" = "600" ] && [ "${PERM#* }" = "$RUN_USER" ]; then ok 16 ".env: prawa 600, właściciel $RUN_USER"
-else bad 16 ".env: ${PERM:-brak pliku}" "chmod 600 \"$ENV_FILE\""; fi
+PERM="$(stat -c '%a %U %G' "$ENV_FILE" 2>/dev/null)"
+if { [ "${PERM%% *}" = "600" ] || [ "${PERM%% *}" = "640" ]; } \
+   && [ "$(printf '%s' "$PERM" | cut -d' ' -f2)" = "$RUN_USER" ] \
+   && { [ "${PERM##* }" = "$RUN_USER" ] || [ "${PERM##* }" = "$SERVICE_USER" ]; }; then
+  ok 16 ".env: prawa ${PERM%% *}, właściciel $RUN_USER (grupa ${PERM##* })"
+else bad 16 ".env: ${PERM:-brak pliku}" "chmod 640 \"$ENV_FILE\" i chown $RUN_USER:$SERVICE_USER \"$ENV_FILE\""; fi
 
 # 17. Reguły sudo: poprawne, bez "dowolnej usługi"; GREGAI odmawia osłabienia zabezpieczeń
 SUDOERS=/etc/sudoers.d/gregai-sysop
@@ -222,18 +246,19 @@ print("tak" if not bad else "nie: " + ", ".join(bad))' 2>/dev/null)"
 # i zawierać WYŁĄCZNIE polecenia panicmode (ufw x3 + trzy formy poweroff od 1.30.31). Stare gregai-sysop z tymi
 # regułami w środku nadal przechodzi (sprzed 1.19.0, install.sh je przepisze).
 PANIC_SUDOERS=/etc/sudoers.d/gregai-panic
-PANIC_OK="$(sudo cat "$PANIC_SUDOERS" 2>/dev/null | RUN_USER="$RUN_USER" PORT="$PORT" python3 -c '
+PANIC_OK="$(sudo cat "$PANIC_SUDOERS" 2>/dev/null | RUN_USER="$RUN_USER" SERVICE_USER="$SERVICE_USER" PORT="$PORT" python3 -c '
 import os, re, sys
 port = os.environ["PORT"]
 want = {f"/usr/sbin/ufw delete allow from {net} to any port {port} proto tcp" for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")}
 want |= {"/usr/bin/systemctl poweroff", "/usr/bin/systemctl poweroff -i", "/usr/bin/systemctl poweroff --force"}
+dozwoleni = {os.environ["RUN_USER"], os.environ.get("SERVICE_USER", "gregai")}
 got, bad = set(), []
 for raw in sys.stdin.read().splitlines():
     line = raw.strip()
     if not line or line.startswith("#"):
         continue
     m = re.fullmatch(r"(\S+) ALL=\(root\) NOPASSWD: (.+)", line)
-    if not m or m.group(1) != os.environ["RUN_USER"]:
+    if not m or not set(m.group(1).split(",")) <= dozwoleni or not (set(m.group(1).split(",")) & {os.environ["RUN_USER"]}):
         bad.append("obca linia: " + line[:50]); continue
     for c in m.group(2).split(", "):
         (got.add(c) if c in want else bad.append(c[:50]))
@@ -243,10 +268,11 @@ if ! sudo test -f "$PANIC_SUDOERS"; then PANIC_STATE="brak $PANIC_SUDOERS (grega
 elif ! sudo visudo -cf "$PANIC_SUDOERS" >/dev/null 2>&1; then PANIC_STATE="$PANIC_SUDOERS niepoprawny"
 elif [ "$PANIC_OK" != "tak" ]; then PANIC_STATE="$PANIC_SUDOERS: ${PANIC_OK#nie: }"
 else PANIC_STATE=""; fi
-SUDOERS_OK="$(sudo cat "$SUDOERS" 2>/dev/null | RUN_USER="$RUN_USER" SYSOP_MODE_ENV="$(envval SYSOP_MODE | tr '[:upper:]' '[:lower:]')" PORT="$PORT" python3 -c '
+SUDOERS_OK="$(sudo cat "$SUDOERS" 2>/dev/null | RUN_USER="$RUN_USER" SERVICE_USER="$SERVICE_USER" SYSOP_MODE_ENV="$(envval SYSOP_MODE | tr '[:upper:]' '[:lower:]')" PORT="$PORT" python3 -c '
 import os, re, sys
 unit = re.compile(r"/usr/bin/systemctl (--no-block )?(start|stop|restart|reload|enable|disable) (gregai|ollama)(\.service)?")
 port = os.environ["PORT"]
+dozwoleni = {os.environ["RUN_USER"], os.environ.get("SERVICE_USER", "gregai")}
 fixed = {"/usr/bin/apt-get update -q",
          "/usr/bin/apt-get upgrade -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold",
          "/usr/bin/systemctl poweroff", "/usr/bin/systemctl poweroff -i", "/usr/bin/systemctl poweroff --force"}
@@ -260,11 +286,14 @@ for raw in sys.stdin.read().splitlines():
     line = line.replace("\\:", ":")  # w pliku sudoers dwukropek jest zapisany jako \:
     if full:
         rules += 1
-        if line != os.environ["RUN_USER"] + " ALL=(ALL) NOPASSWD: ALL":
+        m_full = re.fullmatch(r"(\S+) ALL=\(ALL\) NOPASSWD: ALL", line)
+        if not m_full or not set(m_full.group(1).split(",")) <= dozwoleni \
+           or not (set(m_full.group(1).split(",")) & {os.environ["RUN_USER"]}):
             bad.append("obca linia: " + line[:50])
         continue
     m = re.fullmatch(r"(\S+) ALL=\(root\) NOPASSWD: (.+)", line)
-    if not m or m.group(1) != os.environ["RUN_USER"]:
+    if not m or not set(m.group(1).split(",")) <= dozwoleni \
+       or not (set(m.group(1).split(",")) & {os.environ["RUN_USER"]}):
         bad.append("obca linia: " + line[:50])
         continue
     rules += 1
@@ -1430,6 +1459,8 @@ else
   bad 44 "Rozdzielnica: ${ROZDZ_CHECK:-błąd importu}" "sprawdź agent/juggler.py (rozdzielnica, rozdzielnica_policy) i agent/router.py (wpięcie w Namysł i pętlę rozmowy)"
 fi
 
+fi  # koniec kontroli 1-44 (tylko pełny tryb na laptopie)
+
 # 45. Poprawki z rozmowy Grzegorza (1.30.31), offline na atrapach (bez sieci, bez
 #     zapisu do danych): gregaipanicmode próbuje mocniejszego poweroff, gdy zwykłe
 #     odmówi (blokada wyłączenia); straż nie oddaje uciętego zdania; reakcja
@@ -1558,7 +1589,7 @@ rep = ev.run(live=False, save=False)
 ok = ok and rep["podsumowanie"]["zaliczone"] == rep["podsumowanie"]["przypadki"] >= 40
 print("OK" if ok else "FAIL " + ",".join(k for k, v in rep["wyniki"].items() if not v["ok"]))
 ' 2>/dev/null)"
-if [ "$NET46_CHECK" = "OK" ]; then
+if [ "$(printf '%s\n' "$NET46_CHECK" | tail -1)" = "OK" ]; then
   ok 46 "Internet: bramka WARP (tunel + strona kontrolna, proxy i warp=off blokują od razu), diagnoza bez WARP nic nie wysyła, zapasowe wyszukiwarki; /recenzja i /sprawdz bez wycieku; gregai eval (szybki) 100%"
 else
   bad 46 "Internet / ewaluacja: ${NET46_CHECK:-błąd importu}" "sprawdź agent/netguard.py, agent/diagnoza.py, agent/tools.py (research_web) i: gregai eval"
@@ -3045,14 +3076,29 @@ class V:
     def search(self, q, limit=5): return []
 stages = []
 tt.record = lambda stage, *a, **k: stages.append((stage, k.get("extra") or {}))
+# 1.39.0: od 1.32.7 "dokładne myślenie" jest jedynym trybem, więc ten test
+# (o awaryjnym lokalnym w rozmowie, nie o Namyśle) musi wyłączyć Namysł jawnie.
+_wants_orig = nm.wants
+rr.namysl_mod.wants = lambda *a, **k: (False, "test: Namysł wyłączony")
+# Test ma być offline i deterministyczny: w środowisku mogą być klucze darmowej
+# puli (wtedy prawdziwy dostawca odpowiedziałby z sieci i test niczego by nie
+# sprawdził). Zostaje wyłącznie anthropic, który i tak jest atrapą _403.
+for _name, _envkey in jj._KEY_ENV.items():
+    if _name != "anthropic":
+        os.environ.pop(_envkey, None)
+os.environ["ANTHROPIC_API_KEY"] = "k"
+jj.providers_pool = lambda etap=None: ["anthropic"]
 b = rr.route(V(), "SYS", [], "opowiedz dowcip")
 chk("lokalnie_ostatnia_szansa", b.get("speech") == "lokalnie" and stages[-1][0] == "lokalnie_awaryjnie")
-# ... a JEDNA zwykła, przejściowa porażka (bez kodu) zostaje krótką uczciwą odmową, nie lokalnym.
+# 1.38.2 (#24) zmieniło tę drugą oczekiwaną odpowiedź: po porażce wszystkich
+# etapów sieciowych (także zwykłej, przejściowej) rozmowa próbuje lokalnego
+# awaryjnie. Test pilnuje więc, że ta ścieżka nadal działa.
 jj.reset_breakers()
 jj._PROVIDER_FN["anthropic"] = lambda s, m, to: (_ for _ in ()).throw(RuntimeError("down"))
 stages.clear()
 b2 = rr.route(V(), "SYS", [], "opowiedz dowcip")
-chk("przejsciowa_zostaje_odmowa", stages[-1][0] != "lokalnie_awaryjnie")
+chk("przejsciowa_tez_lokalnie", stages[-1][0] == "lokalnie_awaryjnie")
+nm.wants = _wants_orig  # dalsze podtesty sprawdzają prawdziwe wants()
 
 # 3. Załącznik, który nie trafił w ścisłe dopasowanie ścieżki, wciąż dociera do Namysłu
 #    (jako sama nazwa - namysl._resolve_file spróbuje jej lenientszym wyszukiwaniem),
@@ -3939,7 +3985,7 @@ html = ui.joinpath("index.html").read_text(encoding="utf-8") + ui.joinpath("debu
 css = ui.joinpath("styles.css").read_text(encoding="utf-8") + ui.joinpath("debug.css").read_text(encoding="utf-8")
 js = ui.joinpath("app.js").read_text(encoding="utf-8") + ui.joinpath("debug.js").read_text(encoding="utf-8")
 problems = []
-for token in ("dbg-columns", "korytoPipe", "modelTable", "strazTimeline", "budgetBars"):
+for token in ("dbg-tabs", "korytoPipe", "modelTable", "strazTimeline", "budgetBars"):
     if token not in html: problems.append("brak " + token)
 for token in ("dbg-pipe-flow", "dbg-budget-fill", "straz-toast", "prefers-reduced-motion"):
     if token not in css: problems.append("brak " + token)
@@ -3950,7 +3996,7 @@ print("OK" if not problems else "FAIL " + "; ".join(problems))
 PY
 )"
 if [ "$UI_1331_CHECK" = "OK" ]; then
-  ok 77 "Front 1.33.1: Nadzorca 2 kolumny (koryto, modele, straż, budżet) i toasty Straży z pełnym tekstem w szufladzie"
+  ok 77 "Front 1.33.1: Nadzorca z zakładkami (koryto, modele, straż, budżet) i toasty Straży z pełnym tekstem w szufladzie"
 else
   bad 77 "Front 1.33.1: ${UI_1331_CHECK:-błąd importu}" "sprawdź ui/index.html, ui/debug.html, ui/debug.css, ui/debug.js, ui/app.js i ui/styles.css"
 fi
@@ -4078,7 +4124,9 @@ ok, why = ewaluacja._check_local_warmup()
 print("OK" if ok else "FAIL " + why)
 PY
 )"
-if [ "$LOKALNY_WARMUP_CHECK" = "OK" ] && grep -q 'OLLAMA_KEEP_ALIVE=30m' "$DROPIN" 2>/dev/null; then
+if [ "$CI_NO_SUDO" = 1 ]; then
+  skip 89 "Lokalny 3B warmup (drop-in Ollamy jest tylko na prawdziwym laptopie)"
+elif [ "$LOKALNY_WARMUP_CHECK" = "OK" ] && grep -q 'OLLAMA_KEEP_ALIVE=30m' "$DROPIN" 2>/dev/null; then
   ok 89 "Lokalny 3B warmup: keep_alive 30m w drop-inie, nota 'wolny start' po 120 s"
 elif [ "$LOKALNY_WARMUP_CHECK" != "OK" ]; then
   bad 89 "Lokalny 3B warmup: ${LOKALNY_WARMUP_CHECK:-błąd importu}" "sprawdź install.sh, .env.example i warm_status w agent/router.py"
@@ -4209,22 +4257,189 @@ if [ "$DEDUP_CHECK" = "OK" ]; then
 else
   bad 100 "Deduplikacja ctx.files: ${DEDUP_CHECK:-błąd importu}" "sprawdź _dedup_upload_paths i jego wywołanie w agent/main.py"
 fi
-NAMYSŁ_ONCE_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+NAMYS_ONCE_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
 import ewaluacja
 ok, why = ewaluacja._check_namysl_once_1387()
 print("OK" if ok else "FAIL " + why)
 PY
 )"
-if [ "$NAMYSŁ_ONCE_CHECK" = "OK" ]; then
+if [ "$NAMYS_ONCE_CHECK" = "OK" ]; then
   ok 101 "Namysł uruchamia się raz na wiadomość; jeden odczyt pliku w Zbieraniu (_read_file_once)"
 else
-  bad 101 "Jeden Namysł na wiadomość: ${NAMYSŁ_ONCE_CHECK:-błąd importu}" "sprawdź namysl_tried w _try_namysl i _read_file_once w agent/namysl.py"
+  bad 101 "Jeden Namysł na wiadomość: ${NAMYS_ONCE_CHECK:-błąd importu}" "sprawdź namysl_tried w _try_namysl i _read_file_once w agent/namysl.py"
+fi
+
+# 102. Streaming 1.39.0: NDJSON Ollamy składa odpowiedź i woła on_token per
+# przyrost; urwany strumień wraca do jednego zapytania w całości. Atrapa
+# local_urlopen (bez gniazd i sieci), log Ollamy do katalogu tymczasowego.
+STREAM_LOCAL_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import json, tempfile
+from pathlib import Path
+import router
+router.OLLAMA_LOG_PATH = Path(tempfile.mkdtemp(prefix="gregai-102-")) / "ollama.jsonl"
+router.OLLAMA_MODEL = "test:3b"
+calls = []
+tokens = []
+class Resp:
+    def __init__(self, lines): self.lines = list(lines)
+    def readline(self, n=-1):
+        return self.lines.pop(0) if self.lines else b""
+    def read(self, n=-1):
+        data = b"".join(self.lines); self.lines = []; return data
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+GOOD = [b'{"message":{"content":"Kot "},"done":false}\n',
+        b'{"message":{"content":"mruczy."},"done":false}\n',
+        b'{"done":true,"eval_count":3}\n']
+BAD = [b'to nie jest JSON\n']
+def fake_open(req, timeout):
+    payload = json.loads(req.data)
+    calls.append(payload)
+    if payload.get("stream"):
+        return Resp(GOOD if len(calls) == 1 else BAD)
+    return Resp([json.dumps({"message": {"content": "Całość."}, "done": True}).encode()])
+router.netguard_mod.local_urlopen = fake_open
+fa = router._ollama_chat("SYS", [], "x", timeout=5, model="test:3b", _allow_retry=False,
+                         on_token=lambda d: tokens.append(d))
+fb = router._ollama_chat("SYS", [], "x", timeout=5, model="test:3b", _allow_retry=False,
+                         on_token=lambda d: tokens.append(d))
+ok = fa == "Kot mruczy." and "Kot " in tokens and "mruczy." in tokens
+ok = ok and fb == "Całość." and tokens.count(None) == 1 and calls[-1].get("stream") is False
+print("OK" if ok else "FAIL " + repr((fa, fb, tokens, [c.get("stream") for c in calls])))
+PY
+)"
+if [ "$STREAM_LOCAL_CHECK" = "OK" ]; then
+  ok 102 "Streaming 1.39.0: NDJSON Ollamy składa całość i woła on_token; urwany strumień = jedno zapytanie bez streamingu"
+else
+  bad 102 "Streaming lokalny: ${STREAM_LOCAL_CHECK:-błąd importu}" "sprawdź _parse_ollama_stream, _ollama_stream_request i fallback w _ollama_chat (agent/router.py)"
+fi
+
+# 103. Streaming Groqa (best-effort): poprawny SSE + [DONE] składa tekst;
+# brak [DONE] rzuca błąd, więc faza wraca do odpowiedzi w całości. Bez sieci.
+STREAM_GROQ_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import juggler
+got = []
+text, trunc = juggler._parse_groq_sse([
+    'data: {"choices":[{"delta":{"content":"Ala "}}]}',
+    'data: {"choices":[{"delta":{"content":"ma kota."},"finish_reason":null}]}',
+    'data: [DONE]',
+], got.append)
+ok = text == "Ala ma kota." and not trunc and "".join(got) == text
+try:
+    juggler._parse_groq_sse(['data: {"choices":[{"delta":{"content":"x"}}]}'], lambda d: None)
+    ok = False
+except ValueError:
+    pass
+print("OK" if ok else "FAIL " + repr((text, got)))
+PY
+)"
+if [ "$STREAM_GROQ_CHECK" = "OK" ]; then
+  ok 103 "Streaming Groq (best-effort): SSE + [DONE] składa tekst; brak [DONE] = powrót do całości"
+else
+  bad 103 "Streaming Groq: ${STREAM_GROQ_CHECK:-błąd importu}" "sprawdź _parse_groq_sse i _groq_http2_chat (agent/juggler.py)"
+fi
+
+# 104. Endpoint SSE: tokeny i reset wychodzą w formacie text/event-stream,
+# na końcu zdarzenie done. Handler na atrapie (bez gniazda i przeglądarki).
+SSE_ENDPOINT_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import io, threading
+import main
+main._CHAT_JOBS.clear()
+job = {"done": threading.Event(), "cancel": threading.Event(), "result": {"speech": "x"},
+       "created": 0, "last_poll": 0, "progress": [], "tokens": ["Kot ", None, "śpi."], "chat": "ogolna"}
+main._CHAT_JOBS["j"] = job
+job["done"].set()
+h = object.__new__(main.Handler)
+h.wfile = io.BytesIO()
+h.send_response = lambda *a: None
+h.send_header = lambda *a: None
+h.end_headers = lambda: None
+h._handle_chat_stream("j")
+out = h.wfile.getvalue().decode("utf-8")
+ok = ('event: token' in out and '"t": "Kot "' in out and '"reset": true' in out
+      and out.rstrip().endswith('"ok": true}') and out.count("event: done") == 1)
+ok = ok and "text/event-stream" in open("main.py", encoding="utf-8").read()
+print("OK" if ok else "FAIL " + out[-200:])
+PY
+)"
+if [ "$SSE_ENDPOINT_CHECK" = "OK" ]; then
+  ok 104 "SSE /api/chat/stream: tokeny, reset i done w text/event-stream; zadanie żyje po zerwaniu"
+else
+  bad 104 "Endpoint SSE: ${SSE_ENDPOINT_CHECK:-błąd importu}" "sprawdź _handle_chat_stream i trasę /api/chat/stream (agent/main.py)"
+fi
+
+# 105. Watchdog systemd: READY=1 po starcie, WATCHDOG=1 cyklicznie tylko przy
+# żywej pętli (świeży last_service); brak NOTIFY_SOCKET = no-op. Atrapa gniazda.
+WATCHDOG_CHECK="$(cd "$ROOT/agent" && python3 - <<'PY' 2>/dev/null
+import os, socket, tempfile, time
+import main
+path = tempfile.mktemp(prefix="gregai-notify-")
+srv = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+srv.bind(path); srv.settimeout(2)
+os.environ["NOTIFY_SOCKET"] = path
+main.WATCHDOG_INTERVAL_S = 0.15
+main.WATCHDOG_STALE_S = 0.5
+class S:
+    last_service = time.monotonic()
+main.start_watchdog(S())
+ready = srv.recv(200)
+beat = srv.recv(200)
+S.last_service = time.monotonic() - 10
+time.sleep(0.35)
+srv.settimeout(0.2)
+stale = False
+try:
+    srv.recv(200); stale = True
+except socket.timeout:
+    pass
+del os.environ["NOTIFY_SOCKET"]
+noop = main.sd_notify("WATCHDOG=1") is False
+srv.close(); os.unlink(path)
+ok = ready.startswith(b"READY=1") and beat == b"WATCHDOG=1" and not stale and noop
+print("OK" if ok else "FAIL " + repr((ready, beat, stale, noop)))
+PY
+)"
+if [ "$WATCHDOG_CHECK" = "OK" ]; then
+  ok 105 "Watchdog 1.39.0: READY=1, WATCHDOG=1 co 60 s tylko przy żywej pętli, brak NOTIFY_SOCKET = no-op"
+else
+  bad 105 "Watchdog systemd: ${WATCHDOG_CHECK:-błąd importu}" "sprawdź sd_notify, start_watchdog i service_actions (agent/main.py)"
+fi
+
+# 106. Dedykowany użytkownik + podpis paczki: statycznie, bo to pliki
+# instalatora/wydania, a nie działający system. Wymaga wszystkich elementów
+# 1.39.0 naraz, żeby żaden nie zniknął po cichu w kolejnej wersji.
+USER_GPG_CHECK="$(cd "$ROOT" && python3 - <<'PY' 2>/dev/null
+from pathlib import Path
+inst = Path("install.sh").read_text(encoding="utf-8")
+akt = Path("aktualizuj.sh").read_text(encoding="utf-8")
+wyd = Path("wydaj.sh").read_text(encoding="utf-8")
+need_inst = ["useradd --system", "SERVICE_USER=gregai", "User=$SERVICE_USER",
+             "Type=notify", "WatchdogSec=300", "/usr/share/keyrings/gregai.gpg"]
+need_akt = ["SERVICE_USER=gregai", "migrate_service_user", "--bez-podpisu",
+            "--verify", "/usr/share/keyrings/gregai.gpg"]
+need_wyd = ["--detach-sign", "GREGAI.sha256.asc", "GREGAI.klucz.asc", "--verify"]
+missing = [t for t in need_inst if t not in inst]
+missing += [t for t in need_akt if t not in akt]
+missing += [t for t in need_wyd if t not in wyd]
+print("OK" if not missing else "FAIL brak: " + ", ".join(missing))
+PY
+)"
+if [ "$USER_GPG_CHECK" = "OK" ]; then
+  ok 106 "User gregai + GPG + watchdog: instalator, migracja aktualizacji i podpisany manifest spójne"
+else
+  bad 106 "User/GPG/watchdog: ${USER_GPG_CHECK:-błąd importu}" "sprawdź install.sh, aktualizuj.sh i wydaj.sh (sekcja 1.39.0)"
 fi
 
 echo
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[1;32m== %d/101 OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$PORT"
+  if [ "$CI_NO_SUDO" = 1 ]; then
+    printf '\033[1;32m== %d/%d OK, pominięte: %d - kontrole offline OK\033[0m\n\n' "$PASS" "$TOTAL" "$SKIPPED"
+  elif [ "$SKIPPED" -gt 0 ]; then
+    printf '\033[1;32m== %d/%d OK, pominięte: %d - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$TOTAL" "$SKIPPED" "$PORT"
+  else
+    printf '\033[1;32m== %d/%d OK - GREGAI gotowy: http://localhost:%s\033[0m\n\n' "$PASS" "$TOTAL" "$PORT"
+  fi
   exit 0
 fi
-printf '\033[1;31m== %d/101 OK, do poprawy: %s\033[0m\n\n' "$PASS" "${FAILED[*]}"
+printf '\033[1;31m== %d/%d OK, do poprawy: %s\033[0m\n\n' "$PASS" "$TOTAL" "${FAILED[*]}"
 exit 1

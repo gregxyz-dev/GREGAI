@@ -594,6 +594,27 @@ def read_json(resp, limit: int = MAX_REPLY_BYTES, deadline: float = 60.0):
     return json.loads(raw.decode("utf-8"))
 
 
+def iter_lines(resp, limit: int = MAX_REPLY_BYTES, deadline: float = 60.0):
+    """Kolejne linie odpowiedzi bez czekania na całość (1.39.0).
+
+    Streaming tokenów wymaga treści, ZANIM model skończy, więc nie da się
+    użyć read_capped (czeka do końca). Ten sam limit rozmiaru i łączny
+    deadline co tam: serwer sączący bajty albo sypiący gigabajtami kończy
+    się wyjątkiem tak samo jak przy zwykłym odczycie."""
+    got = 0
+    stop = time.monotonic() + deadline
+    while True:
+        if time.monotonic() > stop:
+            raise TimeoutError(f"odpowiedź nie dotarła w całości w {deadline:.0f} s")
+        line = resp.readline(min(65536, max(1, limit + 1 - got)))
+        if not line:
+            return
+        got += len(line)
+        if got > limit:
+            raise ValueError(f"odpowiedź większa niż {limit // 1024} KB, odrzucona")
+        yield line
+
+
 def urlopen(req, timeout: float, fresh: bool = False, reuse_s: float = 0.0):
     """Jedyna droga GREGAI do internetu. `req`: urllib.request.Request albo
     adres. Rzuca NetGuardBlocked, gdy WARP nie jest połączony albo adres

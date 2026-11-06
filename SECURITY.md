@@ -45,8 +45,15 @@ W zakresie są pliki utrzymywane w tym repozytorium:
   odpowiedzi, obsługa notatek i plików.
 - **`ui/` (vanilla JS)** - XSS, CSP, obsługa tokenu dostępu, autoryzacja
   żądań z przeglądarki.
-- **`install.sh`, `aktualizuj.sh`, `check.sh`** - łańcuch dostaw: pobieranie,
-  weryfikacja sum, instalacja zależności, aktualizacja i audyt.
+- **`install.sh`, `aktualizuj.sh`, `check.sh`, `wydaj.sh`** - łańcuch dostaw:
+  pobieranie, weryfikacja sum i podpisu GPG, instalacja zależności,
+  aktualizacja i audyt.
+
+Wydania są podpisywane: `wydaj.sh` tworzy `GREGAI.sha256.asc` (podpis
+manifestu) i `GREGAI.klucz.asc` (klucz publiczny). `install.sh` zapisuje klucz
+w `/usr/share/keyrings/gregai.gpg`, a `aktualizuj.sh` domyślnie odmawia
+instalacji paczki bez weryfikowalnego podpisu. Klucz prywatny nigdy nie
+wchodzi do repozytorium ani paczki; usługa nie ma dostępu do `~/.gnupg`.
 
 ## Poza zakresem
 

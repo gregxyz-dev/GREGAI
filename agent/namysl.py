@@ -881,6 +881,11 @@ class Context:
     # System lokalny jest stabilny (cache promptu), więc blok jedzie dopiero
     # do wariantu local/user - patrz _Models.ask.
     local_volatile: str = ""
+    # 1.39.0: podgląd tokenów na żywo (tylko faza Szkic). `on_token(None)`
+    # czyści podgląd; `local_stream` to lokalny krok z tym samym callbackiem
+    # (local_chat zostaje bez zmian dla pozostałych faz).
+    on_token: Callable[[str | None], None] | None = None
+    local_stream: Callable[..., str] | None = None
 
     def local_available(self) -> bool:
         """Czy model lokalny odpowiada TERAZ (snapshot albo świeże sprawdzenie).
@@ -957,16 +962,45 @@ class _Models:
         if not order:
             return "", ""
         errors = []
+        # 1.39.0: podgląd tokenów tylko dla Szkicu. Gdy droga się zmienia
+        # (chmura zawiodła -> lokalny, ponowienie), stary podgląd znika,
+        # żeby dymek nie sklejał dwóch różnych odpowiedzi.
+        stream_preview = bool(ctx.on_token is not None and faza == "szkic")
+        emitted = False
+
+        def _emit(delta):
+            nonlocal emitted
+            if not stream_preview:
+                return
+            if delta is None:
+                emitted = False
+            else:
+                emitted = True
+            ctx.on_token(delta)
+
         for i, route in enumerate(order):
+            if emitted and ctx.on_token is not None:
+                ctx.on_token(None)
+                emitted = False
             try:
                 if route == "cloud":
-                    text, provider = ctx.cloud_chat(system_cloud, ctx.history_cloud if history else [], user, exclude=exclude, prefer=prefer)
+                    cloud_kwargs = {"on_token": _emit} if stream_preview else {}
+                    text, provider = ctx.cloud_chat(system_cloud, ctx.history_cloud if history else [], user,
+                                                   exclude=exclude, prefer=prefer, **cloud_kwargs)
                     self.last_provider = provider
                     return (text or "").strip(), provider
-                text = ctx.local_chat(system_local, ctx.history_local if history else [],
-                                      _local_user(user_local if user_local is not None else user, ctx.local_volatile))
+                local_kwargs = {}
+                if stream_preview and ctx.local_stream is not None:
+                    local_kwargs["on_token"] = _emit
+                local_fn = ctx.local_stream if (stream_preview and ctx.local_stream is not None) else ctx.local_chat
+                text = local_fn(system_local, ctx.history_local if history else [],
+                                _local_user(user_local if user_local is not None else user, ctx.local_volatile),
+                                **local_kwargs)
                 return (text or "").strip(), "lokalnie"
             except Exception as e:
+                if emitted and ctx.on_token is not None:
+                    ctx.on_token(None)
+                    emitted = False
                 errors.append(f"{route}: {type(e).__name__}: {e}"[:200])
                 if isinstance(e, netguard_mod.NetGuardBlocked) and self.local_up_now():
                     self.warp_blocked = True
@@ -991,6 +1025,8 @@ class _Models:
                 continue
         # 1.32.31: lokalny model wchodzi zawsze, gdy jest na maszynie, więc ten
         # wariant "nie używam lokalnego z wyboru" już nie zachodzi.
+        if emitted and ctx.on_token is not None:
+            ctx.on_token(None)
         self.narr.info(faza, "Model nie odpowiedział", "; ".join(errors)[:300])
         return "", ""
 

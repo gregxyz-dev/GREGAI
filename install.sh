@@ -40,8 +40,9 @@
 #      wygrywa; .env.example ustawia 0 = tylko http://localhost:7777 na tej
 #      maszynie; serwer bez pulpitu: wpisz GREGAI_LAN=1) + token
 #   6. modele: OLLAMA_MODEL z .env (pull) oraz wytrenowane router, uczeń i planer z GGUF, jeśli są
-#   7. usługa systemd gregai.service dla TEGO użytkownika i TEJ ścieżki,
-#      start przy rozruchu (po warp-svc), restart po awarii
+#   7. usługa systemd gregai.service dla TEGO katalogu, jako dedykowany
+#      użytkownik systemowy gregai (bez logowania), start przy rozruchu (po
+#      warp-svc), restart po awarii, watchdog systemd (Type=notify)
 #   8. kontrola: /api/system_info odpowiada, WARP i chmura widoczne
 #   9. warstwa systemowa (agent/sysop.py): sudo TYLKO na konkretne
 #      polecenia dla konkretnych usług (SYSOP_UNITS niżej), SYSOP_ENABLED=1;
@@ -105,8 +106,9 @@ trap 'summary || true' EXIT
 
 if [ "$(id -u)" -eq 0 ]; then
   err "Uruchom jako zwykły użytkownik, BEZ sudo:  bash install.sh"
-  echo "(o hasło do sudo skrypt zapyta sam). Powód: usługa GREGAI, jej pliki i"
-  echo "rejestracja Cloudflare WARP muszą należeć do Twojego konta, nie do roota."
+  echo "(o hasło do sudo skrypt zapyta sam). Powód: dane, .env i rejestracja"
+  echo "Cloudflare WARP muszą należeć do Twojego konta, nie do roota; usługa"
+  echo "dostaje osobne konto systemowe gregai."
   exit 1
 fi
 
@@ -129,7 +131,7 @@ INTERACTIVE=0; [ -t 0 ] && [ "$ASSUME_YES" = "0" ] && INTERACTIVE=1
 # Numer szablonu plików systemowych (usługa, sudoers, zapora WARP). Zmieniasz
 # kształt któregoś z nich -> podbij numer: aktualizuj.sh porówna go z plikami
 # na dysku i powie, że trzeba uruchomić install.sh (1.19.0, audyt systemu).
-GREGAI_SZABLON=5
+GREGAI_SZABLON=6
 log() {
   printf '\n\033[1;36m== %s\033[0m\n\n' "$*"
   local step
@@ -149,6 +151,12 @@ sudo_append() { need_sudo sh -c 'cat >> "$1"' sh "$1"; }
 # symlinków, żeby usługa wskazywała prawdziwy katalog).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_USER="$(id -un)"
+# 1.39.0: usługa działa jako dedykowany użytkownik systemowy, nie jako człowiek
+# przy klawiaturze. Dzięki temu proces i jego dzieci (SYSOP, sudo) nie widzą
+# kluczy SSH, profilu przeglądarki ani plików użytkownika - jądro odcina je
+# przez InaccessiblePaths w gregai.service. Człowiek zostaje w grupie gregai,
+# żeby móc czytać .env i edytować notatki bez sudo.
+SERVICE_USER=gregai
 SERVICE=/etc/systemd/system/gregai.service
 PORT=7777
 STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/gregai"
@@ -314,6 +322,77 @@ envval() { grep -E "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$ENV_FIL
 # 1.32.9: znacznik dla straży (agent/straz.py _after_install), że pliki systemowe zmienił instalator.
 straz_mark() { as_user mkdir -p "$ROOT/data/straz" 2>/dev/null && as_user touch "$ROOT/data/straz/instalacja" 2>/dev/null || true; }
 as_user() { if [ "$(id -u)" -eq 0 ] && [ "$RUN_USER" != "root" ]; then sudo -u "$RUN_USER" -H "$@"; else "$@"; fi; }
+
+# 1.39.0: dedykowany użytkownik systemowy usługi + wspólna grupa z człowiekiem.
+# Własność: kod i dane zostają właściciela (RUN_USER), grupa gregai ma prawo
+# zapisu (g+rwX), więc usługa pisze do data/, memory/ i notatek bez sudo, a Ty
+# dalej edytujesz je bez sudo. .env: 640 RUN_USER:gregai - usługa tylko czyta.
+ensure_service_user() {
+  local d
+  if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
+    if ! need_sudo groupadd --system "$SERVICE_USER"; then
+      err "nie udało się utworzyć grupy systemowej $SERVICE_USER (groupadd)"
+      return 1
+    fi
+  fi
+  if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    if need_sudo useradd --system --gid "$SERVICE_USER" --home-dir /var/lib/gregai --create-home \
+         --shell /usr/sbin/nologin "$SERVICE_USER"; then
+      ok "użytkownik systemowy $SERVICE_USER utworzony (bez logowania, bez sudo do powłoki)"
+    else
+      err "nie udało się utworzyć użytkownika systemowego $SERVICE_USER (useradd)"
+      return 1
+    fi
+  else
+    ok "użytkownik systemowy $SERVICE_USER już istnieje"
+  fi
+  if ! id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$SERVICE_USER"; then
+    if need_sudo usermod -aG "$SERVICE_USER" "$RUN_USER"; then
+      ok "konto $RUN_USER dopisane do grupy $SERVICE_USER (zadziała po ponownym zalogowaniu)"
+    else
+      warn "nie udało się dopisać $RUN_USER do grupy $SERVICE_USER - .env i data/ będą wymagać sudo do edycji"
+    fi
+  fi
+  for d in "$ROOT/.venv" "$ROOT/data" "$ROOT/memory" "$ROOT/notatki"; do
+    [ -e "$d" ] || continue
+    if ! need_sudo chown -R "$RUN_USER:$SERVICE_USER" "$d"; then
+      err "nie udało się ustawić właściciela $d"
+      return 1
+    fi
+    need_sudo chmod -R g+rwX "$d" || warn "nie udało się ustawić praw grupy na $d"
+  done
+  if [ -f "$ENV_FILE" ]; then
+    if need_sudo chown "$RUN_USER:$SERVICE_USER" "$ENV_FILE" && need_sudo chmod 640 "$ENV_FILE"; then
+      ok ".env: 640 $RUN_USER:$SERVICE_USER (usługa czyta, Ty edytujesz)"
+    else
+      warn "nie udało się ustawić praw .env (640 $RUN_USER:$SERVICE_USER)"
+    fi
+  fi
+  return 0
+}
+
+# 1.39.0: klucz publiczny wydawcy do weryfikacji podpisu paczek
+# (aktualizuj.sh sprawdza nim GREGAI.sha256.asc). Klucz prywatny zostaje
+# wyłącznie u wydawcy - instalator nigdy go nie potrzebuje.
+install_release_key() {
+  local pub="$ROOT/GREGAI.klucz.asc"
+  if [ ! -f "$pub" ]; then
+    warn "brak GREGAI.klucz.asc - aktualizacje z paczki będą wymagać --bez-podpisu"
+    return 0
+  fi
+  if ! command -v gpg >/dev/null; then
+    warn "brak gpg - nie instaluję klucza wydawcy (aktualizacje z paczki: --bez-podpisu)"
+    return 0
+  fi
+  if need_sudo mkdir -p /usr/share/keyrings \
+     && gpg --batch --dearmor < "$pub" | need_sudo sh -c 'cat > /usr/share/keyrings/gregai.gpg.tmp' \
+     && need_sudo chmod 644 /usr/share/keyrings/gregai.gpg.tmp \
+     && need_sudo mv -f /usr/share/keyrings/gregai.gpg.tmp /usr/share/keyrings/gregai.gpg; then
+    ok "klucz publiczny wydawcy: /usr/share/keyrings/gregai.gpg (podpis paczek)"
+  else
+    warn "nie udało się zainstalować klucza wydawcy - aktualizacje z paczki będą wymagać --bez-podpisu"
+  fi
+}
 
 log "1/9 Pakiety systemowe"
 if ! command -v python3 >/dev/null; then
@@ -880,7 +959,9 @@ import_trained_model "$(env_value ROUTER_MODEL)" out run.sh
 import_trained_model "$(env_value STUDENT_MODEL)" student run_student.sh
 import_trained_model "$(env_value PLANNER_MODEL)" planner run_planner.sh
 
-log "7/9 Usługa systemd (użytkownik: $RUN_USER, katalog: $ROOT)"
+ensure_service_user || exit 1
+install_release_key
+log "7/9 Usługa systemd (użytkownik: $SERVICE_USER, katalog: $ROOT)"
 # Czy ta maszyna miała już usługę GREGAI (kolejne uruchomienie install.sh, np.
 # po przeniesieniu folderu)? Od tego zależy, czy SYSOP_ENABLED=0 w .env jest
 # świadomą decyzją użytkownika (zostaje), czy resztką po starym laptopie.
@@ -1000,8 +1081,15 @@ Wants=network-online.target warp-svc.service
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
-User=$RUN_USER
+# 1.39.0: Type=notify + WatchdogSec=300. main.py woła sd_notify READY=1 po
+# zajęciu portu i WATCHDOG=1 co 60 s, dopóki pętla serwera żyje; zawieszony
+# proces = brak WATCHDOG = systemd restartuje usługę po 5 minutach.
+Type=notify
+NotifyAccess=main
+WatchdogSec=300
+User=$SERVICE_USER
+Group=$SERVICE_USER
+UMask=0002
 WorkingDirectory=$ROOT
 ExecStart="$VENV/bin/python" "$ROOT/agent/main.py"
 Restart=always
@@ -1066,7 +1154,8 @@ ConditionACPower=true
 
 [Service]
 Type=oneshot
-User=$RUN_USER
+User=$SERVICE_USER
+Group=$SERVICE_USER
 WorkingDirectory=$ROOT
 # Zawieszony skan nie może blokować timera na zawsze.
 TimeoutStartSec=300
@@ -1217,7 +1306,7 @@ printf '%s\n' \
   "# GREGAIPANICMODE (agent/tryby.py) - gregai-szablon: $GREGAI_SZABLON" \
   "# Tylko dosłowna fraza \"gregaipanicmode\" w czacie: cofnij reguły zapory" \
   "# wpuszczające GREGAI z sieci prywatnych, potem wyłącz komputer. Nic więcej." \
-  "$RUN_USER ALL=(root) NOPASSWD: $PANIC_RULES" | sudo_write "$PANIC_TMP"
+  "$SERVICE_USER,$RUN_USER ALL=(root) NOPASSWD: $PANIC_RULES" | sudo_write "$PANIC_TMP"
 need_sudo chmod 440 "$PANIC_TMP"
 if need_sudo visudo -cf "$PANIC_TMP" >/dev/null; then
   need_sudo mv -f "$PANIC_TMP" "$PANIC_SUDOERS"
@@ -1254,7 +1343,7 @@ sudo_write "$SUDOERS_TMP" <<EOF
 # GREGAI (agent/sysop.py) - TRYB PEŁNY (SYSOP_MODE=pelny w .env): wyizolowane
 # Ubuntu przeznaczone wyłącznie dla GREGAI, pełen dostęp do systemu.
 # Powrót do wąskiej listy: SYSOP_MODE=strazniczy w .env i bash install.sh.
-$RUN_USER ALL=(ALL) NOPASSWD: ALL
+$SERVICE_USER,$RUN_USER ALL=(ALL) NOPASSWD: ALL
 EOF
 else
 sudo_write "$SUDOERS_TMP" <<EOF
@@ -1262,8 +1351,8 @@ sudo_write "$SUDOERS_TMP" <<EOF
 # GREGAI (agent/sysop.py): zmiany po potwierdzeniu użytkownika w rozmowie.
 # Tylko usługi: $SYSOP_UNITS (lista w install.sh, SYSOP_UNITS).
 # GREGAIPANICMODE ma osobny plik: /etc/sudoers.d/gregai-panic.
-$RUN_USER ALL=(root) NOPASSWD: $UNIT_RULES
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/apt-get update -q, /usr/bin/apt-get upgrade -y -q -o Dpkg\:\:Options\:\:=--force-confdef -o Dpkg\:\:Options\:\:=--force-confold
+$SERVICE_USER,$RUN_USER ALL=(root) NOPASSWD: $UNIT_RULES
+$SERVICE_USER,$RUN_USER ALL=(root) NOPASSWD: /usr/bin/apt-get update -q, /usr/bin/apt-get upgrade -y -q -o Dpkg\:\:Options\:\:=--force-confdef -o Dpkg\:\:Options\:\:=--force-confold
 EOF
 fi
 need_sudo chmod 440 "$SUDOERS_TMP"

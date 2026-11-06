@@ -1,0 +1,37 @@
+name: CI
+
+# 1.39.0: każdy push do main i każdy pull request przechodzi te same szybkie
+# kontrole, które da się zrobić na czystym checkoutcie: składnia Pythona,
+# bash i JS, szybki eval oraz kontrole offline z check.sh (bez sudo, systemd,
+# WARP, sieci i usługi na porcie 7777).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Pobierz kod
+        uses: actions/checkout@v4
+
+      - name: Python 3.12 (jak Ubuntu 24.04)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Node 20 (kontrola składni ui/*.js)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Szybka weryfikacja (składnia + eval)
+        run: bash weryfikuj.sh
+
+      - name: Kontrole offline (bez sudo)
+        run: bash check.sh --no-sudo

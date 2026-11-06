@@ -1107,7 +1107,52 @@ def _openai_text(data: dict) -> tuple[str, bool]:
     return text, first.get("finish_reason") == "length"
 
 
-def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], timeout: float) -> str:
+def _parse_groq_sse(lines, on_token) -> tuple[str, bool]:
+    """Scala SSE Groqa (`stream: true`) w (tekst, ucięty_limit).
+
+    1.39.0: format OpenAI - kolejne `data: {...}` z `choices[0].delta.content`,
+    koniec to `data: [DONE]`. To jest BEST-EFFORT: gdy kształt się nie zgadza
+    (brak [DONE], nie JSON, brak choices), rzucamy ValueError, a wołający robi
+    zwykłe zapytanie w całości - faza nigdy nie traci odpowiedzi przez parser.
+    """
+    parts: list[str] = []
+    truncated = False
+    saw_done = False
+    for raw in lines:
+        try:
+            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        except UnicodeDecodeError as e:
+            raise ValueError(f"SSE Groqa: nieczytelny wiersz ({e})") from e
+        line = line.strip()
+        if not line or line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            saw_done = True
+            break
+        try:
+            obj = json.loads(chunk)
+        except ValueError as e:
+            raise ValueError(f"SSE Groqa: nie JSON ({e})") from e
+        if not isinstance(obj, dict):
+            raise ValueError("SSE Groqa: zdarzenie nie jest obiektem")
+        choices = obj.get("choices") or []
+        first = choices[0] if choices else {}
+        delta = (first.get("delta") or {}).get("content") or ""
+        if delta:
+            parts.append(delta)
+            on_token(delta)
+        if first.get("finish_reason") == "length":
+            truncated = True
+    if not saw_done:
+        raise ValueError("SSE Groqa: brak [DONE] (strumień urwany)")
+    return "".join(parts), truncated
+
+
+def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], timeout: float,
+                     on_token=None) -> str:
     """Groq - WYŁĄCZNIE ten dostawca - przez httpx z realnym HTTP/2, nie przez
     netguard._OPENER (stdlib urllib/http.client, tylko HTTP/1.1). Zgłoszenie
     Grzegorza (2026-10-19): Cloudflare przed api.groq.com odsyłał 403
@@ -1175,6 +1220,50 @@ def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], tim
         except (httpx.HTTPError, ImportError) as e:  # ImportError: Client(http2=True) bez pakietu "h2"
             raise RuntimeError(f"{type(e).__name__}: {e}"[:300]) from e
 
+    def _stream_post(msgs: list[dict], call_timeout: float):
+        """Jedna próba streamowana: (status, body_błędu, retry, tekst, ucięty).
+
+        BEST-EFFORT (1.39.0): nieparsowalne SSE rzuca ValueError, a wołający
+        robi zwykłe zapytanie w całości. HTTP >= 400 wraca jak w _post, żeby
+        zachować ponowienie po "tool_use_failed"."""
+        payload = {
+            "model": _MODEL["groq"],
+            "messages": [{"role": "system", "content": prompt}] + msgs,
+            "max_tokens": _max_tokens(JUGGLER_MAX_TOKENS, floor=_REASONING_FLOOR_TOKENS),
+            "stream": True,
+        }
+        try:
+            with httpx.Client(http2=True, trust_env=False, follow_redirects=False, timeout=call_timeout) as client:
+                with client.stream(
+                    "POST", _GROQ_URL, json=payload,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                ) as resp:
+                    status = resp.status_code
+                    retry_after = resp.headers.get("Retry-After")
+                    read_deadline = time.monotonic() + float(call_timeout)
+                    if status >= 400:
+                        chunks = []
+                        got = 0
+                        for chunk in resp.iter_bytes(65536):
+                            if time.monotonic() > read_deadline:
+                                raise TimeoutError(f"odpowiedź nie dotarła w całości w {float(call_timeout):.0f} s")
+                            chunks.append(chunk)
+                            got += len(chunk)
+                            if got > limit:
+                                raise ValueError(f"odpowiedź większa niż {limit // 1024} KB, odrzucona")
+                        return status, b"".join(chunks), retry_after, "", False
+
+                    def _lines():
+                        for line in resp.iter_lines():
+                            if time.monotonic() > read_deadline:
+                                raise TimeoutError(f"odpowiedź nie dotarła w całości w {float(call_timeout):.0f} s")
+                            yield line
+
+                    text, truncated = _parse_groq_sse(_lines(), on_token)
+                    return status, b"", retry_after, text, truncated
+        except (httpx.HTTPError, ImportError) as e:
+            raise RuntimeError(f"{type(e).__name__}: {e}"[:300]) from e
+
     def _error(status: int, raw: bytes, retry_after: str | None) -> tuple[str, ProviderError]:
         body = trace_mod.mask(raw.decode("utf-8", "replace").strip())
         detail = f"HTTP {status}" + (f": {body[:200]}" if body else "")
@@ -1207,14 +1296,26 @@ def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], tim
 
     # 1.19.0 (audyt rdzenia): Groq nie sprawdzał finish_reason - ucięta
     # odpowiedź szła do użytkownika urwana w pół zdania.
+    # 1.39.0: przy `on_token` najpierw próba streamowana. Nieudany parser
+    # (albo HTTP błąd) = podgląd znika i niżej idzie zwykłe zapytanie w
+    # całości - faza nigdy nie traci odpowiedzi przez streaming.
+    if on_token is not None:
+        try:
+            status, raw, retry_after, streamed, truncated = _stream_post(messages, timeout)
+        except Exception:
+            on_token(None)
+        else:
+            if (status is None or status < 400) and streamed:
+                return _continue_once(streamed, truncated, messages, timeout, _more)
+            on_token(None)
     return _continue_once(text, truncated, messages, timeout, _more)
 
 
-def _groq_chat(system_prompt: str, messages: list[dict], timeout: float) -> str:
+def _groq_chat(system_prompt: str, messages: list[dict], timeout: float, on_token=None) -> str:
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("brak GROQ_API_KEY")
-    return _groq_http2_chat(api_key, system_prompt, messages, timeout)
+    return _groq_http2_chat(api_key, system_prompt, messages, timeout, on_token=on_token)
 
 
 def _openrouter_chat(system_prompt: str, messages: list[dict], timeout: float) -> str:
@@ -1521,7 +1622,7 @@ def _mask_messages(messages: list[dict]) -> list[dict]:
 def chat(system_prompt: str, messages: list[dict], message: str, timeout: float = 60.0,
          preferred_provider: str | None = None, exclude_provider: str | None = None,
          etapy: list[str] | None = None, max_tokens: int | None = None,
-         model: str | None = None) -> tuple[str, str]:
+         model: str | None = None, on_token=None) -> tuple[str, str]:
     """Łańcuch: etapami koryta (1.17.0, agent/koryto.py - domyślnie Claude,
     potem darmowa pula), w obrębie darmowej puli w LOSOWEJ kolejności,
     losowanej od nowa przy każdym wywołaniu - pierwszy sukces wygrywa.
@@ -1629,6 +1730,14 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
     # tylko to, co z budżetu zostało; poniżej 5 s nie ma sensu próbować.
     started = time.monotonic()
     scope = _scope()
+
+    def _provider_call(name: str, sys_prompt: str, msgs: list[dict], t: float):
+        # 1.39.0: podgląd tokenów tylko u Groqa (best-effort). Inni dostawcy
+        # zwracają całość na końcu - to nie regresja, tylko brak dodatku.
+        if name == "groq" and on_token is not None:
+            return _PROVIDER_FN[name](sys_prompt, msgs, t, on_token=on_token)
+        return _PROVIDER_FN[name](sys_prompt, msgs, t)
+
     for name in order:
         # 1.32.2 (audyt tura 7): Stop z przeglądarki przerywa łańcuch między dostawcami
         # (dawniej anulowane zadanie trzymało kolejkę rozmów do końca budżetu, do 210 s).
@@ -1654,7 +1763,7 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
         try:
             try:
                 with _call_flags(max_tokens, timeout, model):
-                    text = _PROVIDER_FN[name](system_prompt, msgs, timeout)
+                    text = _provider_call(name, system_prompt, msgs, timeout)
                 # 1.32.6 (przegląd): każdy dostawca, nie tylko kształt OpenAI (Groq hostuje llama-guard)
                 if isinstance(text, str) and _GUARD_REPLY_RE.match(text):
                     raise RuntimeError("model-klasyfikator bezpieczeństwa zamiast rozmowy")
@@ -1687,7 +1796,7 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
                 try:
                     try:
                         with _call_flags(max_tokens, retry_timeout, model):
-                            text = _PROVIDER_FN[name](system_prompt, msgs, retry_timeout)
+                            text = _provider_call(name, system_prompt, msgs, retry_timeout)
                     finally:
                         _scope_spend(scope, time.monotonic() - retry_started)
                     note_success(name)
