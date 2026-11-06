@@ -1269,6 +1269,32 @@ def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], tim
         detail = f"HTTP {status}" + (f": {body[:200]}" if body else "")
         return detail, ProviderError(detail, code=status, retry_after=retry_after)
 
+    def _more(msgs: list[dict], call_timeout: float) -> tuple[str, bool]:
+        # Dokończenie: WARP sprawdzony przed chwilą (wyżej) albo w oknie chat().
+        if not netguard_mod.recently_verified(_guard_reuse() or netguard_mod.FRESH_REUSE_MAX_S):
+            ok2, reason2 = netguard_mod.internet_allowed(fresh=True)
+            if not ok2:
+                raise netguard_mod.NetGuardBlocked(reason2)
+        st, body, ra = _post(msgs, call_timeout)
+        if st is not None and st >= 400:
+            raise _error(st, body, ra)[1]
+        return _openai_text(json.loads(body.decode("utf-8")))
+
+    # 1.39.2 (audyt 1.39.1): przy `on_token` NAJPIERW próba streamowana. Do
+    # 1.39.1 pełny _post wykonywał się bezwarunkowo, więc każdy podgląd Groqa
+    # kosztował dwa zapytania (drugie generowało całą odpowiedź i było
+    # wyrzucane). Ni-stream idzie teraz tylko jako fallback po błędzie parsera
+    # albo HTTP - i wtedy zachowuje dotychczasowe ponowienie "tool_use_failed".
+    if on_token is not None:
+        try:
+            status, raw, retry_after, streamed, stream_truncated = _stream_post(messages, timeout)
+        except Exception:
+            on_token(None)
+        else:
+            if (status is None or status < 400) and streamed:
+                return _continue_once(streamed, stream_truncated, messages, timeout, _more)
+            on_token(None)
+
     raw = b""
     for attempt in (1, 2):
         status, raw, retry_after = _post(messages, timeout)
@@ -1283,31 +1309,6 @@ def _groq_http2_chat(api_key: str, system_prompt: str, messages: list[dict], tim
     if not text:
         raise RuntimeError("pusta odpowiedź")
 
-    def _more(msgs: list[dict], call_timeout: float) -> tuple[str, bool]:
-        # Dokończenie: WARP sprawdzony przed chwilą (wyżej) albo w oknie chat().
-        if not netguard_mod.recently_verified(_guard_reuse() or netguard_mod.FRESH_REUSE_MAX_S):
-            ok2, reason2 = netguard_mod.internet_allowed(fresh=True)
-            if not ok2:
-                raise netguard_mod.NetGuardBlocked(reason2)
-        st, body, ra = _post(msgs, call_timeout)
-        if st is not None and st >= 400:
-            raise _error(st, body, ra)[1]
-        return _openai_text(json.loads(body.decode("utf-8")))
-
-    # 1.19.0 (audyt rdzenia): Groq nie sprawdzał finish_reason - ucięta
-    # odpowiedź szła do użytkownika urwana w pół zdania.
-    # 1.39.0: przy `on_token` najpierw próba streamowana. Nieudany parser
-    # (albo HTTP błąd) = podgląd znika i niżej idzie zwykłe zapytanie w
-    # całości - faza nigdy nie traci odpowiedzi przez streaming.
-    if on_token is not None:
-        try:
-            status, raw, retry_after, streamed, truncated = _stream_post(messages, timeout)
-        except Exception:
-            on_token(None)
-        else:
-            if (status is None or status < 400) and streamed:
-                return _continue_once(streamed, truncated, messages, timeout, _more)
-            on_token(None)
     return _continue_once(text, truncated, messages, timeout, _more)
 
 

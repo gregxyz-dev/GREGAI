@@ -43,7 +43,11 @@ MODE=normal
 ZIP=""
 # 1.39.0: --bez-podpisu świadomie dopuszcza paczkę bez weryfikowalnego podpisu
 # GPG (np. odzyskiwanie starej kopii). Domyślnie brak podpisu = odmowa.
+# 1.39.2 (audyt 1.39.1): flaga jest też przenoszona przez środowisko, bo skrypt
+# podmienia się na własną kopię i drugi przebieg nie widzi już oryginalnego
+# "$@" (do 1.39.1 ratunek --bez-podpisu nie działał po re-exec).
 ALLOW_UNSIGNED=0
+[ "${GREGAI_AKT_BEZ_PODPISU:-0}" = "1" ] && ALLOW_UNSIGNED=1
 _ARGS=()
 for _a in "$@"; do
   case "$_a" in
@@ -85,6 +89,9 @@ RUN_USER="${RUN_USER:-$(stat -c '%U' "$ROOT" 2>/dev/null || id -un)}"
 if [ "$MODE" != normal ] && [ -z "${GREGAI_AKT_COPY:-}" ]; then
   _copy="$(mktemp "${TMPDIR:-/tmp}/gregai-aktualizuj.XXXXXX")"
   cp "$ROOT/aktualizuj.sh" "$_copy"
+  if [ "$ALLOW_UNSIGNED" = 1 ]; then
+    GREGAI_AKT_BEZ_PODPISU=1 GREGAI_AKT_COPY="$_copy" GREGAI_AKT_ROOT="$ROOT" exec bash "$_copy" "$@"
+  fi
   GREGAI_AKT_COPY="$_copy" GREGAI_AKT_ROOT="$ROOT" exec bash "$_copy" "$@"
 fi
 [ -n "${GREGAI_AKT_COPY:-}" ] && trap 'rm -f "$GREGAI_AKT_COPY"' EXIT

@@ -51,7 +51,12 @@ def included(path: Path) -> bool:
     parts = rel.parts
     if not path.is_file() or path.name in {"GREGAI.sha256", "GREGAI.sha256.asc"}:
         return False
-    if any(part in {".git", "__pycache__", ".venv"} for part in parts):
+    # 1.39.2 (audyt 1.39.1): .gitignore nie dotyczy wydaj.sh, a paczka jest
+    # podpisywana - prywatny CLAUDE.md, klucze i katalogi narzędzi nie mogą
+    # do niej wejść tylko dlatego, że leżą na dysku wydawcy.
+    if path.name in {"CLAUDE.md", ".DS_Store", "Thumbs.db"}:
+        return False
+    if any(part in {".git", "__pycache__", ".venv", "node_modules", ".idea", ".vscode", ".pytest_cache"} for part in parts):
         return False
     if parts[0] in {"data", "memory", "backups"}:
         return False
@@ -59,9 +64,15 @@ def included(path: Path) -> bool:
         return False
     if parts[:2] == ("training", ".work"):
         return False
+    if len(parts) > 1 and parts[0] == "training" and parts[1] in {"models", "eval_history"}:
+        return False
     if path.name.startswith(".env") and path.name != ".env.example":
         return False
-    if path.suffix in {".pyc", ".pyo", ".gguf"}:
+    if path.name.startswith(".gregai-"):
+        return False
+    if path.suffix in {".pyc", ".pyo", ".gguf", ".zip", ".gpg", ".key"}:
+        return False
+    if path.suffix == ".asc" and path.name != "GREGAI.klucz.asc":
         return False
     return True
 

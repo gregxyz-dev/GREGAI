@@ -1,4 +1,4 @@
-# GREGAI 1.39.1
+# GREGAI 1.39.2
 
 [![CI](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml)
 
@@ -66,7 +66,11 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.39.1 - poprawka migracji w `aktualizuj.sh`:
+**`CHANGELOG.md`**. Najnowsze: 1.39.2 - wydanie naprawcze po audycie 1.39.1:
+jedno wywołanie Groqa zamiast dwóch przy podglądzie tokenów, `--bez-podpisu`
+działa po samopodmianie `aktualizuj.sh`, paczka respektuje `.gitignore`
+(bez `CLAUDE.md`, kluczy i katalogów narzędzi), `_sem_of` bez wyścigu przy
+starcie. Wcześniej 1.39.1 - poprawka migracji w `aktualizuj.sh`:
 `RUN_USER` jest teraz ustawiany na początku (właściciel katalogu projektu),
 więc aktualizacja istniejącej instalacji na konto `gregai` nie kończy się
 `unbound variable`. Wcześniej 1.39.0 - odpowiedź pisze się na żywo

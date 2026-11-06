@@ -2614,6 +2614,10 @@ class BoundedServer(ThreadingHTTPServer):
         self._local_slots = threading.BoundedSemaphore(self.LOCAL_RESERVED)
         self._per_ip: dict = {}
         self._per_ip_lock = threading.Lock()
+        # 1.39.2 (audyt 1.39.1): słownik semaforów per request musi istnieć od
+        # początku. Wcześniej leniwe getattr(..., {}) bez blokady mogło zgubić
+        # wpis przy dwóch pierwszych równoległych żądaniach (złe zwolnienie).
+        self._sem_of: dict = {}
         # 1.39.0: dowód życia głównej pętli dla watchdoga systemd. serve_forever
         # woła service_actions() co poll_interval (5 s); wątek strażnika wysyła
         # WATCHDOG=1 tylko wtedy, gdy ten znacznik jest świeży. Zamrożona pętla =
@@ -2658,7 +2662,6 @@ class BoundedServer(ThreadingHTTPServer):
         if sem is None:
             self.shutdown_request(request)  # za dużo połączeń: zamknij od razu
             return
-        self._sem_of = getattr(self, "_sem_of", {})
         self._sem_of[id(request)] = sem
         try:
             super().process_request(request, client_address)

@@ -2,6 +2,48 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.39.2
+
+Wydanie naprawcze po audycie 1.39.1. Cztery błędy, każdy z testem
+odtwarzającym i minimalną poprawką; bez zmian funkcji i formatu danych.
+
+**Groq: jedno wywołanie zamiast dwóch.** `juggler._groq_http2_chat` przy
+`on_token` wysyłał najpierw pełne zapytanie ni-stream, a potem streamowane -
+pierwsza odpowiedź była generowana w całości i wyrzucana. Teraz stream jest
+pierwszy, a ni-stream służy tylko jako fallback po błędzie parsera/HTTP
+(z zachowanym retry "tool_use_failed"). Test na atrapie httpx: 1 POST
+(stream) z podglądem, 1 POST (ni-stream) bez podglądu; wcześniej 2 POST-y.
+
+**`--bez-podpisu` działa po re-exec.** `aktualizuj.sh` podmienia się na
+własną kopię, a drugi przebieg nie widział flagi wyciętej z `"$@"`. Flaga
+jedzie teraz przez środowisko `GREGAI_AKT_BEZ_PODPISU=1` obok
+`GREGAI_AKT_COPY`/`GREGAI_AKT_ROOT`. Test z paczką bez podpisu: pierwszy
+i drugi przebieg widzą obejście, skrypt dochodzi do kopii kodu (w teście
+celowo zatrzymany na zepsutym katalogu kopii). Bez flagi ta sama paczka
+jest nadal odrzucana.
+
+**Paczka nie zawiera plików spoza repo.** `wydaj.sh` budował manifest
+z całego drzewa dysku, więc `CLAUDE.md` (prywatny notatnik), `*.key`,
+`*.gpg`, `node_modules/`, `training/models/`, `training/eval_history/`,
+`.idea/`, `.vscode/`, `.DS_Store` mogły wejść do podpisanej paczki i do
+manifestu - `sha256sum -c` by tego nie wykrył. `included()` ma teraz te
+same wykluczenia co `.gitignore` (publiczny `GREGAI.klucz.asc` zostaje,
+reszta `*.asc` i archiwa `.zip` odpadają). Test na atrapie drzewa: do
+paczki wchodzą wyłącznie pliki repo.
+
+**Wyścig semaforów przy starcie.** `BoundedServer._sem_of` było tworzone
+leniwie przez `getattr(..., {})` bez blokady: dwa pierwsze równoległe
+połączenia mogły zgubić wpis i zwolnić niewłaściwy semafor (albo wyciec
+rezerwę lokalną). Słownik jest teraz tworzony w `__init__`; test:
+`_sem_of == {}` już po inicjalizacji serwera.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE (składnia + szybki eval).
+`bash -n` na `aktualizuj.sh`, `wydaj.sh`, `install.sh` oraz
+`python -m py_compile` na `juggler.py`/`main.py`: OK. Testy celowane
+czterech fixów: OK (patrz wyżej). `bash check.sh --no-sudo` i podpisana
+paczka: sprawdzone przy wydaniu 1.39.2 (61/106 OK, 1 pominięta;
+`sha256sum -c` 246/246; `gpg --verify` rc=0).
+
 ## Co nowego w 1.39.1
 
 Poprawka błędu z 1.39.0: `aktualizuj.sh` używał `RUN_USER` w migracji na
