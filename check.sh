@@ -4416,7 +4416,7 @@ wyd = Path("wydaj.sh").read_text(encoding="utf-8")
 need_inst = ["useradd --system", "SERVICE_USER=gregai", "User=$SERVICE_USER",
              "Type=notify", "WatchdogSec=300", "/usr/share/keyrings/gregai.gpg"]
 need_akt = ["SERVICE_USER=gregai", "migrate_service_user", "--bez-podpisu",
-            "--verify", "/usr/share/keyrings/gregai.gpg"]
+            "--verify", "/usr/share/keyrings/gregai.gpg", "RUN_USER="]
 need_wyd = ["--detach-sign", "GREGAI.sha256.asc", "GREGAI.klucz.asc", "--verify"]
 missing = [t for t in need_inst if t not in inst]
 missing += [t for t in need_akt if t not in akt]

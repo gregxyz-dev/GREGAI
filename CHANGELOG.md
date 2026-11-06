@@ -2,6 +2,31 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.39.1
+
+Poprawka błędu z 1.39.0: `aktualizuj.sh` używał `RUN_USER` w migracji na
+konto `gregai` (grupa, `usermod`, `chown`), ale zmienną ustawiał tylko
+`install.sh`. Przy `set -u` pierwsza aktualizacja istniejącej instalacji
+kończyła się `RUN_USER: unbound variable` w połowie migracji zamiast
+dokończyć przepisanie własności i jednostki.
+
+**Fix.** Po wyliczeniu `ROOT` skrypt ustawia
+`RUN_USER="${RUN_USER:-$(stat -c '%U' "$ROOT")}"` - bierze właściciela
+katalogu projektu (skrypt i tak odmawia działania jako root), a jawną
+wartość z otoczenia zostawia, jeśli ktoś ją podał. Dzięki temu migracja
+1.39.0 jest wykonalna także z paczki, bez ręcznego `export`.
+
+**Kontrola.** Kontrola 106 w `check.sh` wymaga teraz definicji `RUN_USER`
+w `aktualizuj.sh` obok `SERVICE_USER`, `migrate_service_user` i weryfikacji
+GPG, więc ten sam brak nie wróci po cichu.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`
+na czystym checkoutcie bez `data/`: 61/106 OK i 1 pominięta (drop-in
+Ollamy). `bash -n aktualizuj.sh` + test na atrapie: skrypt nie odwołuje się
+już do pustej zmiennej; podrobiona paczka nadal jest odrzucana przez GPG
+(kod 1). Paczka 1.39.1 jest podpisana tym samym kluczem wydawcy co 1.39.0
+(`GREGAI.sha256.asc`).
+
 ## Co nowego w 1.39.0
 
 Odpowiedź przestaje być jednym wielkim JSON-em na końcu: lokalny model pisze

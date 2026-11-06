@@ -73,6 +73,11 @@ case "${1:-}" in
 esac
 
 ROOT="${GREGAI_AKT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)}"
+# 1.39.1: aktualizuj.sh używa RUN_USER przy migracji na konto gregai, ale do
+# 1.39.0 zmienna była ustawiana tylko w install.sh. Bierzemy właściciela
+# katalogu projektu (skrypt i tak odmawia działania jako root), a jawną
+# wartość z otoczenia zostawiamy, jeśli ktoś ją podał.
+RUN_USER="${RUN_USER:-$(stat -c '%U' "$ROOT" 2>/dev/null || id -un)}"
 # Aktualizacja z paczki i powrót PODMIENIAJĄ ten skrypt w trakcie działania, a
 # bash czyta skrypt kawałkami - podmiana w połowie wykonałaby przypadkowy
 # fragment nowego pliku. Dlatego najpierw kopia skryptu poza projektem i
