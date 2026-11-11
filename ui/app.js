@@ -1346,7 +1346,10 @@ function renderMarkdownLite(text) {
     }
     if (HEADING.test(line)) {
       flushParagraph();
-      htmlParts.push(`<p class="chat-heading"><strong>${inlineMarkdown(HEADING.exec(line)[1])}</strong></p>`);
+      const heading = HEADING.exec(line);
+      const marks = (line.match(/^\s*(#{1,6})/) || ["", "#"])[1];
+      const tag = marks.length <= 2 ? "h2" : marks.length === 3 ? "h3" : "h4";
+      htmlParts.push(`<${tag} class="chat-${tag}">${inlineMarkdown(heading[1])}</${tag}>`);
       i++;
       continue;
     }
@@ -1357,7 +1360,7 @@ function renderMarkdownLite(text) {
         items.push(inlineMarkdown(QUOTE.exec(lines[i])[1]));
         i++;
       }
-      htmlParts.push(`<blockquote>${items.join("<br>")}</blockquote>`);
+      htmlParts.push(`<blockquote class="chat-quote">${items.join("<br>")}</blockquote>`);
       continue;
     }
     if (BULLET.test(line)) {
@@ -2119,12 +2122,35 @@ function appendNextSteps(items) {
   if (row.children.length > 1) appendToChat(row);
 }
 
+function isLongAnswer(text) {
+  const words = String(text ?? "").trim().split(/\s+/).filter(Boolean);
+  return words.length > 500;
+}
+
+function applyAssistantMarkup(bubble, text) {
+  bubble.className = "chat-bubble assistant" + (isLongAnswer(text) ? " long" : "");
+  bubble.removeAttribute("aria-busy");
+  markAlertBubble(bubble, "assistant", text);
+  bubble.innerHTML = renderMarkdownLite(text);
+  addCopyButton(bubble, text);
+  return bubble;
+}
+
+function finalizeAssistantBubble(bubble, text) {
+  if (!bubble || !bubble.isConnected) return appendChatBubble("assistant", text);
+  applyAssistantMarkup(bubble, text);
+  // 1.45.8: domknięcie odpowiedzi przewija, ale tylko gdy użytkownik nadal
+  // jest przy dole. Kto czyta starsze, zostaje na swoim miejscu.
+  scrollChatToBottom({ smooth: true });
+  return bubble;
+}
+
 function buildBubble(role, text) {
   const bubble = document.createElement("div");
+  if (role === "assistant") return applyAssistantMarkup(bubble, text);
   bubble.className = `chat-bubble ${role}`;
   markAlertBubble(bubble, role, text);
   bubble.innerHTML = renderMarkdownLite(text);
-  if (role === "assistant") addCopyButton(bubble, text);
   return bubble;
 }
 
@@ -2141,6 +2167,19 @@ function markAlertBubble(bubble, role, text) {
 // „Ta rozmowa” (sekcja Straż). Inne alerty (zadania stałe) zostają inline.
 const STRAZ_TOAST_MAX = 3;
 const STRAZ_TOAST_MS = { high: 0, medium: 15000, low: 8000 };
+const seenWezly = new Set();
+
+function toastHost() {
+  let host = document.getElementById("straz-toasts");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "straz-toasts";
+    host.className = "straz-toasts";
+    host.setAttribute("aria-live", "assertive");
+    document.body.appendChild(host);
+  }
+  return host;
+}
 
 function extractStrazAlerts(text) {
   const lines = String(text || "").split("\n");
@@ -2166,15 +2205,37 @@ function strazSeverity(alert) {
   return "high";
 }
 
-function showStrazToast(alert) {
-  let host = document.getElementById("straz-toasts");
-  if (!host) {
-    host = document.createElement("div");
-    host.id = "straz-toasts";
-    host.className = "straz-toasts";
-    host.setAttribute("aria-live", "assertive");
-    document.body.appendChild(host);
+// 1.45.7: „Zignoruj” wycisza TYP alertu na 1 h po stronie backendu; dziennik
+// i łańcuch bezpieczeństwa nadal dostają każdą anomalię. Typ zgadujemy z
+// tekstu alertu, bo standing przekazuje tylko treść.
+function strazTypAlertu(alert) {
+  const t = `${alert.tytul || ""} ${alert.tekst || ""}`.toLowerCase();
+  if (/kod gregai zmieniony|pieczęć|pieczec/.test(t)) return "pieczec_kodu";
+  if (/nowy port/.test(t)) return "nowy_port";
+  if (/nieudanych prób logowania|nieudanych prob logowania|logowania/.test(t)) return "logowania";
+  if (/klucz/.test(t)) return "plik_klucz";
+  if (/passwd|grup|konta/.test(t)) return "plik_konta";
+  if (/cron|autostart|trwałości|trwalosci|powłok|powlok|usług/.test(t)) return "plik_trwalosc";
+  if (/połączenie wychodzące|polaczenie wychodzace|zdalnej kontroli/.test(t)) return "polaczenie_podejrzane";
+  if (/katalogu tymczasowego/.test(t)) return "proces_tmp";
+  return "inne";
+}
+
+function muteStrazTyp(typ) {
+  if (!typ) return;
+  try {
+    gregaiFetch("/api/straz/wycisz", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ typ }),
+    }).catch(() => {});
+  } catch (e) {
+    // Toast już zniknął; cooldown jest wygodą, nie warunkiem działania.
   }
+}
+
+function showStrazToast(alert) {
+  const host = toastHost();
   while (host.children.length >= STRAZ_TOAST_MAX) {
     dismissStrazToast(host.firstElementChild, true);
   }
@@ -2197,7 +2258,10 @@ function showStrazToast(alert) {
       `<button type="button" class="straz-toast-ignore">Zignoruj</button>` +
     `</div>`;
   el.querySelector(".straz-toast-close").addEventListener("click", () => dismissStrazToast(el));
-  el.querySelector(".straz-toast-ignore").addEventListener("click", () => dismissStrazToast(el));
+  el.querySelector(".straz-toast-ignore").addEventListener("click", () => {
+    muteStrazTyp(strazTypAlertu(alert));
+    dismissStrazToast(el);
+  });
   el.querySelector(".straz-toast-show").addEventListener("click", () => {
     openStrazDetails(alert);
     dismissStrazToast(el);
@@ -2222,6 +2286,92 @@ function dismissStrazToast(el, immediate = false) {
   el.classList.add("out");
   if (immediate) { el.remove(); return; }
   setTimeout(() => el.remove(), 320);
+}
+
+// 1.43.0: wątek tła dopisuje węzły po odpowiedzi, więc UI pyta o nie kilka
+// razy (model może odpowiedzieć po kilkunastu sekundach). Toast jest wspólny
+// wizualnie ze Strażą, ale ma własną akcję "Cofnij" (kosz, bez nowej logiki).
+function showWezlyToast(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const host = toastHost();
+  while (host.children.length >= STRAZ_TOAST_MAX) dismissStrazToast(host.firstElementChild, true);
+  const names = items.map((i) => String(i.title || i.slug || "")).filter(Boolean);
+  const el = document.createElement("div");
+  el.className = "straz-toast wezly-toast";
+  el.dataset.severity = "low";
+  el.setAttribute("role", "status");
+  el.innerHTML =
+    `<div class="straz-toast-header">` +
+      `<span class="straz-toast-ico" aria-hidden="true">🕸️</span>` +
+      `<span class="straz-toast-title">Nowe węzły</span>` +
+      `<button type="button" class="straz-toast-close" aria-label="Zamknij">✕</button>` +
+    `</div>` +
+    `<div class="straz-toast-body wezly-toast-body">` +
+      `<ul>${names.slice(0, 3).map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>` +
+      `<p class="wezly-toast-hint">Dodałem z tej rozmowy. Możesz cofnąć.</p>` +
+    `</div>` +
+    `<div class="straz-toast-actions">` +
+      `<button type="button" class="wezly-toast-show">Pokaż w Węzłach</button>` +
+      `<button type="button" class="wezly-toast-undo">Cofnij</button>` +
+    `</div>`;
+  el.querySelector(".straz-toast-close").addEventListener("click", () => dismissStrazToast(el));
+  el.querySelector(".wezly-toast-show").addEventListener("click", () => {
+    dismissStrazToast(el);
+    try { navigateToNodesSegment(); } catch (e) { /* segment i tak zostaje */ }
+    const first = items[0] && (items[0].slug || items[0].id);
+    if (first) setTimeout(() => { try { graph.focusNode(first); } catch (e) {} }, 120);
+  });
+  const undo = el.querySelector(".wezly-toast-undo");
+  undo.addEventListener("click", async () => {
+    undo.disabled = true;
+    let removed = 0;
+    for (const it of items) {
+      try {
+        const res = await gregaiFetch("/api/note/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: it.slug, title: it.title }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.error) { removed += 1; seenWezly.delete(it.slug); }
+      } catch (e) { /* jedna nieudana nie blokuje reszty */ }
+    }
+    dismissStrazToast(el);
+    await refreshGraphData();
+    const slowo = removed === 1 ? "węzeł" : (removed >= 2 && removed <= 4 ? "węzły" : "węzłów");
+    showBanner(removed
+      ? `Cofnięto ${removed} ${slowo}. Notatki są w koszu (data/kosz).`
+      : "Nie udało się cofnąć automatycznych węzłów.", { info: true, ms: 8000 });
+  });
+  const arm = () => { el._strazTimer = setTimeout(() => dismissStrazToast(el), 20000); };
+  arm();
+  el.addEventListener("mouseenter", () => { clearTimeout(el._strazTimer); el._strazTimer = null; });
+  el.addEventListener("mouseleave", () => { if (el.isConnected && !el._strazTimer) arm(); });
+  host.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("in")));
+}
+
+function scheduleWezlyCheck(chat, since) {
+  const delays = [8000, 12000, 20000, 30000];
+  let tries = 0;
+  const tick = async () => {
+    tries += 1;
+    try {
+      const res = await gregaiFetch(`/api/wezly/ostatnie?chat=${encodeURIComponent(chat)}&since=${since}`);
+      if (res.ok) {
+        const data = await res.json();
+        const fresh = (data.items || []).filter((i) => i && i.slug && !seenWezly.has(i.slug));
+        if (fresh.length) {
+          fresh.forEach((i) => seenWezly.add(i.slug));
+          await refreshGraphData();
+          showWezlyToast(fresh);
+          return;
+        }
+      }
+    } catch (e) { /* ciche tło; następna próba i tak jest */ }
+    if (tries < delays.length) setTimeout(tick, delays[tries]);
+  };
+  setTimeout(tick, delays[0]);
 }
 
 function openStrazDetails(alert) {
@@ -2290,7 +2440,9 @@ function renderConversationMessages(conv, project) {
     row.tabIndex = -1;
   });
   if (conv.run && conv.pendingEl) messages.appendChild(conv.pendingEl);
+  chatPinned = true;
   messages.scrollTop = messages.scrollHeight;
+  chatLastScrollTop = messages.scrollTop;
   hideNewReplyChip();
   paintInputHint(conv);
 }
@@ -2352,18 +2504,90 @@ function paintGuide(conv) {
 // panelu pojawia się mały przycisk "↓ Nowa odpowiedź". Własna wiadomość
 // (force) przewija zawsze - właśnie ją wysłałeś, chcesz widzieć, co dalej.
 const CHAT_NEAR_BOTTOM_PX = 120;
+const CHAT_PIN_BOTTOM_PX = 50;
+
+// 1.45.8: jedno miejsce decyduje, czy podążać za odpowiedzią. Użytkownik,
+// który przewinął w górę, zostaje tam (i widzi „↓ Nowa odpowiedź”); powrót
+// do dołu (≤50 px) wznawia auto-scroll. Programowy smooth-scroll nie może
+// sam siebie wyłączać, stąd krótkie okno ignorowania własnych zdarzeń.
+let chatPinned = true;
+let chatProgScrollUntil = 0;
+let chatScrollHooked = false;
+let chatLastScrollTop = 0;
 
 function chatNearBottom(messages) {
   return messages.scrollHeight - messages.scrollTop - messages.clientHeight < CHAT_NEAR_BOTTOM_PX;
+}
+
+function scrollChatToBottom({ force = false, smooth = true } = {}) {
+  const messages = document.getElementById("chat-messages");
+  if (!messages) return;
+  if (force) chatPinned = true;
+  if (!chatPinned) {
+    showNewReplyChip();
+    return;
+  }
+  chatProgScrollUntil = Date.now() + 900;
+  if (smooth && typeof messages.scrollTo === "function") {
+    messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
+  } else {
+    messages.scrollTop = messages.scrollHeight;
+  }
+  hideNewReplyChip();
+}
+
+function initChatScroll() {
+  if (chatScrollHooked) return;
+  const messages = document.getElementById("chat-messages");
+  if (!messages) return;
+  chatScrollHooked = true;
+  messages.addEventListener("scroll", () => {
+    const top = messages.scrollTop;
+    const movedUp = top < chatLastScrollTop - 2;
+    chatLastScrollTop = top;
+    const dist = messages.scrollHeight - top - messages.clientHeight;
+    if (movedUp) {
+      // Przewinięcie w górę (także pasek przewijania) natychmiast wyłącza
+      // podążanie, nawet w trakcie programowego smooth-scrollu.
+      chatPinned = false;
+      chatProgScrollUntil = 0;
+      showNewReplyChip();
+      return;
+    }
+    if (dist <= CHAT_PIN_BOTTOM_PX) {
+      chatPinned = true;
+      hideNewReplyChip();
+    } else if (dist > 100 && Date.now() > chatProgScrollUntil) {
+      chatPinned = false;
+    }
+  }, { passive: true });
+  // Kółko i palec wyprzedzają scroll o kilka pikseli - dzięki temu szybkie
+  // przewinięcie w trakcie streamingu od razu zatrzymuje podążanie.
+  messages.addEventListener("wheel", (e) => {
+    if (e.deltaY < 0) {
+      chatPinned = false;
+      chatProgScrollUntil = 0;
+    }
+  }, { passive: true });
+  let touchY = 0;
+  messages.addEventListener("touchstart", (e) => {
+    touchY = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+  }, { passive: true });
+  messages.addEventListener("touchmove", (e) => {
+    const y = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+    if (y > touchY + 8) {
+      chatPinned = false;
+      chatProgScrollUntil = 0;
+    }
+  }, { passive: true });
 }
 
 function appendToChat(el, { force = false } = {}) {
   const messages = document.getElementById("chat-messages");
   const near = force || chatNearBottom(messages);
   messages.appendChild(el);
-  if (near) {
-    messages.scrollTop = messages.scrollHeight;
-    hideNewReplyChip();
+  if (force || (near && chatPinned)) {
+    scrollChatToBottom({ force, smooth: true });
   } else {
     showNewReplyChip();
   }
@@ -2380,8 +2604,7 @@ function newReplyChip() {
   chip.className = "chat-new-reply hidden";
   chip.textContent = "↓ Nowa odpowiedź";
   chip.addEventListener("click", () => {
-    messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
-    hideNewReplyChip();
+    scrollChatToBottom({ force: true, smooth: true });
   });
   messages.insertAdjacentElement("afterend", chip);
   messages.addEventListener("scroll", () => { if (chatNearBottom(messages)) hideNewReplyChip(); }, { passive: true });
@@ -2553,7 +2776,153 @@ function navigateToNodesSegment() {
   setSegment("nodes");
 }
 
+// --- Profil użytkownika (1.42.0) -----------------------------------------
+let profileModalOnboarding = false;
+let profileBusy = false;
+
+function profileSetStatus(text, kind = "") {
+  const el = document.getElementById("profil-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "profile-status" + (kind ? " " + kind : "");
+}
+
+function profileSplit(value) {
+  return String(value || "").split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+function profileFill(profile) {
+  const p = profile || {};
+  const ident = p.tozsamosc || {};
+  const styl = p.styl || {};
+  const cele = p.cele || {};
+  const tabu = p.tabu || {};
+  const inv = p.inwestowanie || {};
+  const sysop = p.sysop || {};
+  const priv = p.prywatnosc || {};
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value == null ? "" : String(value); };
+  set("profil-ton", styl.ton || "rzeczowy");
+  set("profil-dlugosc", styl.dlugosc || "krotka");
+  set("profil-emoji", styl.emoji || "rzadko");
+  set("profil-wiek", ident.wiek || "");
+  set("profil-pronominy", ident.pronominy || "");
+  set("profil-sysop-ton", sysop.ton || "konkretny");
+  set("profil-cele", (cele.lista || []).join("\n"));
+  set("profil-tabu", (tabu.lista || []).join(", "));
+  set("profil-zainteresowania", (p.zainteresowania || []).join(", "));
+  set("profil-wagi", (inv.wagi || ["koszt", "ryzyko", "czas"]).join(", "));
+  const cb = document.getElementById("profil-do-sieci");
+  if (cb) cb.checked = priv.profil_do_sieci === true;
+  const wz = p.wierzchowanie || {};
+  const cbAuto = document.getElementById("profil-auto-wezly");
+  if (cbAuto) cbAuto.checked = wz.auto_dowezlywanie === true;
+}
+
+function profileFromForm() {
+  const value = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+  const checked = (id) => { const el = document.getElementById(id); return !!(el && el.checked); };
+  const wiekRaw = value("profil-wiek").trim();
+  const wiek = wiekRaw ? Number(wiekRaw) : null;
+  return {
+    tozsamosc: { wiek: Number.isFinite(wiek) && wiek > 0 ? wiek : null, pronominy: value("profil-pronominy").trim() },
+    styl: { ton: value("profil-ton"), dlugosc: value("profil-dlugosc"), emoji: value("profil-emoji") },
+    cele: { lista: profileSplit(value("profil-cele").replace(/\n/g, ";")) },
+    tabu: { lista: profileSplit(value("profil-tabu")) },
+    zainteresowania: profileSplit(value("profil-zainteresowania")),
+    inwestowanie: { wagi: profileSplit(value("profil-wagi")) },
+    sysop: { ton: value("profil-sysop-ton").trim() || "konkretny" },
+    prywatnosc: { profil_do_sieci: checked("profil-do-sieci") },
+    wierzchowanie: { auto_dowezlywanie: checked("profil-auto-wezly") },
+  };
+}
+
+function openProfileModal(onboarding = false, profile = null) {
+  const overlay = document.getElementById("profile-modal-overlay");
+  if (!overlay) return;
+  profileModalOnboarding = !!onboarding;
+  const title = document.getElementById("profile-modal-title");
+  if (title) title.textContent = onboarding ? "Pierwsze uruchomienie: profil" : "Profil użytkownika";
+  const lead = overlay.querySelector(".profile-lead");
+  if (lead) {
+    lead.textContent = onboarding
+      ? "Uzupełnij profil albo pomiń ten krok. Wszystko zostaje lokalnie; do sieci trafi tylko po zaznaczeniu zgody."
+      : "Profil jest lokalny. Do sieciowych AI trafi tylko wtedy, gdy zaznaczysz zgodę poniżej.";
+  }
+  const skip = document.getElementById("profil-skip");
+  if (skip) skip.classList.toggle("hidden", !onboarding);
+  profileFill(profile || {});
+  profileSetStatus("");
+  overlay.classList.add("visible");
+  overlay.setAttribute("aria-hidden", "false");
+  const first = document.getElementById("profil-ton");
+  if (first) setTimeout(() => { try { first.focus(); } catch (e) {} }, 30);
+}
+
+function closeProfileModal() {
+  const overlay = document.getElementById("profile-modal-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("visible");
+  overlay.setAttribute("aria-hidden", "true");
+  profileBusy = false;
+}
+
+async function loadProfile() {
+  try {
+    const r = await gregaiFetch("/api/profil");
+    return await r.json();
+  } catch (e) {
+    return { exists: true, profile: {} };
+  }
+}
+
+async function saveProfile(skip = false) {
+  if (profileBusy) return;
+  profileBusy = true;
+  profileSetStatus("Zapisuję…");
+  try {
+    const r = await gregaiFetch("/api/profil", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(skip ? { skip: true } : profileFromForm()),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (data.error) throw new Error(data.error);
+    profileSetStatus("Zapisano. Profil działa od następnej wiadomości.", "ok");
+    setTimeout(closeProfileModal, 550);
+  } catch (e) {
+    profileSetStatus("Nie udało się zapisać profilu: " + (e.message || "błąd"), "err");
+    profileBusy = false;
+  }
+}
+
+function initProfile() {
+  const btn = document.getElementById("profile-btn");
+  if (btn) btn.addEventListener("click", async () => {
+    const data = await loadProfile();
+    openProfileModal(data.exists === false, data.profile || {});
+  });
+  const cancel = document.getElementById("profil-cancel");
+  if (cancel) cancel.addEventListener("click", closeProfileModal);
+  const skip = document.getElementById("profil-skip");
+  if (skip) skip.addEventListener("click", () => saveProfile(true));
+  const save = document.getElementById("profil-save");
+  if (save) save.addEventListener("click", () => saveProfile(false));
+  const overlay = document.getElementById("profile-modal-overlay");
+  if (overlay) {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay && !profileModalOnboarding) closeProfileModal();
+    });
+  }
+  // Onboarding tylko przy braku pliku profilu; "Pomiń" zapisuje neutralny profil,
+  // więc modal nie wraca przy każdym odświeżeniu.
+  loadProfile().then((data) => {
+    if (data && data.exists === false) openProfileModal(true, data.profile || {});
+  });
+}
+
 function initChat() {
+  initProfile();
+  initChatScroll();
   // Przełącznik Rozmowa/Węzły: ta sama para przycisków w rogu obu paneli
   // (patrz index.html #chat-rail/.rail-top i #nodes-topbar) - tylko
   // przycisk prowadzący do DRUGIEGO widoku ma nasłuch, bo ten na aktualnym
@@ -2734,6 +3103,28 @@ function initChat() {
   });
 
   refreshModelBadge();
+  refreshRailVersion();
+}
+
+// 1.45.5: wersja w szynie pochodzi z /api/system_info. Wcześniej HTML miał
+// wpisaną starą wersję, a /api/status nie zwraca pola version, więc napis
+// nigdy się nie aktualizował. Gdy API nie odpowie, zostaje "–".
+function setRailVersion(version) {
+  const el = document.getElementById("rail-version");
+  if (!el) return;
+  const text = typeof version === "string" ? version.trim() : "";
+  el.textContent = text || "–";
+}
+
+async function refreshRailVersion() {
+  try {
+    const res = await gregaiFetch("/api/system_info");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    setRailVersion(data && data.version);
+  } catch (e) {
+    setRailVersion("");
+  }
 }
 
 async function refreshModelBadge() {
@@ -2744,8 +3135,6 @@ async function refreshModelBadge() {
     const res = await gregaiFetch("/api/status");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const versionEl = document.getElementById("rail-version");
-    if (versionEl && data.version) versionEl.textContent = data.version;
     if (data.model_active) {
       badge.textContent = "Model na laptopie: działa";
       badge.className = "chat-model-badge active";
@@ -2958,10 +3347,13 @@ function appendChatBubble(role, text) {
   const empty = messages.querySelector(".chat-empty");
   if (empty) empty.remove();
   const bubble = document.createElement("div");
-  bubble.className = `chat-bubble ${role}`;
-  markAlertBubble(bubble, role, text);
-  bubble.innerHTML = renderMarkdownLite(text);
-  if (role === "assistant") addCopyButton(bubble, text);
+  if (role === "assistant") {
+    applyAssistantMarkup(bubble, text);
+  } else {
+    bubble.className = `chat-bubble ${role}`;
+    markAlertBubble(bubble, role, text);
+    bubble.innerHTML = renderMarkdownLite(text);
+  }
   appendToChat(bubble, { force: role === "user" });
   if (role === "user") {
     bubble.classList.add("crack-user");
@@ -3019,7 +3411,7 @@ function buildChatCard(card) {
     renderDiagnosisCard(card, rows);
   } else if (card.type === "namysl") {
     el.classList.add("chat-card-namysl");
-    renderNamyslCard(card, rows);
+    renderNamyslCard(card, rows, el);
   } else if (card.type === "skrot") {
     // Karta odtworzona z pamięci przeglądarki: bez treści wyniku (1.19.0).
     rows.push(`<div class="chat-card-row chat-card-dim">${escapeHtml(card.label || "karta narzędzia")} (szczegóły tylko w trakcie rozmowy, nie są zapisywane w przeglądarce)</div>`);
@@ -3570,6 +3962,158 @@ const NAMYSL_PHASE_LABELS = {
   sprawdzenie: "Sprawdzenie",
 };
 const NAMYSL_PHASES = ["rozpoznanie", "zbieranie", "szkic", "krytyka", "poprawa", "sprawdzenie"];
+// 1.41.0: fazy kodu (bez LLM). Backend przysyła `kod` w zdarzeniach i karcie;
+// ten zbiór jest fallbackiem dla zdarzeń zapisanych przed 1.41.0.
+const NAMYSL_CODE_PHASES = new Set(["zbieranie", "sprawdzenie"]);
+const NAMYSL_PROVIDER_META = {
+  anthropic: { icon: "🟣", label: "Claude" },
+  gemini: { icon: "🟢", label: "Gemini" },
+  groq: { icon: "🟠", label: "Groq" },
+  openrouter: { icon: "🟤", label: "OpenRouter" },
+  huggingface: { icon: "🟡", label: "Hugging Face" },
+  cloudflare: { icon: "🟧", label: "Cloudflare" },
+  lokalnie: { icon: "🔵", label: "Lokalny" },
+};
+const NAMYSL_KORYTO_META = {
+  anthropic: { num: 1, label: "Koryto 1" },
+  darmowe: { num: 2, label: "Koryto 2" },
+  lokalnie: { num: 3, label: "Koryto 3" },
+};
+// 1.45.6: jeden kanoniczny tekst statusu dla całego UI. Czas i dostawca
+// pokazują się osobno (timer, badge providera), nie w tym tekście.
+function namyslStatusText(st, opts = {}) {
+  const safe = st || {};
+  const status = opts.status || safe.status || "waiting";
+  if (status === "done") {
+    const totalS = Number(opts.totalS);
+    if (!Number.isFinite(totalS)) return "Zakończono";
+    return `Zakończono \u00b7 ${totalS.toFixed(1).replace(".", ",")}s`;
+  }
+  if (status === "error") {
+    return `Przełączam na ${namyslProviderMeta(safe.provider).label}\u2026`;
+  }
+  if (safe.offline) return "Offline \u2013 myślę lokalnie\u2026";
+  if (safe.current) return "Myślę\u2026";
+  const errFaza = Object.keys(safe.err || {})[0];
+  if (errFaza) {
+    const reason = ntErrReason(safe.err[errFaza]);
+    return `Błąd: ${reason === "\u2717" ? "nieznany" : reason}`;
+  }
+  const started = Object.keys(safe.state || {}).length > 0;
+  return started ? "Myślę\u2026" : "Inicjuję\u2026";
+}
+
+function namyslProviderMeta(name) {
+  return NAMYSL_PROVIDER_META[name] || { icon: "⚪", label: String(name || "—") };
+}
+
+function namyslKorytoMeta(stage) {
+  return NAMYSL_KORYTO_META[stage] || { num: 0, label: "Koryto ?" };
+}
+
+function namyslKorytoOfProvider(name) {
+  if (name === "anthropic") return "anthropic";
+  if (name === "lokalnie") return "lokalnie";
+  return name ? "darmowe" : "";
+}
+
+function namyslKorytoClass(stage) {
+  const num = namyslKorytoMeta(stage).num;
+  return num ? `koryto-${num}` : "koryto-0";
+}
+
+function namyslIsCode(faza, kod) {
+  return kod === true || NAMYSL_CODE_PHASES.has(String(faza || ""));
+}
+
+function namyslHeadBadges(st, statusOverride = "", opts = {}) {
+  const provider = st.provider || "";
+  const koryto = st.koryto || namyslKorytoOfProvider(provider);
+  const pm = namyslProviderMeta(provider);
+  const km = namyslKorytoMeta(koryto);
+  const status = statusOverride || st.status || "waiting";
+  const statusLabel = namyslStatusText(st, { status, totalS: opts.totalS });
+  const parts = [
+    `<span class="nk-provider" title="Dostawca cyklu: ${escapeHtml(pm.label)}">` +
+      `<span class="nk-provider-icon" aria-hidden="true">${pm.icon}</span>` +
+      `<span class="nk-provider-name">${escapeHtml(pm.label)}</span></span>`,
+    `<span class="nk-koryto nk-koryto-${km.num || 0}" title="${escapeHtml(km.label)}">${escapeHtml(km.label)}</span>`,
+  ];
+  if (Number(st.restarts) > 0) {
+    parts.push(`<span class="nk-restarts" title="Liczba restartów cyklu">↻ ${Number(st.restarts)}</span>`);
+  }
+  if (!opts.noStatus) {
+    parts.push(`<span class="nk-status nk-status-${status}" title="${escapeHtml(statusLabel)}">` +
+      `<span class="nk-status-dot" aria-hidden="true"></span>` +
+      `<span class="nk-status-label">${escapeHtml(statusLabel)}</span></span>`);
+  }
+  return parts.join("");
+}
+
+function namyslAttemptChain(card, finalProvider) {
+  const out = [];
+  const add = (name, etap) => {
+    if (!name) return;
+    const et = etap || namyslKorytoOfProvider(name);
+    const prev = out[out.length - 1];
+    if (prev && prev.name === name) { prev.etap = et; return; }
+    out.push({ name, etap: et });
+  };
+  for (const p of (Array.isArray(card.proby) ? card.proby : [])) {
+    add(p.dostawca || p.provider, p.etap || p.koryto);
+  }
+  add(card.dostawca || finalProvider, card.koryto);
+  return out;
+}
+
+function namyslCardMeta(card, fazy) {
+  const list = Array.isArray(fazy) ? fazy : [];
+  const lastKto = [...list].reverse().map((f) => f && f.kto).find(Boolean) || "";
+  const provider = card.dostawca || lastKto || "";
+  const koryto = card.koryto || namyslKorytoOfProvider(provider);
+  const proby = Array.isArray(card.proby) ? card.proby : [];
+  return {
+    provider,
+    koryto,
+    offline: card.offline === true,
+    restarts: proby.length,
+    proby,
+    plan: Array.isArray(card.dostawcy_plan) ? card.dostawcy_plan : [],
+  };
+}
+
+function namyslSummary(card, meta, chain) {
+  const total = (typeof card.klient_s === "number") ? card.klient_s : (Number(card.czas_s) || 0);
+  const attempts = meta.restarts + 1;
+  const last = (chain && chain.length) ? chain[chain.length - 1] : { name: meta.provider, etap: meta.koryto };
+  const pm = namyslProviderMeta(last.name || meta.provider);
+  const km = namyslKorytoMeta(last.etap || meta.koryto);
+  let text = `Namysł zakończony · ${ntSecs(total)} · ${pm.label} (${km.label})`;
+  if (attempts > 1) {
+    const names = chain.length > 1
+      ? chain.map((x) => namyslProviderMeta(x.name).label).join(" → ")
+      : pm.label;
+    const nums = chain.map((x) => namyslKorytoMeta(x.etap).num).filter(Boolean);
+    const koryta = nums.length > 1 ? ` (Koryto ${nums.join("→")})` : "";
+    text = `Namysł zakończony · ${ntSecs(total)} · ${attempts} ${pluralPl(attempts, "próba", "próby", "prób")} · ${names}${koryta}`;
+  }
+  return `<div class="nk-summary"><span class="nk-summary-check" aria-hidden="true">✓</span>` +
+    `<span>${escapeHtml(text)}</span></div>`;
+}
+
+// 1.41.0: przygotowanie pod przyszły tryb jasny. Dziś motyw jest ciemny, ale
+// kolory koryt są w custom properties, więc wystarczy nadpisać je w CSS.
+const NAMYSL_LIGHT_MEDIA = (typeof window !== "undefined" && window.matchMedia)
+  ? window.matchMedia("(prefers-color-scheme: light)") : null;
+function syncNamyslScheme() {
+  if (typeof document === "undefined") return;
+  document.documentElement.dataset.namyslScheme = (NAMYSL_LIGHT_MEDIA && NAMYSL_LIGHT_MEDIA.matches) ? "light" : "dark";
+}
+if (NAMYSL_LIGHT_MEDIA) {
+  if (NAMYSL_LIGHT_MEDIA.addEventListener) NAMYSL_LIGHT_MEDIA.addEventListener("change", syncNamyslScheme);
+  else if (NAMYSL_LIGHT_MEDIA.addListener) NAMYSL_LIGHT_MEDIA.addListener(syncNamyslScheme);
+}
+syncNamyslScheme();
 
 function formatSeconds(s) {
   // Audyt 1.32.1: zaokrąglamy PRZED podziałem (59,96 s dawało „60 s”, 119,6 s - „1m 60s”)
@@ -3590,12 +4134,42 @@ function namyslState(events) {
   const phases = (first && Array.isArray(first.fazy) && first.fazy.length) ? first.fazy : NAMYSL_PHASES;
   const labels = Object.assign({}, NAMYSL_PHASE_LABELS, (first && first.labels) || {});
   const state = {}, sub = {}, secs = {}, who = {}, acts = {}, startedAt = {}, err = {};
-  let current = null, last = null;
+  let current = null, last = null, finished = false;
+  let provider = "", koryto = "", offline = false, restarts = 0, restartDetail = "";
+  let plan = [];
+
+  const resetPhases = () => {
+    for (const f of phases) {
+      delete state[f]; delete sub[f]; delete secs[f]; delete who[f];
+      delete acts[f]; delete startedAt[f]; delete err[f];
+    }
+    current = null;
+  };
+
   for (const ev of events || []) {
     if (!ev || !ev.faza) continue;
     last = ev;
-    if (ev.faza === "namysl") continue;
     if (ev.kto) who[ev.faza] = ev.kto;
+    if (ev.faza === "namysl") {
+      if (ev.etap === "start") {
+        provider = ev.provider || provider;
+        koryto = ev.koryto || koryto;
+        offline = ev.offline === true;
+        plan = Array.isArray(ev.plan) ? ev.plan : plan;
+      } else if (ev.etap === "restart") {
+        // 1.41.0: restart = NOWY cykl. Stare fazy wracają do „oczekuje”,
+        // licznik prób rośnie, a kolor zmienia się na koryto nowego dostawcy.
+        restarts += 1;
+        provider = ev.provider || provider;
+        koryto = ev.koryto || koryto;
+        restartDetail = ev.detail || "";
+        resetPhases();
+      } else if (ev.etap === "koniec") {
+        finished = true;
+        current = null;
+      }
+      continue;
+    }
     if (ev.etap === "start") {
       state[ev.faza] = "active"; current = ev.faza; sub[ev.faza] = ev.label;
       startedAt[ev.faza] = Number(ev._at) || null;
@@ -3607,15 +4181,23 @@ function namyslState(events) {
     } else if (ev.etap === "info") {
       sub[ev.faza] = ev.label;
       if (ev.label) (acts[ev.faza] = acts[ev.faza] || []).push(ev.label);
-      // 1.33.0: faza, której nie uratował nawet lokalny model, dostaje ✗ i powód
+      // Faza, której nie uratował nawet lokalny model, dostaje ✗ i powód
       // (np. „HTTP 413”) - zamiast wyglądać na zwykłe zakończenie.
       if (/^Model nie odpowiedzia\u0142/i.test(String(ev.label || ""))) err[ev.faza] = ev.detail || ev.label;
     }
   }
-  const finished = !!(last && last.faza === "namysl" && last.etap === "koniec");
   // 1.30.13: dla fazy AKTYWNEJ pokazujemy bogatszy, bieżący opis (last.detail).
   if (current && last && last.detail && last.faza === current) sub[current] = last.detail;
-  return { phases, labels, state, sub, secs, who, acts, startedAt, err, current, last, finished };
+  if (!provider) provider = Object.values(who).filter(Boolean).pop() || "";
+  if (!koryto && provider) koryto = namyslKorytoOfProvider(provider);
+  let status = "waiting";
+  if (finished) status = "done";
+  else if (last && last.faza === "namysl" && last.etap === "restart") status = "error";
+  else if (last) status = "active";
+  return {
+    phases, labels, state, sub, secs, who, acts, startedAt, err, current, last, finished,
+    provider, koryto, offline, restarts, attempts: restarts + 1, restartDetail, plan, status,
+  };
 }
 
 // --- 1.33.0: stepper 6 faz nad composerem ---------------------------------
@@ -3683,17 +4265,61 @@ function ntRecordPhases(fresh) {
 let ntLast = { events: [], finished: false };
 let ntPrevPhase = "";
 let ntTickTimer = null;
+let ntLastRestarts = 0;
+let ntToastTimer = null;
+
+function namyslHideToast() {
+  if (ntToastTimer) { clearTimeout(ntToastTimer); ntToastTimer = null; }
+  const el = document.getElementById("namysl-toast");
+  if (el) el.classList.remove("show");
+}
+
+function namyslShowToast(text, koryto) {
+  let el = document.getElementById("namysl-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "namysl-toast";
+    el.className = "namysl-toast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    document.body.appendChild(el);
+  }
+  el.classList.remove("koryto-0", "koryto-1", "koryto-2", "koryto-3");
+  el.classList.add(namyslKorytoClass(koryto));
+  el.textContent = text;
+  el.classList.remove("show");
+  void el.offsetWidth;
+  el.classList.add("show");
+  if (ntToastTimer) clearTimeout(ntToastTimer);
+  ntToastTimer = setTimeout(() => { el.classList.remove("show"); ntToastTimer = null; }, 3000);
+}
 
 function ntStopTick() {
   if (ntTickTimer) { clearInterval(ntTickTimer); ntTickTimer = null; }
 }
 
+let ntHideTimer = null;
+let ntHiddenTimer = null;
+
+function ntStopHide() {
+  if (ntHideTimer) { clearTimeout(ntHideTimer); ntHideTimer = null; }
+  if (ntHiddenTimer) { clearTimeout(ntHiddenTimer); ntHiddenTimer = null; }
+}
+
 function resetNamyslTrack() {
   ntStopTick();
+  ntStopHide();
   ntLast = { events: [], finished: false };
   ntPrevPhase = "";
+  ntLastRestarts = 0;
+  namyslHideToast();
   const track = document.getElementById("namysl-track");
-  if (track) track.classList.add("hidden");
+  if (track) {
+    track.classList.add("hidden");
+    track.classList.remove("koryto-0", "koryto-1", "koryto-2", "koryto-3", "nt-koryto", "is-offline", "nk-flash",
+      "nt-expanded", "nt-collapse", "nt-done", "nt-error", "nt-hidden", "done");
+    track.setAttribute("aria-expanded", "false");
+  }
   const guide = document.getElementById("chat-guide");
   if (guide) guide.classList.remove("hidden");
 }
@@ -3704,9 +4330,24 @@ function renderNamyslTrack(events, finished = false) {
   if (!events || !events.length) { resetNamyslTrack(); return; }
   const st = namyslState(events);
   const done = !!finished || st.finished;
+  const koryto = st.koryto || namyslKorytoOfProvider(st.provider);
+  const restarts = Number(st.restarts) || 0;
+  const firstRender = !ntLast.events.length;
+  const wasHidden = track.classList.contains("hidden") || track.classList.contains("nt-hidden");
   ntLast = { events, finished: done };
-  track.classList.remove("hidden");
+  ntStopHide();
+  track.classList.remove("hidden", "nt-hidden", "nt-collapse");
+  // 1.45.9: pasek zabiera 36 px wysokości czatu. Jeśli pojawia się po raz
+  // pierwszy, dociągnij rozmowę do dołu - inaczej dymka „...” zostaje
+  // przycięta dokładnie na krawędzi paska. Tylko gdy użytkownik jest przy
+  // dole; kto czyta starsze, zostaje tam (1.45.8).
+  if (wasHidden && chatPinned) scrollChatToBottom({ smooth: false });
   track.classList.toggle("done", done);
+  track.classList.remove("koryto-0", "koryto-1", "koryto-2", "koryto-3");
+  track.classList.add(namyslKorytoClass(koryto), "nt-koryto");
+  track.classList.toggle("is-offline", !!st.offline);
+  track.classList.remove("nt-error");
+  track.dataset.koryto = String(namyslKorytoMeta(koryto).num || "");
   // W trakcie myślenia stepper zastępuje pojedyncze zdanie prowadzenia;
   // po zakończeniu wraca ono, a stepper zostaje jako metryka.
   const guide = document.getElementById("chat-guide");
@@ -3719,8 +4360,58 @@ function renderNamyslTrack(events, finished = false) {
   if (!done && last._at) total += (Date.now() - last._at) / 1000;
   const totalEl = track.querySelector(".nt-track-timer");
   if (totalEl) totalEl.textContent = done ? "" : ntSecs(total);
+  // 1.45.8: kompaktowy pasek niesie status, nie nazwę karty. Błąd po
+  // zakończeniu ma pierwszeństwo przed „Zakończono”.
+  const errorText = Object.values(st.err || {})[0] || "";
+  const hasError = done && !!errorText;
+  const statusText = hasError
+    ? `Błąd: ${ntErrReason(errorText) === "\u2717" ? "nieznany" : ntErrReason(errorText)}`
+    : namyslStatusText(st, { status: done ? "done" : st.status, totalS: done ? total : undefined });
+  const statusIcon = hasError ? "✗" : done ? "✓" : "●";
   const titleEl = track.querySelector(".nt-track-title");
-  if (titleEl) titleEl.textContent = done ? `Namysł \u2014 ${ntSecs(total)}` : "Namysł";
+  if (titleEl) titleEl.textContent = `${statusIcon} ${statusText}`;
+  track.classList.toggle("nt-done", done && !hasError);
+  track.classList.toggle("nt-error", hasError);
+  track.classList.remove("nt-collapse");
+
+  // 1.41.0: pasek meta karty cyklu - dostawca, koryto, restarty, status.
+  // Aktualizujemy tylko przy zmianie podpisu, żeby pulsowanie i animacja
+  // licznika restartów nie zaczynały się od nowa przy każdym odświeżeniu.
+  const head = track.querySelector(".nt-track-head");
+  let meta = track.querySelector(".nt-track-meta");
+  if (head && !meta) {
+    meta = document.createElement("span");
+    meta.className = "nt-track-meta";
+    const anchor = head.querySelector(".nt-track-title");
+    if (anchor && anchor.nextSibling) head.insertBefore(meta, anchor.nextSibling);
+    else head.appendChild(meta);
+  }
+  if (meta) {
+    const status = done ? "done" : st.status;
+    // Status zależy też od tego, czy ruszyła już konkretna faza - bez tego
+    // "Inicjuję…" zostałoby na ekranie po pierwszym zdarzeniu fazy.
+    const sig = [st.provider, koryto, st.offline ? "1" : "0", restarts, status,
+      done ? total.toFixed(1) : "", st.current || "",
+      Object.keys(st.state || {}).length, Object.keys(st.err || {}).length].join("|");
+    if (meta.dataset.sig !== sig) {
+      meta.dataset.sig = sig;
+      meta.innerHTML = namyslHeadBadges({ ...st, restarts }, status, { totalS: done ? total : undefined, noStatus: true });
+    }
+  }
+  if (restarts > ntLastRestarts && !done && !firstRender) {
+    const pm = namyslProviderMeta(st.provider);
+    const km = namyslKorytoMeta(koryto);
+    namyslShowToast(`Przełączam na ${pm.label}\u2026`, koryto);
+    ntPrevPhase = "";
+    track.classList.remove("nk-flash");
+    void track.offsetWidth;
+    track.classList.add("nk-flash");
+    setTimeout(() => track.classList.remove("nk-flash"), 500);
+  } else if (restarts < ntLastRestarts) {
+    namyslHideToast();
+  }
+  ntLastRestarts = restarts;
+
   // Jeden timer w całym UI: gdy stepper jest widoczny, pigułka w nagłówku
   // chowa się (jej funkcję otwierania panelu przejmuje klik w stepper).
   const pill = document.getElementById("progress-pill");
@@ -3732,11 +4423,31 @@ function renderNamyslTrack(events, finished = false) {
   if (!track.dataset.clickable) {
     track.dataset.clickable = "1";
     track.classList.add("nt-track-clickable");
-    track.title = "Zobacz pełny przebieg w panelu „Ta rozmowa”";
-    track.addEventListener("click", () => {
-      setChatDrawerOpen(true);
-      const section = document.getElementById("drawer-progress");
-      if (section) { section.classList.remove("hidden"); section.open = true; }
+    track.title = "Kliknij, żeby rozwinąć pełny przebieg";
+    track.tabIndex = 0;
+    track.setAttribute("aria-expanded", "false");
+    const toggleExpand = () => {
+      const open = !track.classList.contains("nt-expanded");
+      track.classList.toggle("nt-expanded", open);
+      track.setAttribute("aria-expanded", String(open));
+      if (open) ntStopHide();
+    };
+    track.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleExpand();
+    });
+    track.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleExpand();
+      }
+    });
+    // Klik poza paskiem zwija pełny stepper.
+    document.addEventListener("click", (e) => {
+      if (!track.classList.contains("nt-expanded")) return;
+      if (track.contains(e.target)) return;
+      track.classList.remove("nt-expanded");
+      track.setAttribute("aria-expanded", "false");
     });
   }
 
@@ -3760,13 +4471,15 @@ function renderNamyslTrack(events, finished = false) {
     if (s === "active" || s === "done" || s === "skipped") activeIndex = i + 1;
   }
   track.setAttribute("aria-valuenow", String(activeIndex));
-  track.setAttribute("aria-valuetext", done ? "Namysł zakończony"
-    : (st.current ? `Namysł: ${st.labels[st.current] || st.current}` : "Namysł w toku"));
+  const ariaModel = `${namyslProviderMeta(st.provider).label}, ${namyslKorytoMeta(koryto).label}` +
+    (st.offline ? ", offline" : "");
+  track.setAttribute("aria-valuetext", `${statusText} — ${ariaModel}`);
 
   for (const step of track.querySelectorAll(".nt-track-step")) {
     const f = step.dataset.faza;
     const state = st.state[f] || "";
     const isErr = !!st.err[f];
+    const code = namyslIsCode(f);
     if (state === "active" && !isErr && ntPrevPhase !== f) {
       ntPrevPhase = f;
       visualClick(0.03);
@@ -3775,6 +4488,46 @@ function renderNamyslTrack(events, finished = false) {
     step.classList.toggle("done", state === "done" && !isErr);
     step.classList.toggle("skip", state === "skipped");
     step.classList.toggle("err", isErr);
+    step.classList.toggle("waiting", !state && !isErr);
+    step.classList.toggle("is-code", code);
+    step.classList.toggle("is-llm", !code);
+    const nameEl = step.querySelector(".nt-track-name");
+    if (nameEl) {
+      let icon = nameEl.querySelector(".nt-track-icon");
+      if (!icon) {
+        icon = document.createElement("span");
+        icon.className = "nt-track-icon";
+        icon.setAttribute("aria-hidden", "true");
+        if (nameEl.firstChild) nameEl.insertBefore(icon, nameEl.firstChild);
+        else nameEl.appendChild(icon);
+      }
+      icon.textContent = code ? "⚙️" : namyslProviderMeta(st.provider).icon;
+    }
+    let modelEl = step.querySelector(".nt-track-model");
+    if (!modelEl) {
+      modelEl = document.createElement("span");
+      modelEl.className = "nt-track-model";
+      const timeAnchor = step.querySelector(".nt-track-time");
+      if (timeAnchor) step.insertBefore(modelEl, timeAnchor);
+      else step.appendChild(modelEl);
+    }
+    modelEl.textContent = code ? "kod" : namyslProviderMeta(st.provider).label;
+    // 1.45.6: narracja na żywo pod AKTYWNĄ fazą (wcześniej tylko w dymku).
+    let detailEl = step.querySelector(".nt-track-detail");
+    const detailText = state === "active" && !isErr
+      ? (st.sub[f] || (st.acts[f] && st.acts[f].length ? st.acts[f][st.acts[f].length - 1] : ""))
+      : "";
+    if (detailText) {
+      if (!detailEl) {
+        detailEl = document.createElement("span");
+        detailEl.className = "nt-track-detail";
+        step.appendChild(detailEl);
+      }
+      detailEl.textContent = detailText;
+      detailEl.title = detailText;
+    } else if (detailEl) {
+      detailEl.remove();
+    }
     const timeEl = step.querySelector(".nt-track-time");
     if (timeEl) {
       if (isErr) timeEl.textContent = ntErrReason(st.err[f]);
@@ -3785,11 +4538,26 @@ function renderNamyslTrack(events, finished = false) {
       else if (state === "skipped") timeEl.textContent = "\u2014";
       else timeEl.textContent = "";
     }
-    step.title = isErr ? String(st.err[f] || "") : (st.sub[f] || "");
+    step.title = isErr ? String(st.err[f] || "")
+      : (st.sub[f] || (code ? "Faza kodu — bez wywołania modelu" : `Model: ${namyslProviderMeta(st.provider).label}`));
   }
 
-  if (done) ntStopTick();
-  else if (!ntTickTimer) {
+  if (done) {
+    ntStopTick();
+    // 1.45.8: zakończony (bez błędu) pasek zwija się po 5 s i znika. Błąd
+    // zostaje widoczny, dopóki użytkownik sam go nie zamknie / nie zacznie
+    // nowej wiadomości (wtedy resetNamyslTrack).
+    if (!hasError) {
+      ntHideTimer = setTimeout(() => {
+        track.classList.add("nt-collapse");
+        ntHideTimer = null;
+        ntHiddenTimer = setTimeout(() => {
+          track.classList.add("hidden", "nt-hidden");
+          ntHiddenTimer = null;
+        }, 450);
+      }, 5000);
+    }
+  } else if (!ntTickTimer) {
     ntTickTimer = setInterval(() => {
       if (!ntLast.events.length) { ntStopTick(); return; }
       renderNamyslTrack(ntLast.events, false);
@@ -3800,10 +4568,12 @@ function renderNamyslTrack(events, finished = false) {
 // Karta "Jak myślałem" pod odpowiedzią: ten sam zapis, który leciał na żywo,
 // tylko już kompletny - fazy (kto, ile), źródła, uwagi recenzenta i
 // sprawdzenia. Zwinięta, żeby nie przykrywać odpowiedzi; rozwijana klikiem.
-function renderNamyslCard(card, rows) {
+function renderNamyslCard(card, rows, el) {
   const fazy = Array.isArray(card.fazy) ? card.fazy : [];
   const n = fazy.filter((f) => !(f.uwaga || "").startsWith("pominięta")).length;
-  const who = [...new Set(fazy.map((f) => f.kto).filter(Boolean))];
+  const meta = namyslCardMeta(card, fazy);
+  const chain = namyslAttemptChain(card, meta.provider);
+  const korytoClass = namyslKorytoClass(meta.koryto);
   // Czas od wysłania (klient_s, mierzony w przeglądarce) jest tym, co czuje
   // użytkownik; czas serwera (czas_s, od startu Namysłu) dopisany tylko, gdy
   // różni się o więcej niż 3 s - wtedy coś między nimi warto wyjaśnić.
@@ -3812,6 +4582,12 @@ function renderNamyslCard(card, rows) {
   let czas = formatSeconds(shown);
   if (typeof card.klient_s === "number" && typeof card.czas_s === "number" && Math.abs(card.czas_s - card.klient_s) > 3) {
     czas += ` (namysł na serwerze ${formatSeconds(card.czas_s)}, fazy ${formatSeconds(fazySum)})`;
+  }
+  if (el) {
+    el.classList.remove("koryto-0", "koryto-1", "koryto-2", "koryto-3");
+    el.classList.add(korytoClass);
+    el.classList.toggle("is-offline", !!meta.offline);
+    el.dataset.koryto = String(namyslKorytoMeta(meta.koryto).num || "");
   }
   // 1.30.20: wykresy z market_history pokazujemy WPROST (nie chowamy pod "Jak
   // myślałem") - to treść analizy, którą użytkownik chce zobaczyć od razu.
@@ -3822,9 +4598,8 @@ function renderNamyslCard(card, rows) {
       if (chartRows.length) rows.push(`<div class="chat-card-subcard">${chartRows.join("")}</div>`);
     }
   }
-  // 1.30.13: nagłówek-przycisk + oś czasu (.ntl-*), wspólna z narracją na żywo.
-  // Odznaka skupienia (1.30.22): waga uwagi 1-4 nadana tej wiadomości. 3-4
-  // pokazujemy wprost (ważne/krytyczne); 1-2 to codzienność, bez odznaki.
+  // 1.30.13/1.41.0: nagłówek karty cyklu - dostawca, koryto, restarty,
+  // status. Odznaka skupienia (1.30.22): waga uwagi 1-4.
   const skupLabels = { 3: "skupienie 3/4", 4: "skupienie 4/4" };
   const skupBadge = (card.skupienie && skupLabels[card.skupienie])
     ? `<span class="ntl-skup ntl-skup-${card.skupienie}">${skupLabels[card.skupienie]}</span>` : "";
@@ -3832,22 +4607,37 @@ function renderNamyslCard(card, rows) {
     `<button type="button" class="namysl-card-toggle" aria-expanded="false">` +
       `<span class="ntl-title">Jak myślałem</span>` +
       skupBadge +
-      `<span class="ntl-meta">${escapeHtml(`${n} ${pluralPl(n, "faza", "fazy", "faz")}`)}${who.length ? " · " + escapeHtml(who.join(", ")) : ""}</span>` +
+      `<span class="nk-head-badges">${namyslHeadBadges({ ...meta, status: "done" }, "done")}</span>` +
+      `<span class="ntl-meta">${escapeHtml(`${n} ${pluralPl(n, "faza", "fazy", "faz")}`)}</span>` +
       `<span class="ntl-timer">${escapeHtml(czas)}</span>` +
       `<span class="namysl-card-chevron">›</span></button>`
   );
   const body = [];
   if (card.cel) body.push(`<div class="ntl-goal">${escapeHtml(card.cel)}${card.rodzaj ? ` <span class="ntl-who">${escapeHtml(card.rodzaj)}</span>` : ""}</div>`);
+  body.push(namyslSummary(card, meta, chain));
   if (fazy.length) {
-    const steps = fazy.map((f) => {
-      const st = (f.uwaga || "").startsWith("pominięta") ? "skip" : "done";
-      const sub = f.uwaga ? `<div class="ntl-sub">${escapeHtml(f.uwaga)}</div>` : "";
-      const whoTag = f.kto ? `<span class="ntl-who">${escapeHtml(f.kto)}</span>` : "";
-      const t = f.sekund ? `<span class="ntl-time">${escapeHtml(formatSeconds(f.sekund))}</span>` : `<span class="ntl-time"></span>`;
-      return `<li class="ntl-step ${st}"><span class="ntl-dot"></span>` +
-        `<div class="ntl-body"><div class="ntl-name">${escapeHtml(NAMYSL_PHASE_LABELS[f.nazwa] || f.nazwa)}</div>${sub}${whoTag}</div>${t}</li>`;
+    const phaseCards = fazy.map((f, i) => {
+      const skipped = String(f.uwaga || "").startsWith("pominięta");
+      const failed = !skipped && /(?:^|\b)(?:błąd|nie odpowiedział|awaria)\b/i.test(String(f.uwaga || ""));
+      const state = skipped ? "skipped" : failed ? "err" : (f.sekund != null ? "done" : "waiting");
+      const code = namyslIsCode(f.nazwa, f.kod);
+      const pm = namyslProviderMeta(f.kto || meta.provider);
+      const name = NAMYSL_PHASE_LABELS[f.nazwa] || f.nazwa || "?";
+      const stateMark = state === "skipped" ? "—" : state === "err" ? "✗" : state === "done" ? "✓" : "…";
+      const time = state === "done" ? ntSecs(f.sekund) : state === "skipped" ? "—" : state === "err" ? "błąd" : "—";
+      const model = code ? "kod" : pm.label;
+      const title = f.uwaga ? String(f.uwaga) : (code ? "Faza kodu — bez wywołania modelu" : `Model: ${pm.label}`);
+      return `<li class="nk-phase ${state}${code ? " is-code" : " is-llm"}" data-faza="${escapeHtml(f.nazwa || "")}" ` +
+        `title="${escapeHtml(title)}" aria-label="${escapeHtml(`${i + 1}. ${name}: ${stateMark} ${time}, ${model}`)}">` +
+        `<span class="nk-phase-icon" aria-hidden="true">${code ? "⚙️" : pm.icon}</span>` +
+        `<span class="nk-phase-state" aria-hidden="true">${stateMark}</span>` +
+        `<span class="nk-phase-name"><span class="nk-phase-num">${i + 1}</span>${escapeHtml(name)}</span>` +
+        `<span class="nk-phase-model">${escapeHtml(model)}</span>` +
+        `<span class="nk-phase-time">${escapeHtml(time)}</span></li>`;
     }).join("");
-    body.push(`<ol class="ntl-steps">${steps}</ol>`);
+    const doneCount = fazy.filter((f) => !(f.uwaga || "").startsWith("pominięta")).length;
+    body.push(`<ol class="nk-phases" role="progressbar" aria-valuemin="1" aria-valuemax="${fazy.length}" ` +
+      `aria-valuenow="${doneCount}" aria-valuetext="${escapeHtml(`Namysł zakończony — ${namyslProviderMeta(meta.provider).label}, ${namyslKorytoMeta(meta.koryto).label}`)}">${phaseCards}</ol>`);
   }
   const foot = [];
   const chipRow = (label, items) => `<div class="ntl-foot-row"><span class="ntl-foot-label">${label}</span>${items.map((z) => `<span class="ntl-chip">${escapeHtml(z)}</span>`).join("")}</div>`;
@@ -3855,15 +4645,21 @@ function renderNamyslCard(card, rows) {
   if (Array.isArray(card.zrodla) && card.zrodla.length) foot.push(chipRow("Źródła", card.zrodla));
   if (Array.isArray(card.problemy) && card.problemy.length) foot.push(chipRow("Uwagi recenzenta", card.problemy));
   if (Array.isArray(card.uwagi) && card.uwagi.length) foot.push(chipRow("Uwagi sprawdzenia", card.uwagi));
+  if (meta.proby.length) {
+    const proby = meta.proby.map((p) => `${p.dostawca || p.provider || "?"}` +
+      `${p.faza ? ` (${p.faza})` : ""}${p.powod ? `: ${p.powod}` : ""}`);
+    foot.push(`<div class="ntl-foot-row ntl-dim"><span class="ntl-foot-label">Próby</span>` +
+      `<span class="ntl-foot-text">${escapeHtml(proby.join(" | "))}</span></div>`);
+  }
   if (card.pulapki) foot.push(`<div class="ntl-foot-row"><span class="ntl-foot-label">Pułapki</span><span class="ntl-foot-text">${escapeHtml(card.pulapki)}</span></div>`);
   if (card.powod) foot.push(`<div class="ntl-foot-row ntl-dim">Dlaczego namysł: ${escapeHtml(card.powod)}${card.material_prywatny ? (card.material_do_sieci ? " · materiał prywatny poszedł do sieciowych AI (Twoja zgoda w ustawieniach)" : " · materiał prywatny liczony tylko lokalnie") : ""}</div>`);
   if (foot.length) body.push(`<div class="ntl-foot">${foot.join("")}</div>`);
   rows.push(`<div class="namysl-card-body" hidden>${body.join("")}</div>`);
 }
 
-// Oś faz na żywo. Rysowana w dymku "pisze…" z listy zdarzeń backendu
-// (GET /api/chat/progress). Stan każdej fazy wynika ze zdarzeń
-// start/koniec/pominieta; opis bieżącej fazy to ostatnie zdarzenie.
+// Szczegółowy przebieg w szufladzie "Postęp" (panel Ta rozmowa). Od 1.45.6
+// NIE rysuje niczego w dymku "pisze…" - tam jest tylko stepper nad composerem.
+// Stan każdej fazy wynika ze zdarzeń start/koniec/pominieta.
 function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
   if (!container || !events.length) return;
   let live = container.querySelector(".namysl-live");
@@ -3873,32 +4669,29 @@ function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
     container.appendChild(live);
   }
   const st = namyslState(events);
-  const { phases, labels, state, sub, secs, who, acts, startedAt, err, current, last } = st;
+  const { phases, labels, state, sub, secs, who, acts, err } = st;
   // 1.18.0: "zakończony" także wtedy, gdy wywołujący WIE, że odpowiedź już
   // przyszła (forceFinished), a ostatnie zdarzenie "namysl/koniec" jeszcze nie
-  // dotarło - inaczej panel "Postęp" zostawał na zawsze "w toku".
+  // dotarło - inaczej panel "Postęp" zostawał na zawsze w trakcie.
   const finished = forceFinished || st.finished;
-  // 1.33.0: heartbeat narracji - co 5 s przy aktywnej fazie dopisujemy
-  // "…przetwarzam (Ns)", żeby tekst nie wyglądał na zamrożony. Wartość
-  // zaokrąglana do 5 s, więc zmienia się co 5 s mimo odczytu co 1,5 s.
-  let heartbeat = "";
-  if (current && startedAt[current]) {
-    const since = Math.floor((Date.now() - startedAt[current]) / 1000);
-    if (since >= 5) heartbeat = `\u2026przetwarzam (${Math.floor(since / 5) * 5} s)`;
-  }
-  // Kto brał udział (do nagłówka), w kolejności pojawiania się.
-  const whoSeen = [];
-  for (const f of phases) { if (who[f] && !whoSeen.includes(who[f])) whoSeen.push(who[f]); }
-  // 1.33.3 (audyt #18): po zakończeniu JEDEN wiersz "Namysł — 34s"; w trakcie
-  // tytuł + dostawcy, ale bez drugiego timera - ten jest tylko w stepperze.
-  const head = `<div class="ntl-head"><span class="ntl-title">${finished
-    ? `Namysł \u2014 ${escapeHtml(formatSeconds(elapsedMs / 1000))}`
-    : "Namysł w toku"}</span>` +
-    (!finished && whoSeen.length ? `<span class="ntl-meta">${escapeHtml(whoSeen.join(", "))}</span>` : "") + `</div>`;
+  const koryto = st.koryto || namyslKorytoOfProvider(st.provider);
+  const korytoClass = namyslKorytoClass(koryto);
+  live.classList.remove("koryto-0", "koryto-1", "koryto-2", "koryto-3");
+  live.classList.add(korytoClass, "nt-koryto");
+  live.classList.toggle("is-offline", !!st.offline);
+  live.setAttribute("aria-live", "polite");
+  live.setAttribute("aria-atomic", "false");
+  // 1.41.0: nagłówek narracji ma ten sam pasek meta co karta cyklu:
+  // dostawca, koryto, restarty i status. Kolor koryta dziedziczy całość.
+  const head = `<div class="ntl-head"><span class="ntl-title">Namysł</span>` +
+    `<span class="nk-head-badges">${namyslHeadBadges({ ...st, restarts: st.restarts }, finished ? "done" : st.status, { totalS: finished ? elapsedMs / 1000 : undefined })}</span>` +
+    `</div>`;
   // 1.30.13 (zgłoszenie Grzegorza): oś "rośnie" z postępem - pokazujemy TYLKO fazy,
   // które już się zaczęły (active/done/skipped). Dalsze są schowane, aż ruszą.
   const list = `<ol class="ntl-steps">` + phases.filter((f) => state[f]).map((f) => {
     const stepState = err[f] ? "err" : (state[f] === "active" ? "active" : state[f] === "skipped" ? "skip" : "done");
+    const code = namyslIsCode(f, (events.find((ev) => ev && ev.faza === f) || {}).kod);
+    const pm = namyslProviderMeta(who[f] || st.provider);
     // 1.30.15: jeśli faza ma konkretne podkroki (np. zbieranie: "Szukam w sieci: …",
     // "Sprawdzam notowanie: …"), pokaż je rozpisane; inaczej jedno-liniowy opis fazy.
     const a = acts[f];
@@ -3910,15 +4703,14 @@ function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
     } else {
       detail = sub[f] ? `<div class="ntl-sub">${escapeHtml(sub[f])}</div>` : "";
     }
-    if (f === current && heartbeat) {
-      detail += `<div class="ntl-sub ntl-hb">${escapeHtml(heartbeat)}</div>`;
-    }
-    const whoTag = who[f] ? `<span class="ntl-who">${escapeHtml(who[f])}</span>` : "";
+    const kindIcon = code ? "⚙️" : pm.icon;
+    const whoTag = `<span class="ntl-who">${escapeHtml(code ? "kod" : pm.label)}</span>`;
     const t = secs[f] != null ? `<span class="ntl-time">${escapeHtml(formatSeconds(secs[f]))}</span>`
             : (stepState === "active" ? `<span class="ntl-time">…</span>` : `<span class="ntl-time"></span>`);
     const errTitle = err[f] ? ` title="${escapeHtml(String(err[f]).slice(0, 300))}"` : "";
-    return `<li class="ntl-step ${stepState}"${errTitle}><span class="ntl-dot"></span>` +
-      `<div class="ntl-body"><div class="ntl-name">${escapeHtml(labels[f] || f)}</div>${detail}${whoTag}</div>${t}</li>`;
+    return `<li class="ntl-step ${stepState}${code ? " is-code" : " is-llm"}"${errTitle}><span class="ntl-dot"></span>` +
+      `<div class="ntl-body"><div class="ntl-name"><span class="ntl-kind-icon" aria-hidden="true">${kindIcon}</span>` +
+      `${escapeHtml(labels[f] || f)}</div>${detail}${whoTag}</div>${t}</li>`;
   }).join("") + `</ol>`;
   // 1.17.16 (zgłoszenie Grzegorza): oś faz odświeża się co ~1,5 s i za każdym
   // razem przewijała rozmowę na sam dół - w trakcie Namysłu nie dało się
@@ -3931,10 +4723,10 @@ function renderNamyslLive(container, events, elapsedMs, forceFinished = false) {
 }
 
 // --- Panel "Postęp" (1.16.2): szuflada w panelu "Ta rozmowa" + pigułka w
-// nagłówku. Ten sam strumień zdarzeń Namysłu co .namysl-live w dymku
-// "pisze..." (poll() niżej woła renderNamyslLive() DRUGI raz, na inny
-// kontener) - nic tu nie zgaduje faz na nowo, tylko pokazuje ten sam
-// przebieg w miejscu, które zostaje widoczne i po tym, jak dymek zniknie. ---
+// nagłówku. Ten sam strumień zdarzeń Namysłu co stepper; od 1.45.6
+// renderNamyslLive() rysuje TYLKO szufladę (dymek nie ma już mini-karty).
+// Nic tu nie zgaduje faz na nowo - pokazuje ten sam przebieg w miejscu,
+// które zostaje widoczne po zakończeniu odpowiedzi. ---
 let pillHideTimer = null;
 // 1.17.9 (zgłoszenie Grzegorza: licznik Namysłu "2..3..5..7..9"): czas na
 // plakietce i na osi faz odświeżał się tylko wtedy, gdy wracał odczyt postępu
@@ -3951,7 +4743,7 @@ function tickPillTimers() {
   const secs = (Date.now() - pillStartedAt) / 1000;
   const timer = document.getElementById("progress-pill-timer");
   if (timer) timer.textContent = formatSeconds(secs);
-  document.querySelectorAll(".namysl-live-timer").forEach((el) => { el.textContent = formatSeconds(secs); });
+
 }
 
 function resetProgressPanel() {
@@ -3977,8 +4769,9 @@ function restoreProgressFor(conv) {
   const p = conv && conv.progress;
   if (!p || !p.events || !p.events.length) return;
   const elapsed = p.finished ? p.elapsedMs : Date.now() - p.startedAt;
-  // 1.33.3: stepper pierwszy (chowa pigułkę), potem panel.
-  renderNamyslTrack(p.events, !!p.finished);
+  // 1.45.8: po zakończeniu pasek ma zniknąć, więc przywracamy go tylko dla
+  // trwającego cyklu. Pełna historia zostaje w panelu „Postęp”.
+  if (!p.finished) renderNamyslTrack(p.events, false);
   renderProgressPanel(p.events, elapsed, !!p.finished);
   if (p.finished) {
     const pill = document.getElementById("progress-pill");
@@ -4005,10 +4798,13 @@ function renderProgressPanel(events, elapsedMs, finished) {
   if (pill && label && timer && !trackVisible) {
     pill.classList.remove("hidden");
     pill.classList.toggle("done", !!finished);
-    // 1.18.0: plakietka mówi, KTÓRA faza trwa, nie tylko że coś trwa.
-    const phase = finished ? "" : currentPhaseLabel(events);
-    label.textContent = finished ? "Namysł zakończony" : (phase ? `Namysł: ${phase}` : "Namysł w toku");
-    timer.textContent = formatSeconds(elapsedMs / 1000);
+    const st = namyslState(events);
+    label.textContent = namyslStatusText(st, {
+      status: finished ? "done" : st.status,
+      totalS: finished ? elapsedMs / 1000 : undefined,
+    });
+    // Czas jest osobnym elementem; po zakończeniu niesie go już status.
+    timer.textContent = finished ? "" : formatSeconds(elapsedMs / 1000);
     pillStartedAt = Date.now() - elapsedMs;
     if (finished) stopPillTick();
     else if (!pillTickTimer) pillTickTimer = setInterval(tickPillTimers, 1000);
@@ -4018,18 +4814,6 @@ function renderProgressPanel(events, elapsedMs, finished) {
     if (pillHideTimer) { clearTimeout(pillHideTimer); pillHideTimer = null; }
     if (finished) pillHideTimer = setTimeout(() => { pill.classList.add("hidden"); pillHideTimer = null; }, 6000);
   }
-}
-
-function currentPhaseLabel(events) {
-  const first = events[0];
-  const labels = Object.assign({}, NAMYSL_PHASE_LABELS, (first && first.labels) || {});
-  let current = null;
-  for (const ev of events) {
-    if (!ev || !ev.faza || ev.faza === "namysl") continue;
-    if (ev.etap === "start") current = ev.faza;
-    else if (ev.etap === "koniec" && current === ev.faza) current = null;
-  }
-  return current ? (labels[current] || current) : "";
 }
 
 function setupProgressPill() {
@@ -4128,15 +4912,22 @@ function setupAttachments() {
 }
 
 // --- Ustawienia Namysłu (serwer: data/namysl.json) ------------------------
-let namyslSettings = { tryb: "zawsze", material_do_sieci: false };
+let namyslSettings = { tryb: "inteligentny", material_do_sieci: false };
 
 function paintNamyslButton() {
   const btn = document.getElementById("namysl-btn");
   const label = document.getElementById("namysl-btn-label");
   if (!btn || !label) return;
-  // 1.32.7: jeden tryb - dokładne myślenie, zawsze włączone.
-  label.textContent = "Dokładne myślenie";
+  // 1.45.10: dwa tryby - inteligentny (domyślny) albo dokładny (zawsze).
+  const dokladne = namyslSettings.tryb === "zawsze";
+  label.textContent = dokladne ? "Dokładne myślenie" : "Inteligentne myślenie";
+  btn.title = dokladne
+    ? "Dokładne myślenie: GREGAI zawsze myśli krok po kroku"
+    : "Inteligentne myślenie: GREGAI sam wybiera, kiedy myśleć krok po kroku";
   btn.classList.add("on");
+  for (const radio of document.querySelectorAll('input[name="namysl-tryb"]')) {
+    radio.checked = radio.value === (dokladne ? "zawsze" : "inteligentny");
+  }
 }
 
 async function loadNamyslSettings() {
@@ -4163,10 +4954,11 @@ async function saveNamyslSettings(patch) {
     if (status) status.textContent = "Zapisane.";
     setTimeout(() => { if (status && status.textContent === "Zapisane.") status.textContent = ""; }, 2500);
   } catch (e) {
-    // 1.33.2 (audyt #14): checkbox nie może zostać w stanie, którego serwer
-    // nie przyjął - wracamy do ostatniej potwierdzonej wartości.
+    // 1.33.2 (audyt #14): checkbox/radio nie mogą zostać w stanie, którego
+    // serwer nie przyjął - wracamy do ostatniej potwierdzonej wartości.
     const consent = document.getElementById("namysl-consent");
     if (consent) consent.checked = !!namyslSettings.material_do_sieci;
+    paintNamyslButton();
     if (status) status.textContent = "Nie udało się zapisać: " + (e && e.message ? e.message : "błąd");
   }
 }
@@ -4192,6 +4984,11 @@ function setupNamyslControl() {
     if (inside) btn.focus();  // 1.29.0: Esc wraca na przycisk, nie gubi fokusu
   });
   if (consent) consent.addEventListener("change", () => saveNamyslSettings({ material_do_sieci: consent.checked }));
+  for (const radio of document.querySelectorAll('input[name="namysl-tryb"]')) {
+    radio.addEventListener("change", () => {
+      if (radio.checked) saveNamyslSettings({ tryb: radio.value });
+    });
+  }
   loadNamyslSettings();
 }
 
@@ -4599,17 +5396,22 @@ function retireCardOptions() {
 async function waitForChatJob(job) {
   let pause = 1500;
   for (let attempt = 0; ; attempt++) {
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 250000) : null;
     try {
       const res = await gregaiFetch("/api/chat/wait", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ job }),
+        ...(ctrl ? { signal: ctrl.signal } : {}),
       });
       return await res.json();
     } catch (e) {
       if (attempt >= 4) throw e;
       await new Promise((done) => setTimeout(done, pause));
       pause *= 2;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 }
@@ -4620,8 +5422,11 @@ async function waitForChatJob(job) {
 // kanoniczna odpowiedź zawsze przychodzi przez /api/chat/wait, więc zerwany
 // strumień niczego nie gubi (bąbelek i tak powstaje z pełnego wyniku).
 async function readChatTokenStream(jobId, onEvent) {
+  const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 1810000) : null;
   try {
-    const res = await gregaiFetch(`/api/chat/stream?job=${encodeURIComponent(jobId)}`);
+    const res = await gregaiFetch(`/api/chat/stream?job=${encodeURIComponent(jobId)}`,
+      ctrl ? { signal: ctrl.signal } : {});
     if (!res.ok || !res.body || typeof res.body.getReader !== "function") return;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -4644,10 +5449,13 @@ async function readChatTokenStream(jobId, onEvent) {
         let payload = null;
         try { payload = JSON.parse(dataLines.join("\n")); } catch (e) { continue; }
         if (event === "token") onEvent(payload);
+        else if (event === "err") onEvent({ reset: true });
       }
     }
   } catch (e) {
     // Podgląd jest dodatkiem - bez niego czekanie i wynik działają jak dotąd.
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -4665,6 +5473,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   if (conv.run) return;
   const shown = () => conversationKey(activeProject) === key;
   const chatId = currentChatId();
+  const sentAt = Math.floor(Date.now() / 1000);
   retireCardOptions();
   // Załączniki idą z TĄ wiadomością (tylko te wgrane poprawnie) i znikają z
   // paska: następna wiadomość zaczyna bez nich. 1.19.0: plik jeszcze w trakcie
@@ -4684,6 +5493,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
   }
   const pending = appendTypingIndicator();
   conv.pendingEl = pending;
+  let answerFinalized = false;
   // Zatrzymanie (1.12.0): przycisk "Zatrzymaj" ustawia run.cancelled i, gdy
   // zadanie ma już id (po pierwszej odpowiedzi serwera, najwyżej 2 s),
   // woła POST /api/chat/cancel. Serwer kończy pracę przy najbliższej granicy
@@ -4777,8 +5587,9 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     tokenPreview = null;
   };
   const renderTokenPreview = () => {
-    if (!shown() || !pending.isConnected) return;
-    if (!tokenPreview) {
+    if (!shown() || !pending.isConnected || pendingGone || !pending.classList.contains("pending")) return;
+    const firstToken = !tokenPreview;
+    if (firstToken) {
       pending.textContent = "";
       pending.classList.add("streaming");
       tokenPreview = document.createElement("div");
@@ -4786,17 +5597,17 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       pending.appendChild(tokenPreview);
     }
     tokenPreview.textContent = streamText;
-    const scroller = pending.parentElement;
-    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160) {
-      scroller.scrollTop = scroller.scrollHeight;
-    }
+    // Pierwszy token: smooth. Kolejne: bez animacji, żeby nie walczyć z
+    // czytaniem; użytkownik, który przewinął w górę, nie jest ciągnięty.
+    if (chatPinned) scrollChatToBottom({ smooth: firstToken });
+    else showNewReplyChip();
   };
   const applyToken = (payload) => {
     if (!payload) return;
     if (payload.reset) {
       streamText = "";
       if (tokenPreview) tokenPreview.textContent = "";
-      if (tokenPreview && pending.isConnected) showTypingDots();
+      if (tokenPreview && pending.isConnected && pending.classList.contains("pending")) showTypingDots();
       return;
     }
     if (typeof payload.t === "string" && payload.t) {
@@ -4814,6 +5625,8 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     try {
       const res = await gregaiFetch("/api/system_info");
       lastInfo = await res.json();
+      // Wersja w szynie: ten sam odczyt, więc nie ma drugiego zapytania.
+      setRailVersion(lastInfo && lastInfo.version);
     } catch (e) {
       // Brak odczytu (np. serwer akurat zajęty tą samą rozmową w jednym
       // wątku - patrz agent/main.py: _CHAT_LOCK): narrator wraca do
@@ -4829,7 +5642,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     if (!info) {
       return {
         network: null,
-        label: "Liczy",
         detail: "Nie udało się na bieżąco sprawdzić, czy to pytanie idzie teraz do sieci czy liczy je lokalny model - w każdym razie GREGAI nad nim pracuje.",
       };
     }
@@ -4841,7 +5653,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       const warpReason = (info.warp && info.warp.reason) || "WARP rozłączony";
       return {
         network: false,
-        label: "Liczy lokalnie (bez internetu)",
         detail: `Internet jest teraz zablokowany (${warpReason}) - z zasady bezpieczeństwa GREGAI nigdy nie wychodzi do sieci bez połączonego WARP, więc to pytanie liczy od początku do końca lokalny model na tym laptopie, bez karty graficznej. To jedyny powód, dla którego GREGAI w ogóle liczy lokalnie: gdy internet/WARP wróci, następne pytanie znowu najpierw spróbuje sieci.`,
       };
     }
@@ -4863,27 +5674,23 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     if (pierwszy === "anthropic") {
       return {
         network: true,
-        label: "Pyta Claude",
         detail: `Internet działa (WARP połączony), a przy tej wadze pytania Claude (${(info.cloud && info.cloud.model) || "Anthropic"}) jest pierwszy w kolejce - zwykle to kilka sekund. Dalej: ${etapy.slice(1).map((e) => e === "darmowe" ? `darmowa pula (${jugglerPool.join(", ")})` : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.`,
       };
     }
     if (pierwszy === "darmowe") {
       return {
         network: true,
-        label: "Pyta darmowe modele w sieci",
         detail: `Internet działa (WARP połączony), więc to pytanie najpierw dostają darmowi dostawcy w sieci: ${jugglerPool.join(", ")} - zwykle to kwestia sekund. Dalej: ${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "lokalny model na tym komputerze (tylko gdyby zniknął internet)").join(", potem ") || "nic"}.${claudeEskalacja}`,
       };
     }
     if (pierwszy === "lokalnie" && etapy.length > 1) {
       return {
         network: false,
-        label: "Liczy lokalnie (z wyboru)",
         detail: `W efektywnej kolejności (KORYTO w .env + waga uwagi) lokalny model stoi przed etapami sieciowymi, więc to pytanie najpierw liczy ten komputer; sieć (${etapy.slice(1).map((e) => e === "anthropic" ? "Claude" : "darmowa pula").join(", ")}) dopiero gdyby zawiódł.`,
       };
     }
     return {
       network: false,
-      label: "Liczy lokalnie",
       detail: "Sieciowe etapy koryta (Claude i darmowa pula) są wyłączone albo bez skonfigurowanego klucza w tej instalacji, więc to pytanie od razu liczy lokalny model na tym komputerze, bez karty graficznej.",
     };
   }
@@ -4908,7 +5715,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       // Stąd ostrożne "pewnie", nie twierdzenie.
       return {
         ...route,
-        label: stageIndex === 1 ? "Wciąż czeka na sieć" : "Pewnie już lokalnie",
         detail: route.detail + (stageIndex === 1
           ? " To już dłużej niż typowa odpowiedź z sieci (kilka sekund) - pewnie właśnie próbuje kolejnego dostawcy z efektywnej listy (darmowa pula, a przy wyższej wadze też Claude)."
           : (localAlways(info)
@@ -4921,13 +5727,11 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     if (stageIndex === 1) {
       return {
         ...route,
-        label: "Model się rozgrzewa",
         detail: route.detail + " Zwykle w tym momencie dzieje się jedno z dwóch: model dopiero wczytuje się z dysku do pamięci (tylko przy pierwszym pytaniu po starcie usługi), albo już przetwarza Twoją wiadomość razem z całą instrukcją systemową (kilka tysięcy słów) - samo to przetworzenie potrafi zająć pół minuty, zanim napisze pierwsze słowo odpowiedzi.",
       };
     }
     return {
       ...route,
-      label: "Pisze odpowiedź",
       detail: route.detail + " To już najpewniej pisanie odpowiedzi, słowo po słowie - na tym sprzęcie to tempo rzędu pojedynczych słów na sekundę, więc dłuższa odpowiedź to realnie kilka minut. To nie zawieszenie.",
     };
   }
@@ -4969,8 +5773,11 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
 
   const applyNarration = (stageIndex, info) => {
     if (!labelEl) return;
-    const { label, detail } = narrate(stageIndex, info);
-    labelEl.textContent = label;
+    // 1.45.6: jedno kanoniczne słownictwo statusu; szczegóły trasy zostają
+    // w rozwijanym opisie, a nie w etykiecie.
+    const { detail } = narrate(stageIndex, info);
+    const offline = !!(info && info.warp && info.warp.connected === false);
+    labelEl.textContent = offline ? "Offline \u2013 myślę lokalnie\u2026" : "Myślę\u2026";
     detailEl.textContent = detail;
   };
 
@@ -5036,7 +5843,6 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       if (!progressEvents.length) return;
       const elapsed = Date.now() - requestStart;
       conv.progress.events = progressEvents;
-      if (!finished) renderNamyslLive(pending, progressEvents, elapsed);
       if (shown()) {
         // 1.33.3: najpierw stepper (chowa pigułkę), potem panel - inaczej
         // pigułka mignie z drugim timerem przed schowaniem.
@@ -5112,8 +5918,8 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       if (conv.run && conv.run !== run) return;
       conv.progress = { events: progressEvents, startedAt: requestStart, finished: true, elapsedMs: elapsed };
       if (progressEvents.length && shown()) {
-        // 1.33.3: stepper pierwszy (chowa pigułkę i pokazuje "Namysł — Ns"),
-        // panel Postęp dostaje ten sam komplet faz.
+        // 1.33.3: stepper pierwszy (chowa pigułkę i pokazuje status
+        // „Zakończono · Ns”), panel Postęp dostaje ten sam komplet faz.
         renderNamyslTrack(progressEvents, true);
         renderProgressPanel(progressEvents, elapsed, true);
       }
@@ -5134,15 +5940,13 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     }
     // 1.17.3 (zgłoszenie Grzegorza): odpowiedź zwykle przychodzi przez
     // waitForChatJob ZANIM odpytywanie postępu zobaczy "done" - plakietka
-    // "Namysł w toku" z licznikiem zostawała na nagłówku po zakończeniu.
+    // z licznikiem zostawała na nagłówku po zakończeniu.
     // Stan końcowy ustawiamy więc tutaj, na każdej drodze wyjścia z czekania.
     if (shown()) stopPillTick();
     const finishing = finishProgress();
 
     clearPendingTimers();
     pendingGone = true;
-    pending.remove();
-    conv.pendingEl = null;
     // 1.19.0 (audyt): odpowiedź, która przyszła, ZANIM zatrzymanie zadziałało
     // (pierwsze 2 s, gdy zadanie nie ma jeszcze id), jest prawdziwa: serwer ją
     // zapisał, a "tak" już się wykonało. Pokazujemy ją z dopiskiem, zamiast
@@ -5150,6 +5954,8 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     // 1.23.0 (audyt): rozmowę usunięto w innej karcie, gdy tu trwała odpowiedź -
     // nie wskrzeszamy jej dopisaniem i zapisem.
     if (conversationDeletedSince(key, requestStart)) {
+      pending.remove();
+      conv.pendingEl = null;
       if (conversations.get(key) === conv) conversations.delete(key);
       if (shown()) renderConversationMessages(getConversation(project), project);
       return;
@@ -5165,6 +5971,8 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       // przełączeniu i po odświeżeniu. Zgodę trzeba dać od nowa.
       conv.pendingAction = null;
       conv.pendingClarify = null;
+      pending.remove();
+      conv.pendingEl = null;
       if (shown()) { appendChatBubble("assistant", stopped); paintInputHint(conv); }
       convPush(conv, { role: "assistant", text: stopped });
       return;
@@ -5174,6 +5982,8 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       // oczekująca karta zostaje, inaczej "tak" po błędzie nigdy by jej nie potwierdziło.
       // 1.23.0 (audyt): dawniej kod mimo tego komentarza zerował oba pola.
       const errText = `Błąd: ${data.error}` + (conv.pendingAction ? " Pytanie o zgodę nadal czeka: napisz „tak” albo „nie”." : "");
+      pending.remove();
+      conv.pendingEl = null;
       const errBubble = shown() ? appendChatBubble("assistant", errText) : null;
       // 1.29.0 (kontrola): przy przeciążeniu (429) albo błędzie serwera (5xx) jedno dotknięcie
       // ponawia TO SAMO pytanie (ten sam client_id, więc bez dublowania).
@@ -5222,9 +6032,13 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       // Pusty dymek przy odpowiedzi złożonej z samego alertu wyglądałby na błąd;
       // karta i następne kroki i tak mają swoje miejsce.
       if (speech) {
-        const answerBubble = appendChatBubble("assistant", speech);
+        const answerBubble = finalizeAssistantBubble(pending, speech);
+        answerFinalized = true;
         crackFragment(answerBubble);
+      } else {
+        pending.remove();
       }
+      conv.pendingEl = null;
       try { appendChatCard(data.card); } catch (e) { console.error("karta:", e); }
       // Propozycja nowego węzła (tylko rozmowa przypisana do projektu, patrz
       // agent/main.py: _extract_suggested_node) - nigdy zapisywana sama, zawsze
@@ -5237,8 +6051,13 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
         try { appendNextSteps(data.next); } catch (e) { console.error("następne kroki:", e); }
       }
     } else {
+      pending.remove();
+      conv.pendingEl = null;
       conv.unread = true;
     }
+    // 1.43.0: wątek tła mógł dopisać węzły po tej odpowiedzi. Serwer mówi,
+    // czy w ogóle wystartował; UI pyta kilka razy, zamiast zgadywać czas.
+    if (data.wezly_auto) scheduleWezlyCheck(chatId, data.wezly_since || sentAt);
 
     conv.history.push({ role: "user", content: text });
     // tool: odpowiedź z narzędzia (notatki, sieć, system). Zostaje w historii dla
@@ -5279,7 +6098,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
       finishProgress();
       clearPendingTimers();
       pendingGone = true;
-      pending.remove();
+      if (!answerFinalized) pending.remove();
       conv.pendingEl = null;
       const stopped = "Zatrzymano na Twoje polecenie. Nic z tej wymiany nie zostało zapamiętane.";
       conv.pendingAction = null;
@@ -5291,7 +6110,7 @@ async function sendChatMessage(text, { retry = false, clientId = null, files = n
     finishProgress();
     clearPendingTimers();
     pendingGone = true;
-    pending.remove();
+    if (!answerFinalized) pending.remove();
     conv.pendingEl = null;
     // 1.17.17: po zatwierdzeniu restartu samego GREGAI połączenie znika z
     // definicji (usługa właśnie wstaje) - to nie błąd, tylko skutek polecenia.

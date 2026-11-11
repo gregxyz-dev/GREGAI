@@ -1,4 +1,4 @@
-# GREGAI 1.39.2
+# GREGAI 1.45.17
 
 [![CI](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml/badge.svg)](https://github.com/gregxyz-dev/GREGAI/actions/workflows/ci.yml)
 
@@ -6,7 +6,8 @@ Osobista inteligencja strategiczna jednej osoby. Rozmówca nazywa się **GREGAI*
 i mieszka na laptopie: zna Twoje notatki, pamięta to, co mu powiesz
 (`zapamiętaj: ...`), czyta ze zrozumieniem pliki, które mu dasz (Źródła,
 spinacz), zawsze myśli w sześciu fazach, poza powitaniem i podziękowaniem (Namysł, z
-przebiegiem na żywo), i zarządza komputerem, na którym działa (SYSOP).
+przebiegiem na żywo; cały cykl trzyma się jednego dostawcy AI), i zarządza
+komputerem, na którym działa (SYSOP).
 Serwer: Python stdlib (jedyny wyjątek: opcjonalna biblioteka `huawei-lte-api`
 do odczytu routera, patrz `requirements.txt`). Przeglądarka: wyłącznie vanilla JS.
 Bez frameworków, bez procesu budowania.
@@ -14,7 +15,7 @@ Bez frameworków, bez procesu budowania.
 - Adres: **http://localhost:7777** (tylko na tym laptopie)
 - Instalacja: **jedna komenda, z dowolnego folderu**: `bash <folder>/install.sh`
   (niżej); system od zera: `INSTALACJA_UBUNTU_26_04.md`
-- Kontrola po instalacji: **`bash check.sh`** (106 kontroli; `install.sh` odpala ją sam)
+- Kontrola po instalacji: **`bash check.sh`** (116 kontroli; `install.sh` odpala ją sam)
 - Decyzje, zakres i bramki 1.0.0 (historia stabilizacji): **`ROADMAP_1.0.md`**
 - Licencja: **MIT** (`LICENSE`)
 
@@ -54,6 +55,8 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
   red-team; mechanizmy opisane tu są częścią fundamentu i nie są osłabiane.
 - **`PROTOKOL_KONTROLI.md`** - **dokument historyczny** (stan 1.29.0):
   wynik jednej rundy audytu "jak sanepid", przykład metody.
+- **`api_contract.md`** - rzeczywisty kontrakt endpointów `/api/*`:
+  request/response, kody błędów, SSE `token/done/err`.
 - **`SECURITY.md`** - jak zgłosić podatność bezpieczeństwa.
 - **`INSTALACJA_UBUNTU_26_04.md`** - instalacja krok po kroku na jednej,
   konkretnej maszynie jako przykład end-to-end; realne minimum sprzętowe
@@ -66,7 +69,89 @@ Kilka plików `.md` w katalogu głównym, każdy z inną rolą:
 ## Co nowego
 
 Historia wydań, od 1.1.0 do dziś, z opisem każdej zmiany i jej weryfikacji:
-**`CHANGELOG.md`**. Najnowsze: 1.39.2 - wydanie naprawcze po audycie 1.39.1:
+**`CHANGELOG.md`**. Najnowsze: 1.45.17 - na telefonie (≤760 px) nagłówek
+Nadzorcy ma padding 8 px ze wszystkich stron, dokładnie jak `.panele-top`
+w Zadaniach i Notatkach. Wcześniej 1.45.16 - nagłówek Nadzorcy (`.debug-head`)
+jest kartą jak `.panele-top` w Zadaniach i Notatkach: tło `--crack-card`
+i obrys `--crack-line` w obu motywach. Wcześniej 1.45.15 - zdjęty ciężar
+z Nadzorcy: cień i świecąca linia z `kadr.css` nie przeciekają już przez
+`crack.css`, sekcje i hero mają 12 px rytmu jak panele, a segment jest
+przezroczysty (ziarno tła wraca). Wcześniej 1.45.14 - karty Nadzorcy mają obrys
+z `var(--crack-line)`, tak jak panele Zadania i Notatki: w ciemnym bez zmian,
+w jasnym neutralny zamiast teal; promienie i cień bez zmian. Wcześniej 1.45.13
+- Nadzorca w rytmie paneli Zadania i Notatki: nagłówek jak `.panele-top`,
+odstępy sekcji i siatek na `--sp-*`, puste listy jak `.panele-empty`, mobilny
+padding 8 px i zakładki na tokenach. Tabele zachowują wyrównanie do lewej.
+Wcześniej 1.45.12 - końcowa kontrola
+instalacji pokazuje wyniki w siedmiu grupach (Instalacja, Bezpieczeństwo,
+Namysł, UI, Diagnostyka, Dokumentacja, Integracja), z podsumowaniem grupy,
+globalnym wynikiem, czasem i listą błędów. Nowa opcja `--quiet` zostawia tylko
+podsumowanie dla CI. Wcześniej 1.45.11 - tryb jasny bez resztek ciemnego:
+jasne tło toastu Straży (medium), biały pill restartu Namysłu, tokeny stanów
+błędów/statusów, ciemna czerwień zamiast jasnego różu i neutralny border
+aktywnego projektu. Martwe litery w `debug/kadr/sistem/styles` zostają -
+są nadpisane przez `crack.css` i nie docierają do ekranu.
+Wcześniej 1.45.10 - tryb inteligentny Namysłu (domyślny): reakcje typu
+„okej, super, co by tu zrobić?” i doprecyzowania („wyjaśnij to prościej”)
+idą zwykłą rozmową, a pełny cykl tylko wtedy, gdy naprawdę trzeba. Tryb
+„zawsze” (dokładne myślenie) zostaje jawnym wyborem w panelu Namysłu;
+powód pominięcia trafia tylko do `decision_log`. Wcześniej 1.45.9 - dymka „...” ma ten sam promień co zwykłe odpowiedzi
+(`--r-card`), widoczny border i 12 px (8 px na telefonie) odstępu od paska
+Namysłu; przy pojawieniu się paska rozmowa dociąga się do dołu, więc nic się
+nie przycina. Wcześniej 1.45.8 - auto-scroll rozmowy (bez
+wyrywania czytającego w górę) i Namysł jako kompaktowy pasek w tle: 36 px,
+rozwija się po kliknięciu, znika 5 s po zakończeniu, a błąd zostaje na czerwono.
+Wcześniej 1.45.7 - Straż bez false positives: cichy re-baseline pieczęci po
+zmianie `VERSION`, dedup przeżywający restart, cooldown typu po „Zignoruj”,
+jeden toast „Kod GREGAI zmieniony: N plików” i `gregai diag straz`.
+Wcześniej 1.45.6 - jedna karta Namysłu (stepper,
+bez duplikatu w dymku), narracja pod aktywną fazą i jeden kanoniczny status
+(`Myślę…`, `Offline – myślę lokalnie…`, `Przełączam na…`, `Zakończono · 12,4s`).
+Wcześniej 1.45.5 - czytelne powitanie w jasnym motywie i wersja w szynie
+z `/api/system_info` (zamiast wpisanego "1.36.0").
+Wcześniej 1.45.4 - `uninstall.sh`, czyste odwrócenie `install.sh`
+(`--dry-run`, potwierdzenia, log, idempotencja) i kontrola 116.
+Wcześniej 1.45.3 - audyt stabilności i kontrakt API (`api_contract.md`,
+kontrola 115, naprawa wyścigu zapisu profilu i timeoutów streamu).
+Wcześniej 1.45.2 - przełączanie motywu bez
+twardego odświeżania: `theme.js` wysyła `gregai:theme-change`, graf 3D
+czyści cache kolorów i przerysowuje scenę, a kolory przechodzą płynnie
+(bez ruchu przy `prefers-reduced-motion`). Wcześniej 1.45.1 - wspólna skala odstępów
+`--sp-1..7`, promienie `--r-*`, porządek w `crack.css`, `theme-light.css` i
+`health.css`; zero literowych px w margin/padding/gap poza 0/1px, a
+`!important` tylko w `prefers-reduced-motion`. Wcześniej 1.45.0 - czytelność czatu: profil
+`styl.dlugosc` steruje formatem odpowiedzi (krótka/średnia/szczegółowa), a
+renderer pokazuje h2-h4, tabele, kod i cytaty w spójnej typografii; finalny
+markdown zastępuje dymek streamingu bez migania. Wcześniej 1.44.0 - narzędzia operacyjne dla agenta:
+`gregai state`, `diag`, `impact`, `tokens`, `log`, `reset` i `verify
+--quick` (domyślnie JSON), plus panel `/health`. Diagnostyka jest tylko do
+odczytu, nie dotyka notatek, profilu ani `.env`; jawny jest tylko `reset`
+liczników dowęzłowywania. Wcześniej 1.43.0 - automatyczne dowęzłowywanie:
+GREGAI po odpowiedzi w tle dopisuje nowe tematy do grafu jako pliki `.md` z
+wikilinkami, tylko za zgodą w profilu, z whitelistą typów i limitami
+(3 na przebieg, 6 dziennie). Bez zgody `material_do_sieci` tytuły notatek
+zostają lokalnie, a w UI pojawia się toast z „Cofnij”. Wcześniej
+1.42.2 - wyszukiwarka węzłów i aktywny
+wiersz w „Twoje rozmowy” korzystają z tokenów motywu, więc w trybie jasnym
+mają jasne tło i ciemny tekst, a przełączenie motywu działa natychmiast.
+Wcześniej 1.42.1 - etykiety węzłów w widoku Węzły
+korzystają z tokenów motywu, więc w trybie jasnym są ciemnym tekstem na
+jasnym tle, a przełączenie motywu działa natychmiast. Wcześniej
+1.42.0 - profil użytkownika w
+`data/profil.json` (styl, cele, tabu, wagi krytyki i SYSOP; onboarding w UI,
+zero auto-zapisu z lekcji, zgoda `profil_do_sieci` domyślnie wyłączona) oraz
+tryb jasny z przełącznikiem `auto/light/dark` i autodetekcją systemu. Wcześniej
+1.41.0 - front Namysłu jak ekosystem Apple:
+kolor koryta przenika cały cykl, w nagłówku widać dostawcę, koryto, licznik
+restartów i pulsujący status, a sześć faz to osobne karty (fazy kodu z ⚙️,
+fazy LLM z ikoną dostawcy). Restart resetuje fazy, zmienia kolor i pokazuje
+toast; mobile ma pionowy stepper, a `prefers-reduced-motion` wyłącza ruch.
+Wcześniej 1.40.0 - Namysł trzyma JEDNEGO dostawcę
+przez cały cykl sześciu faz: Claude, gdy dostępny, inaczej pierwszy gotowy
+z darmowej puli, a bez internetu od razu lokalna Ollama. Błąd dostawcy
+przerywa cykl i zaczyna go od fazy 1 na następnym etapie; prywatne notatki
+bez zgody restartują cały cykl na lokalny. Wcześniej 1.39.2 - wydanie
+naprawcze po audycie 1.39.1:
 jedno wywołanie Groqa zamiast dwóch przy podglądzie tokenów, `--bez-podpisu`
 działa po samopodmianie `aktualizuj.sh`, paczka respektuje `.gitignore`
 (bez `CLAUDE.md`, kluczy i katalogów narzędzi), `_sem_of` bez wyścigu przy
@@ -181,10 +266,33 @@ ląduje w `/usr/share/keyrings/gregai.gpg`, więc `aktualizuj.sh` może sprawdza
 podpis paczki. Opcje: `--train` (trening router + planer + uczeń w tle),
 `--no-host` (bez ustawień laptopa), `--here` (instaluj dokładnie tu), `--yes`
 (bez pytań o klucz Anthropic i trening; hasło do `sudo` i rejestracja WARP
-nadal mogą zapytać), `--help`. Jeśli folder leży na **dysku USB / wymiennym**, w katalogu
+nadal mogą zapytać), `--quiet` (końcowa kontrola tylko jako podsumowanie,
+dla CI), `--help`. Jeśli folder leży na **dysku USB / wymiennym**, w katalogu
 tymczasowym albo na FAT/exFAT/NTFS (usługa nie przetrwałaby restartu, a
 `.env` nie miałby praw 600), skrypt sam kopiuje projekt razem z `.env` i
 danymi do istniejącej instalacji, a bez niej do `~/Dokumenty/GREGAI` (albo `$GREGAI_HOME`), i instaluje stamtąd.
+
+## Odinstalowanie
+
+`uninstall.sh` jest odwrotnością `install.sh`. Zatrzymuje i usuwa usługi
+`gregai`/`gregai-siec`, reguły ufw i tabelę nftables, swap `/swap.img`, WARP,
+Ollamę razem z modelami, pliki systemd/sudoers/fail2ban/logind, klucze i
+źródła apt, symlink CLI, konfigurację, konto `gregai` i opcjonalnie pakiety
+systemowe. Każdy krok najpierw sprawdza, czy element istnieje, więc drugie
+uruchomienie kończy się samymi `[SKIP]`.
+
+```bash
+bash uninstall.sh --dry-run   # plan działań, zero zmian (nawet warp-cli)
+bash uninstall.sh             # interakcyjnie: pyta przed rzeczami destrukcyjnymi
+bash uninstall.sh --yes       # bez pytań, poza usunięciem folderu projektu
+```
+
+Folder projektu (notatki, pamięć, `.env`) jest usuwany **zawsze osobnym
+pytaniem**, nawet z `--yes`. Log `uninstall.log` ma datę i godzinę każdej
+akcji; przed usunięciem projektu kopia trafia do `/tmp/gregai-uninstall.log`.
+Kody wyjścia: 0 sukces, 1 błąd, 2 anulowano, 130 Ctrl+C. Skrypt świadomie nie
+usuwa `gsettings "brak usypiania"` ani pakietu `python3` (usunięcie zepsułoby
+system).
 
 ## Sprzęt
 
@@ -211,11 +319,16 @@ Dlatego od 1.17.0 myślenie idzie **korytem** (`agent/koryto.py`, `KORYTO` w
 lokalne, małe modele - te ostatnie jako rezerwa i jedyne, gdy nie ma
 internetu/WARP. "Cały program to koryto; zmienia się tylko, co przez nie
 płynie" - ta sama pula obowiązuje rozmowę, Namysł, decyzję o narzędziu i planer
-zadań. Od 1.30.23 **kolejnością w korycie steruje rozdzielnica**
+zadań. Od 1.30.23 **kolejnością w rozmowie steruje rozdzielnica**
 (`agent/skupienie.py` + `ROZDZIELNICA` w `.env`): waga uwagi 1-4 decyduje per
 wiadomość, którą szyną puścić zapytanie. Domyślnie (polityka B) darmowa pula
 idzie pierwsza, a płatny Claude tylko jako eskalacja przy sprawach ważnych i
 krytycznych - żeby zużywać jak najmniej tokenów przy jak najlepszym wyniku.
+**Namysł jest wyjątkiem od 1.40.0**: wybiera jednego dostawcę na cały cykl
+(pierwszy dostępny etap KORYTO) i nie miesza modeli między fazami; błąd
+dostawcy to restart od fazy 1 na następnym etapie. Od 1.41.0 widać to w UI:
+kolor koryta przenika nagłówek, stepper i karty faz, a fazy kodu są
+oddzielone od faz LLM (⚙️ vs ikona dostawcy).
 
 ## Jak GREGAI myśli (architektura)
 
@@ -224,9 +337,9 @@ krytycznych - żeby zużywać jak najmniej tokenów przy jak najlepszym wyniku.
 | router | własny, baza **Qwen2.5-1.5B** dotrenowana (`training/run.sh`) | narzędzie czy rozmowa - w sekundy (do treningu: słowa kluczowe) |
 | planer | własny, baza **Qwen2.5-0.5B** dotrenowana (`training/run_planner.sh`) | zadania wielokrokowe SYSOP |
 | uczeń | własny, baza **Qwen2.5-1.5B** dystylowana (`training/run_student.sh`) | szybka, "swoja" osobowość GREGAI do zwykłej rozmowy |
-| **koryto, etap 1: Claude** | Anthropic przez API, PŁATNY, domyślnie `claude-haiku-5-5` (`ANTHROPIC_MODEL`, `CLOUD_DAILY_LIMIT=300`; mocniejszy tylko do Namysłu wagi 4: `NAMYSL_MODEL`; wkład żonglera w `agent/juggler.py`) | dostawca rozmowy, Namysłu, decyzji o narzędziu (`KORYTO_ROUTING`) i planera zadań (`KORYTO_ZADANIA`). Od 1.30.23 rozdzielnica (polityka B) sięga po niego dopiero jako eskalację przy wadze uwagi 3-4, gdy darmowa pula zawiedzie; każda odpowiedź to przykład treningowy dla ucznia |
-| **koryto, etap 2: darmowa pula** | Groq, Google Gemini, OpenRouter, Hugging Face, Cloudflare Workers AI (`agent/juggler.py`, kolejność prób w tym etapie losowana; w ramach jednej rozmowy "lepkość" trzyma tego samego dostawcę, ale nigdy przed Claude) | rezerwa, gdy Claude nie odpowie (błąd, limit, bezpiecznik); też przykłady treningowe; w zadaniach stałych (`agent/standing.py`) - jednorazowe streszczenie wyniku wyszukiwania |
-| **koryto, etap 3: lokalnie** - uczeń, potem duży model | Qwen2.5-3B (`OLLAMA_MODEL` w `.env`, Ollama, lokalnie) | ostatnia rezerwa i jedyny etap bez internetu/WARP; "senior" składający odpowiedź z researchu juniorów; w zadaniach stałych - jedyny model, który decyduje "czy to już alert" (nigdy sieć, p. "Zadania stałe") |
+| **koryto, etap 1: Claude** | Anthropic przez API, PŁATNY, domyślnie `claude-haiku-5-5` (`ANTHROPIC_MODEL`, `CLOUD_DAILY_LIMIT=300`; mocniejszy tylko do Namysłu wagi 4: `NAMYSL_MODEL`; wkład żonglera w `agent/juggler.py`) | dostawca rozmowy, decyzji o narzędziu (`KORYTO_ROUTING`) i planera zadań (`KORYTO_ZADANIA`). W rozmowie od 1.30.23 rozdzielnica (polityka B) sięga po niego dopiero jako eskalację przy wadze uwagi 3-4, gdy darmowa pula zawiedzie; **Namysł od 1.40.0 nie używa rozdzielnicy do wyboru etapu** - bierze pierwszy dostępny etap KORYTO i trzyma go przez cały cykl; każda odpowiedź to przykład treningowy dla ucznia |
+| **koryto, etap 2: darmowa pula** | Groq, Google Gemini, OpenRouter, Hugging Face, Cloudflare Workers AI (`agent/juggler.py`, kolejność prób w tym etapie losowana; w ramach jednej rozmowy "lepkość" trzyma tego samego dostawcę, ale nigdy przed Claude) | rezerwa, gdy Claude nie odpowie (błąd, limit, bezpiecznik). **W Namyśle wybierany jest JEDEN dostawca z tej puli na cały cykl**; jego błąd = restart od fazy 1 na następnym z puli. Też przykłady treningowe; w zadaniach stałych (`agent/standing.py`) - jednorazowe streszczenie wyniku wyszukiwania |
+| **koryto, etap 3: lokalnie** - uczeń, potem duży model | Qwen2.5-3B (`OLLAMA_MODEL` w `.env`, Ollama, lokalnie) | ostatnia rezerwa i jedyny etap bez internetu/WARP. **Bez internetu Namysł startuje od razu tutaj** (bez prób Koryta 1 i 2), a po porażce wszystkich etapów sieciowych restartuje tu cały cykl od fazy 1; "senior" składający odpowiedź z researchu juniorów; w zadaniach stałych - jedyny model, który decyduje "czy to już alert" (nigdy sieć, p. "Zadania stałe") |
 
 Kolejność etapów to jeden wpis `KORYTO=anthropic,darmowe,lokalnie` w `.env`
 (`agent/koryto.py`): etap pominięty nie jest używany, `KORYTO=lokalnie,...`
@@ -242,7 +355,7 @@ dużego modelu, więc GREGAI traktuje go inaczej: prompt systemowy jest
 stabilny w ramach dnia i pory dnia (dokładna godzina, fakty z pamięci i
 streszczenie rozmowy idą na koniec, do ostatniej wiadomości użytkownika),
 co pozwala Ollamie używać pamięci podręcznej promptu między wiadomościami.
-Limity: 800 tokenów systemu, 2000 wiadomości użytkownika, 3000 całości;
+Limity: 850 tokenów systemu, 2000 wiadomości użytkownika, 3000 całości;
 materiał lokalny Namysłu to 5300 znaków. Parametry: `temperature=0.2`,
 `top_p=0.85`, `top_k=40`, `repeat_penalty=1.2`, `num_predict=1024` i stop
 `User:`/`Asystent:`. Odpowiedzi są walidowane (pusty, echo promptu,
@@ -527,6 +640,91 @@ Wpisz `/` na początku wiadomości, a pojawi się lista (strzałki i Enter wybie
 | `/lekcje` | zapisane lekcje; `/lekcje usuń 2` |
 | `/model` | kim jest GREGAI i z jakich modeli teraz korzysta |
 
+### Narzędzia operacyjne dla agenta (1.44.0)
+
+To nie są komendy do rozmowy - to CLI dla agenta i terminala. Domyślnie każda
+zwraca JSON (maszynowo), `--human` daje czytelny wydruk. Diagnostyka jest tylko
+do odczytu: nie zmienia notatek, profilu ani `.env`.
+
+| polecenie | co daje |
+|---|---|
+| `gregai state [--diff]` | usługa, system, koryto, vault (węzły/krawędzie/osierocone linki), profil, dowęzłowywanie |
+| `gregai diag koryto [--test]` | żywy stan dostawców; `--test` robi mały ping (sieć/limity, tylko na żądanie) |
+| `gregai diag vault [--orphans] [--dups] [--isolated]` | szczegóły grafu: zerwane linki, duplikaty tytułów, węzły bez krawędzi |
+| `gregai diag profil` / `diag config` | walidacja schematu profilu i `.env` (bez pokazywania sekretów) |
+| `gregai diag wezly` / `diag namysl` | liczniki i cooldown dowęzłowywania; ustawienia i ostatnie wpisy Namysłu |
+| `gregai impact <plik|funkcja>` / `--css <klasa>` | kto importuje plik, gdzie jest wywołanie, gdzie używana jest klasa |
+| `gregai tokens [--budget] [--per-phase]` | wywołania i wydatki, budżet, lokalne tokeny; fazy bez tokenów, bo dziennik ich nie zapisuje |
+| `gregai log --tail 50 --filter koryto --level err` | ostatnie linie dziennika usługi (bez trybu live) |
+| `gregai reset wezly` / `reset cooldown` | jawne wyzerowanie liczników dowęzłowywania, bez ruszania węzłów |
+| `gregai verify --quick` / `--diff` | składnia, wersje dokumentów i zmienione pliki od ostatniego verify |
+| `gregai health` | JSON dla panelu; w przeglądarce: `http://localhost:7777/health` |
+
+`gregai verify` bez argumentów nadal uruchamia pełny `weryfikuj.sh`.
+`gregai kill koryto` i `gregai dry-run` nie są zaimplementowane: pierwsze
+wymagałoby zmiany żywego stanu koryta, drugie uruchamiałoby płatny cykl Namysłu.
+
+### Jedna karta Namysłu (1.45.6)
+
+Dymek nie rysuje już mini-karty Namysłu obok steppera – zostaje jeden
+stepper `#namysl-track` nad composerem, z narracją bieżącej fazy pod
+aktywnym krokiem. Status ma jedno kanoniczne słownictwo (`Inicjuję…`,
+`Myślę…`, `Przełączam na Gemini…`, `Offline – myślę lokalnie…`,
+`Zakończono · 12,4s`, `Błąd: …`), a czas i dostawca są osobnymi elementami.
+Panel „Postęp” w szufladzie nadal pokazuje pełny przebieg.
+
+### Powitanie i wersja (1.45.5)
+
+W jasnym motywie powitanie używa `var(--crack-text)` (kontrast 16,3:1);
+kremowa `--biel` z ciemnego motywu znikała na jasnym tle (1,06:1). Wersja
+w szynie pochodzi z `/api/system_info`, a nie z wpisanego "1.36.0"; gdy API
+nie odpowie, jest "–". Ciemny motyw bez zmian.
+
+### Odinstalowanie (1.45.4)
+
+`uninstall.sh` cofa `install.sh`: usługi, ufw, nftables, swap `/swap.img`,
+WARP (apt), Ollama z modelami, systemd/sudoers/fail2ban/logind, klucze, CLI,
+konfigurację, konto `gregai` i opcjonalne pakiety. `--dry-run` nic nie
+zmienia, `--yes` potwierdza wszystko poza folderem projektu, a każdy krok
+jest idempotentny. Log z datą: `uninstall.log` + kopia w
+`/tmp/gregai-uninstall.log`. Kontrola 116 pilnuje kształtu skryptu.
+
+### Audyt i kontrakt API (1.45.3)
+
+`api_contract.md` opisuje rzeczywiste endpointy (nie projekt): `/api/chat`,
+`/api/chat/wait`, `/api/chat/stream` (SSE), notatki, profil, źródła, upload,
+zdrowie i diagnostykę. Kontrola 115 pilnuje, że każdy endpoint wołany z
+`ui/*.js` istnieje w backendzie i jest w kontrakcie. W tej samej rundzie
+naprawiono wyścig `profil.save()` (odczyt-merge-zapis pod `_LOCK`) i dodano
+timeouty `AbortController` dla strumienia i oczekiwania na job.
+
+### Motyw bez hard refresh (1.45.2)
+
+Zmiana motywu wysyła zdarzenie `gregai:theme-change`; graf 3D czyści cache
+kolorów z CSS, odświeża mgłę, siatkę, skybox, aury, węzły i krawędzie, po
+czym przerysowuje scenę. Kolory tekstu i tła przechodzą przez `transition`
+0.2 s, a `prefers-reduced-motion` wyłącza ruch. Jasny motyw ma też jasną
+listę opcji `select` i czytelne werdykty diagnostyczne.
+
+### Spójne odstępy (1.45.1)
+
+Wspólna skala `--sp-1..7` (4/8/12/16/24/32/48 px) i promienie `--r-none`,
+`--r-chip`, `--r-ctl`, `--r-card`, `--r-pill`. `ui/crack.css`,
+`ui/theme-light.css` i `ui/health.css` nie używają już literowych px
+w `margin`, `padding` i `gap` poza 0/1px. `font-weight` to 400/500/600,
+z dwoma wyjątkami poziomu 1 (nazwa GREGAI i tytuł toastu Straży); `!important`
+zostało tylko w `prefers-reduced-motion`. Kontrola 114 pilnuje tej skali.
+
+### Czytelność odpowiedzi (1.45.0)
+
+Profil użytkownika (`styl.dlugosc`) steruje formatem zwykłej rozmowy:
+`krotka` to 1-3 zdania bez nagłówków i tabel, `srednia` zaczyna się jednym
+zdaniem i dopuszcza max 1 tabelę albo listę, `szczegolowa` zaczyna się
+TL;DR i może używać h3, tabel i kodu. Renderer `renderMarkdownLite` obsługuje
+h2-h4, tabele z przewijaniem i przyklejonym nagłówkiem, bloki kodu z
+„Kopiuj kod", cytaty i listy. Wszystkie nowe style korzystają z tokenów
+motywu, a finalna odpowiedź renderuje się w tym samym dymku co streaming.
+
 ### Narzędzia deweloperskie w rozmowie (1.32.26)
 
 Te polecenia działają tylko jako bezpośrednia prośba w czacie. Nie uruchamia ich
@@ -551,6 +749,115 @@ zaproponuje `/lekcja`.
 Logi: `gregai logs` (albo `journalctl -u gregai -f`). Restart: `gregai restart`
 albo przycisk w zakładce Debug czatu (tam też stan RAM, modeli, WARP,
 żonglera, chmury, routera, ucznia, planera i SYSOP).
+
+### Padding nagłówka na telefonie (1.45.17)
+
+Na ekranach do 760 px `.panele-top` w Zadaniach i Notatkach ma padding
+8 px ze wszystkich stron, a `.debug-head` zostawał przy 8/12 px. Sekcja
+1.45.17 dodaje w `crack.css` regułę `@media (max-width: 760px)` z
+`padding: var(--sp-2)` dla `.debug-head` - telefon wygląda identycznie
+w obu widokach, desktop zostaje przy 8/12 px.
+
+### Nagłówek Nadzorcy jak panele (1.45.16)
+
+`.panele-top` w Zadaniach i Notatkach jest kartą, bo w markupie ma klasę
+`.panel`; `.debug-head` tej klasy nie ma i był przezroczysty. Sekcja 1.45.16
+daje mu to samo tło `var(--crack-card)` i obrys `var(--crack-line)`, więc
+w obu motywach za przyciskami widać ten sam pasek co w panelach. Promień,
+padding i `min-height` zostają z 1.45.13, a `.dbg-hero` już był kartą.
+Zero zmian w HTML i innych plikach.
+
+### Zdjęty ciężar z Nadzorcy (1.45.15)
+
+Nadzorca nie wygląda już jak monolit. `kadr.css` ustawiał cień na całym
+`.debug-inner` (ring + glow + drop) i świecącą linię `::before` na
+specyficzności (1,1,0), więc wygrywał ze szkłem i „Twardym zerem" w
+`crack.css`. Sekcja 1.45.15 re-deklaruje `box-shadow: none` i
+`::before { content: none }` na tym samym poziomie. Sekcje i hero wracają
+do 12 px rytmu paneli, zakładki do `--sp-1`, a segment jest przezroczysty,
+więc ziarno tła znów jest widoczne. Promienie i obrysy bez zmian.
+
+### Obrys kart Nadzorcy (1.45.14)
+
+Karty Nadzorcy (`section`, `.dbg-hero`, `.sysinfo-item`, tabele modeli i pipe)
+mają teraz obrys z tokena `var(--crack-line)`, tak jak panele Zadania
+i Notatki. W ciemnym motywie wartość jest identyczna jak wcześniej, w jasnym
+obrys staje się neutralny zamiast teal. Promienie i cień bez zmian -
+aplikacja pozostaje kwadratowa, a `[data-state]` nadal pokazuje stan kolorem.
+
+### Nadzorca w rytmie paneli (1.45.13)
+
+Nadzorca używa teraz tego samego rytmu co Zadania i Notatki: nagłówek jak
+`.panele-top` (16 px, center, `--sp-2/--sp-3`, min-height 56 px), odstępy
+sekcji, kolumn i siatek na `--sp-*`, puste listy jak `.panele-empty`.
+Puste tabele i siatki zostają wyrównane do lewej. Na telefonie padding
+segmentu to `--sp-2`, a zakładki mają promienie `--r-card`/`--r-ctl`.
+Zmiana jest wyłącznie w `crack.css` - tokeny działają w obu motywach.
+
+### Czytelny wynik instalacji (1.45.12)
+
+Końcowa kontrola `install.sh` nie jest już ścianą tekstu. Wynik `check.sh`
+jest grupowany po numerze kontroli na siedem sekcji: 📦 Instalacja,
+🔒 Bezpieczeństwo, 🧠 Namysł, 🎨 UI, 📊 Diagnostyka, 📝 Dokumentacja,
+🔗 Integracja. Każda linia ma ✓/✗/⚠, każda grupa własne `X/Y OK`, a na końcu
+jest globalne podsumowanie, czas i lista błędów z sugestią (`->`). Opcja
+`--quiet` pokazuje tylko podsumowanie. `check.sh` i `weryfikuj.sh` pozostają
+nietknięte - to wyłącznie prezentacja w `install.sh`.
+
+### Resztki ciemnego w trybie jasnym (1.45.11)
+
+W jasnym motywie zostały poprawione tylko elementy, które naprawdę docierają
+do ekranu: toast Straży „medium” ma jasne tło, pill restartu Namysłu jest
+biały, błędy faz i kropki statusów używają tokenów (w ciemnym bez zmian),
+aktywny projekt ma neutralny border. `--nk-*` w light dostały chłodniejsze
+odcienie. Martwe literały w `debug.css`, `kadr.css`, `sistem.css` i
+`styles.css` zostawiono - są w całości nadpisane przez `crack.css`, więc
+tokenizowanie ich byłoby tylko szumem w diffie.
+
+### Tryb inteligentny Namysłu (1.45.10)
+
+Domyślnie Namysł sam wybiera, kiedy potrzebuje sześciu faz. Krótkie reakcje
+(„okej, super”), reakcje z planistycznym ogonem („okej, cieszę się, co by tu
+dziś zrobić?”) i doprecyzowania poprzedniej odpowiedzi („wyjaśnij to
+prościej”) idą normalną rozmową w kilka sekund. Pełny cykl uruchamiają
+zadania, analizy, decyzje, pliki i pytania z tematem. Wymuszenie jak dotąd:
+prefiks („przemyśl:”, „namysł:”, „dokładnie:”) albo komendy `/plan`,
+`/badaj`, `/recenzja`. W panelu Namysłu wybierasz **Inteligentne** (domyślne)
+albo **Dokładne = zawsze pełny cykl**. Powód pominięcia jest tylko w
+`decision_log` (`namysl_pominiento`) i Nadzorcy, nie w odpowiedzi.
+
+### Dymka czekania i pasek Namysłu (1.45.9)
+
+Dymka `...` jest teraz zaokrąglona jak zwykła odpowiedź (`--r-card`), ma
+widoczny border i 12 px odstępu od paska Namysłu (8 px na wąskim ekranie).
+Pasek zostaje pigułką (`--r-pill`), a gdy pojawia się po raz pierwszy,
+rozmowa dociąga się do dołu - dymka nie jest przycinana na jego krawędzi.
+
+### Kompaktowy Namysł i auto-scroll (1.45.8)
+
+Rozmowa sama podąża do dołu po wysłaniu wiadomości, pierwszym tokenie i
+zakończeniu odpowiedzi - płynnie, ale tylko gdy czytelnik jest przy dole.
+Przewinięcie w górę w trakcie streamingu zatrzymuje podążanie (pojawia się
+„↓ Nowa odpowiedź”), a powrót w okolice dołu wznawia je.
+
+Stepper Namysłu jest teraz paskiem 36 px nad composerem: `● Myślę…`,
+dostawca, koryto, restarty i czas. Fazy są ukryte do kliknięcia; klik poza
+zwija pasek. Zakończony cykl znika po 5 s, a błąd zostaje widoczny z czerwoną
+ramką. Pełny przebieg i tak jest w panelu „Postęp” i karcie „Jak myślałem”.
+
+### Co nagrywa Straż (1.45.7)
+
+Straż ma dwie warstwy. Baseline (`data/straz/baza.json`) porównuje co 60 s
+`agent/*.py`, `.env`, `/etc/passwd`, `/etc/group` i miejsca trwałości (cron,
+systemd, `sudoers.d`, profile powłoki). Pieczęć (`GREGAI.sha256`) obejmuje
+`agent/`, `ui/`, `training/`, skrypty i dokumenty z paczki. Poza zakresem są
+`data/`, `notatki/`, `memory/`, logi i `uninstall.log` - zmieniają się w
+użyciu. Zmiana `VERSION` robi cichy re-baseline obu warstw (wpis w łańcuchu
+bezpieczeństwa, zero toastu); kolejne zmiany w tej samej wersji alarmują.
+Alert kodu jest jeden: „Kod GREGAI zmieniony: N plików. Szczegóły w Nadzorcy”.
+„Zignoruj” wycisza typ na godzinę; `data/straz/widziane.json` pamięta
+zgłoszone klucze przez 24 h, także po restarcie. Diagnostyka:
+`gregai diag straz`.
 
 ## Tryby mocy (wpisujesz w czacie)
 
@@ -711,6 +1018,17 @@ dla plików w UTF-8 (inne kodowanie, np. Windows-1250, jest tylko do odczytu,
 żeby nie zgubić polskich znaków). Kopie zapasowe (`backups/`, polecenie „zrób
 kopię zapasową") obejmują notatki, pamięć, dane i kod GREGAI; zostaje 10 ostatnich.
 
+**Automatyczne dowęzłowywanie (1.43.0).** Po odpowiedzi w Ogólnej rozmowie
+GREGAI może w tle dopisać nowy temat jako plik `.md` w `notatki/` i połączyć
+go wikilinkami z istniejącymi notatkami. Domyślnie jest wyłączone: zgodę
+włączasz w profilu (`wierzchowanie.auto_dowezlywanie`), a `.env WEZLY_AUTO=off`
+twardo wyłącza funkcję. Tworzone są tylko typy `Note`, `Concept`, `Wiedza` i
+`Nauka`; nowych typów ani węzłów-kategorii GREGAI nie zakłada. Limity to 3
+węzły na przebieg, 6 dziennie i 15 minut przerwy na rozmowę. Bez zgody
+`material_do_sieci` tytuły notatek nie idą do sieci - wtedy działa wyłącznie
+model lokalny, a bez niego przebieg jest pomijany. Nowe węzły widać w
+toaście z przyciskiem „Cofnij” (plik trafia do `data/kosz`).
+
 Projekt nazywał się wcześniej SIECAI, a jego rozmówca WEBAI (do 2026-10-12;
 usługa `webai`, modele `webai-*`). Stare nazwy kluczy w `.env` (`SIECAI_...`)
 są nadal rozumiane, a `install.sh` zmienia je na `GREGAI_...`, usuwa wpisy
@@ -747,13 +1065,15 @@ GREGAI/
 │   ├── standing.py      zadania stałe: "śledź X i daj znać gdy Y" w tle (data/standing_tasks)
 │   ├── awareness.py     blok „Teraz": zegar, zapamiętane fakty, zadania w tle - dokładany do promptu przy każdej wiadomości
 │   ├── namysl.py        Namysł: sześć faz myślenia (rozpoznanie, zbieranie, szkic, krytyka, poprawa, sprawdzenie) z narracją na żywo
+│   ├── wezly_grow.py    automatyczne dowęzłowywanie: nowe tematy z rozmów w tle (zgoda w profilu, twarde limity)
+│   ├── ops.py           narzędzia agenta: state/diag/impact/tokens/log/reset/verify (JSON, bez sekretów)
 │   ├── analiza.py       czytanie dokumentów (txt/md/pdf/docx/xlsx/csv/kod) i rozumienie ich częściami
 │   ├── sources.py       Źródła: foldery i wgrane pliki INDYWIDUALNE dla każdej rozmowy (data/sources.json, data/wgrane/<rozmowa>/)
 │   ├── rozmowa.py       pamięć rozmowy: streszczenie wątku co 8 tur (data/rozmowy/<rozmowa>.json), „gdzie skończyliśmy” po przerwie
 │   ├── fsutil.py        atomowy zapis plików (plik tymczasowy + podmiana)
 │   ├── persona.py, heartbeat.py, learning.py, trace.py, sysinfo.py, env_loader.py
 │   └── prompt.md        osobowość i zasady GREGAI
-├── ui/                  index.html (Rozmowa / Węzły / Nadzorca), app.js, graph.js, styles.css (tokeny, jeden :root) + sistem.css (system projektowy z dawnym motywem) + kadr.css (wygląd „Kadr” 1.31.0: kolory ważności, plansza z napisami), fonty/ (Oxanium i Barlow, lokalnie, licencja OFL), debug.js, debug.css; debug.html = strona zapasowa /debug
+├── ui/                  index.html (Rozmowa / Węzły / Nadzorca), app.js, graph.js, styles.css (tokeny, jeden :root) + sistem.css (system projektowy z dawnym motywem) + kadr.css (wygląd „Kadr” 1.31.0: kolory ważności, plansza z napisami), fonty/ (Oxanium i Barlow, lokalnie, licencja OFL), debug.js, debug.css; debug.html = strona zapasowa /debug; health.html/health.js/health.css = panel /health (1.44.0)
 ├── GREGAI.sha256        sumy kontrolne paczki (tylko w ZIP-ie; sha256sum -c po rozpakowaniu)
 ├── notatki/wiedza/      wbudowana obronna baza wiedzy (cyberbezpieczeństwo, Linux, programowanie, myślenie, biznes, technika; 60 notatek)
 ├── notatki/szkola/      wbudowana wiedza szkolna (7 przedmiotów, matura/ósmoklasista)
@@ -762,6 +1082,7 @@ GREGAI/
 ├── .gitignore           sekrety, dane i modele zostają poza repozytorium
 ├── gregai               JEDNO polecenie: status, check, update, install, start/stop/restart, logs, open
 ├── install.sh           instalacja jedną komendą z dowolnego folderu (9 kroków)
+├── uninstall.sh         odwrotność install.sh: --dry-run, pytania, log, idempotencja
 ├── aktualizuj.sh        po wgraniu nowego kodu; wykrywa przeniesienie folderu
 ├── check.sh             kontrole po instalacji (liczba kontroli w bannerze skryptu)
 ├── weryfikuj.sh         składnia + szybki eval bez sudo i usług (czysta kopia)

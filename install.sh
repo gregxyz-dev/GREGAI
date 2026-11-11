@@ -23,6 +23,7 @@
 #   --od-zera  zainstaluj w nowym folderze od zera, choć stara instalacja (z .env
 #              i danymi) jest gdzie indziej (bez tego install.sh zatrzymuje się)
 #   --yes      bez pytań (klucz Anthropic pominięty, trening bez potwierdzenia)
+#   --quiet    tylko podsumowanie końcowej kontroli (dla CI); reszta instalacji bez zmian
 #   --help     ten opis
 #
 # Co robi, po kolei (każdy krok sprawdza, czy już nie jest zrobiony, więc
@@ -112,7 +113,7 @@ if [ "$(id -u)" -eq 0 ]; then
   exit 1
 fi
 
-DO_TRAIN=0; DO_HOST=1; FORCE_HERE=0; ASSUME_YES=0; FROM_SCRATCH=0
+DO_TRAIN=0; DO_HOST=1; FORCE_HERE=0; ASSUME_YES=0; FROM_SCRATCH=0; QUIET=0
 ARGS=("$@")
 for _a in "$@"; do
   case "$_a" in
@@ -121,6 +122,7 @@ for _a in "$@"; do
     --here) FORCE_HERE=1 ;;
     --od-zera) FROM_SCRATCH=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
+    --quiet) QUIET=1 ;;
     -h|--help) awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) err "Nieznana opcja: $_a  (bash install.sh --help)"; exit 2 ;;
   esac
@@ -1525,7 +1527,157 @@ warp_on && ok "WARP nadal połączony" || warn "WARP rozłączył się w trakcie
 
 if [ "${GREGAI_SKIP_CHECK:-0}" != "1" ]; then
   log "Kontrola końcowa (check.sh)"
-  bash "$ROOT/check.sh" || { warn "check.sh zgłosił uwagi powyżej; popraw je i uruchom ponownie: bash \"$ROOT/install.sh\""; CHECK_FAIL=1; }
+  CHECK_LOG="$(mktemp /tmp/gregai-install-check-XXXXXX.log)"
+  CHECK_VER="$(cat "$ROOT/VERSION" 2>/dev/null || echo '?')"
+  if [ "$QUIET" != "1" ]; then
+    printf '\033[1;36m⏳ Trwa kontrola (116 kontroli, może potrwać minutę)...\033[0m\n'
+  fi
+  CHECK_START="$(date +%s)"
+  set +e
+  bash "$ROOT/check.sh" >"$CHECK_LOG" 2>&1
+  CHECK_RC=$?
+  set -e
+  CHECK_SECS="$(( $(date +%s) - CHECK_START ))"
+  CHECK_FAIL=0
+  [ "$CHECK_RC" -eq 0 ] || CHECK_FAIL=1
+  if ! python3 - "$CHECK_LOG" "$CHECK_VER" "$QUIET" "$CHECK_SECS" "$CHECK_RC" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+log_path = sys.argv[1]
+version = sys.argv[2]
+quiet = sys.argv[3] == "1"
+seconds = int(sys.argv[4])
+rc = int(sys.argv[5])
+
+# 1.45.12: check.sh zostaje nietknięty - grupujemy jego wynik po numerze
+# kontroli. Numery 1-116 są przypisane dokładnie raz; nowy numer w przyszłości
+# trafi do Integracji, żeby format nie wywracał się przy kolejnej kontroli.
+GROUPS = [
+    ("📦 Instalacja", set(range(1, 13)) | {38, 106, 116}),
+    ("🔒 Bezpieczeństwo", set(range(13, 18)) | {20, 23, 24, 26, 28, 29, 30, 31, 33, 47, 50, 58, 63, 72, 78}),
+    ("🧠 Namysł", {18, 19, 21, 22, 25, 27, 32, 43, 44, 53, 60, 61, 74, 75, 107} | set(range(79, 102))),
+    ("🎨 UI", {42, 76, 77, 108, 109, 110, 111, 113, 114}),
+    ("📊 Diagnostyka", {64, 70, 71, 102, 103, 104, 105, 112}),
+    ("📝 Dokumentacja", {45, 65, 66, 67, 68, 69, 73}),
+    ("🔗 Integracja", set(range(34, 38)) | set(range(39, 42)) | {46, 48, 49, 51, 52, 54, 55, 56, 57, 59, 62, 115}),
+]
+DEFAULT_GROUP = "🔗 Integracja"
+group_of = {}
+for name, nums in GROUPS:
+    for n in nums:
+        group_of[n] = name
+
+ansi = re.compile(r"\x1b\[[0-9;]*m")
+line_re = re.compile(r"^\s*(OK|BŁĄD|--)\s+(\d+)\.\s*(.*)$")
+fix_re = re.compile(r"^\s*->\s*(.*)$")
+results = {}
+last = None
+try:
+    text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+except OSError:
+    text = ""
+for raw in text.splitlines():
+    line = ansi.sub("", raw).rstrip()
+    m = line_re.match(line)
+    if m:
+        status = {"OK": "OK", "BŁĄD": "FAIL", "--": "SKIP"}[m.group(1)]
+        desc = re.sub(r"\s*\(pominięte w trybie CI\)\s*$", "", m.group(3)).strip()
+        results[int(m.group(2))] = [status, desc, ""]
+        last = int(m.group(2))
+        continue
+    m = fix_re.match(line)
+    if m and last in results and results[last][0] == "FAIL":
+        results[last][2] = m.group(1).strip()
+
+C = "\033[36m"; G = "\033[32m"; R = "\033[31m"; Y = "\033[33m"; B = "\033[1m"; N = "\033[0m"
+BAR = "═" * 39
+
+
+def plural(n, one, few, many):
+    if n == 1:
+        return one
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return few
+    return many
+
+
+def short(text):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= 100 else text[:99].rstrip() + "…"
+
+
+if not results:
+    print(f"{R}✗ nie udało się odczytać wyników kontroli{N}")
+    print(f"Pełny log: {log_path}")
+    sys.exit(2)
+
+ok_n = sum(1 for r in results.values() if r[0] == "OK")
+fail_n = sum(1 for r in results.values() if r[0] == "FAIL")
+skip_n = sum(1 for r in results.values() if r[0] == "SKIP")
+executed = ok_n + fail_n
+
+if not quiet:
+    print(f"\n{C}{BAR}{N}")
+    print(f"{B}  GREGAI v{version} - Instalacja{N}")
+    print(f"{C}{BAR}{N}")
+    for name, nums in GROUPS:
+        rows = [(n, results[n]) for n in sorted(nums) if n in results]
+        if not rows:
+            continue
+        print(f"\n{B}{name}{N}")
+        g_ok = g_fail = g_skip = 0
+        for n, (status, desc, _fix) in rows:
+            if status == "OK":
+                g_ok += 1
+                print(f"  {G}✓{N} {short(desc)}")
+            elif status == "FAIL":
+                g_fail += 1
+                print(f"  {R}✗{N} {short(desc)}")
+            else:
+                g_skip += 1
+                print(f"  {Y}⚠{N} {short(desc)}")
+        tail = f"{g_ok}/{g_ok + g_fail} OK"
+        if g_skip:
+            tail += f" · {g_skip} {plural(g_skip, 'pominięta', 'pominięte', 'pominiętych')}"
+        print(f"  {C}→ {tail}{N}")
+
+    if fail_n:
+        print(f"\n{R}Błędy:{N}")
+        for n in sorted(results):
+            status, desc, fix = results[n]
+            if status != "FAIL":
+                continue
+            print(f"  {R}✗ {n}. {short(desc)}{N}")
+            if fix:
+                print(f"     {R}->{N} {fix}")
+
+    if rc and not fail_n:
+        print(f"\n{Y}⚠ check.sh zakończył się kodem {rc}, choć nie zgłosił pozycji BŁĄD{N}")
+
+minutes, secs = divmod(seconds, 60)
+elapsed = f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+if not quiet:
+    print(f"\n{C}{BAR}{N}")
+print(f"  {B}PODSUMOWANIE: {ok_n}/{executed} OK · {fail_n} {plural(fail_n, 'błąd', 'błędy', 'błędów')} · {skip_n} {plural(skip_n, 'pominięta', 'pominięte', 'pominiętych')}{N}")
+print(f"  Czas: {elapsed}")
+if not quiet:
+    print(f"{C}{BAR}{N}")
+
+sys.exit(1 if (fail_n or rc) else 0)
+PY
+  then
+    CHECK_FAIL=1
+  fi
+  if [ "$CHECK_FAIL" -eq 1 ]; then
+    if [ "$QUIET" != "1" ]; then
+      warn "check.sh zgłosił błędy (lista wyżej); popraw je i uruchom ponownie: bash \"$ROOT/install.sh\""
+      echo "Pełny log kontroli: $CHECK_LOG"
+    fi
+  else
+    rm -f "$CHECK_LOG"
+  fi
 fi
 
 if [ "$DO_TRAIN" = "1" ]; then

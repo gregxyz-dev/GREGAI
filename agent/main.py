@@ -55,6 +55,7 @@ from env_loader import load_env, set_env_vars  # noqa: E402
 # Kopia środowiska sprzed wczytania .env służy restartowi z /debug: nowy proces
 # startuje od niej, więc ustawienie USUNIĘTE z .env nie przeżywa restartu.
 _PRE_ENV_SNAPSHOT = dict(os.environ)
+_PROCESS_START = time.monotonic()
 load_env()
 
 import persona as persona_mod  # noqa: E402
@@ -72,6 +73,8 @@ import juggler as juggler_mod  # noqa: E402
 import awareness as awareness_mod  # noqa: E402
 import namysl as namysl_mod  # noqa: E402
 import sources as sources_mod  # noqa: E402
+import profil as profil_mod  # noqa: E402
+import wezly_grow as wezly_grow_mod  # noqa: E402
 import agentloop as agentloop_mod  # noqa: E402
 import rozmowa as rozmowa_mod  # noqa: E402
 import sysinfo as sysinfo_mod  # noqa: E402
@@ -80,6 +83,7 @@ import netguard as netguard_mod  # noqa: E402
 import tryby as tryby_mod  # noqa: E402
 import siec as siec_mod  # noqa: E402
 import devtools as devtools_mod  # noqa: E402
+import ops as ops_mod  # noqa: E402
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -253,6 +257,19 @@ def _parse_body(raw_body: bytes):
         raise ValueError("JSON zagnieżdżony zbyt głęboko") from e
 
 
+def _mask_token(t: str) -> str:
+    """Maska tokena do diagnostyki: trzy pierwsze i trzy ostatnie znaki.
+    [2026-11-11] (audyt MCP, #1): pełny token w /api/system_info (dostępnym
+    z localhost bez autoryzacji) wyciekał do każdego lokalnego procesu i
+    strony same-origin; maska zachowuje użyteczność ("to ten token?"),
+    nie ujawniając sekretu. Prawdziwa wartość zawsze w .env."""
+    if not t:
+        return ""
+    if len(t) <= 8:
+        return "…"
+    return f"{t[:3]}…{t[-3:]}"
+
+
 def _error_text(e: Exception) -> str:
     """Komunikat dla użytkownika bez ścieżek i nazw plików tymczasowych (te
     zostają w dzienniku: journalctl -u gregai)."""
@@ -273,7 +290,7 @@ def _error_text(e: Exception) -> str:
 
 
 _JSON_POST_PATHS = frozenset({"/api/chat", "/api/chat/wait", "/api/note", "/api/note/create", "/api/note/delete", "/api/note/przywroc", "/api/debug/learned/zapomnij",
-                              "/api/debug/lan", "/api/namysl/settings", "/api/sources", "/api/upload", "/api/chat/cancel", "/api/rozmowa/usun",
+                              "/api/debug/lan", "/api/namysl/settings", "/api/profil", "/api/sources", "/api/upload", "/api/chat/cancel", "/api/rozmowa/usun",
                               "/api/standing/nowe", "/api/standing/pauza", "/api/standing/usun", "/api/standing/wyczysc",
                               "/api/straz/wycisz", "/api/eval/run"})
 
@@ -564,6 +581,18 @@ def _run_chat(payload: dict, job: dict | None = None) -> dict:
                 # całą wymianę z historii do sieci.
                 if result.get("sig"):
                     result["sig"] = router_mod._chat_sig(cleaned)
+        # 1.43.0: automatyczne dowęzłowywanie tylko w Ogólnej rozmowie (projekt
+        # ma własną kartę sugestii z potwierdzeniem). Wątek w tle nie opóźnia
+        # odpowiedzi; UI dostaje tylko flagę i dopyta /api/wezly/ostatnie.
+        if (active_project is None and result.get("kind") == "chat"
+                and not result.get("error") and isinstance(result.get("speech"), str)):
+            # `wezly_since` liczy serwer, nie przeglądarka: przy dostępie przez
+            # LAN zegary mogą się różnić, a UI i tak pyta o wpisy od tego czasu.
+            result["wezly_since"] = int(time.time())
+            result["wezly_auto"] = wezly_grow_mod.maybe_start(
+                chat, message, result["speech"],
+                on_created=lambda _items: invalidate_vault_cache(),
+                vault_getter=get_vault)
         # Pamięć rozmowy (agent/rozmowa.py, 1.10.0): para tur do pliku tej
         # rozmowy, a co TURN_STEP tur odświeżenie streszczenia W TLE - nigdy nie
         # opóźnia tej odpowiedzi. Błąd zapisu nie psuje rozmowy.
@@ -1314,6 +1343,14 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_note_get(slug)
             return
 
+        if route == "/api/health":
+            # 1.44.0: panel /health - bez sekretów, tylko agregaty.
+            try:
+                self._send_json(ops_mod.health_payload())
+            except Exception as e:
+                self._send_json({"ok": False, "error": _error_text(e)}, status=500)
+            return
+
         if route == "/api/status":
             # 1.24.0: pigułka w nagłówku rozmowy (straż + budżet), lekko: bez dziennika.
             try:
@@ -1376,6 +1413,28 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/namysl/settings":
             self._send_json(namysl_mod.load_settings())
+            return
+
+        if route == "/api/profil":
+            try:
+                self._send_json({"exists": profil_mod.exists(), "profile": profil_mod.get()})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
+
+        if route == "/api/wezly/ostatnie":
+            # 1.43.0: co wątek tła dopisał do grafu po odpowiedzi (UI pyta
+            # kilka razy, bo model może odpowiedzieć po kilkunastu sekundach).
+            qs = parse_qs(parsed.query)
+            chat = sources_mod.chat_id((qs.get("chat") or ["ogolna"])[0])
+            try:
+                since = max(0, int((qs.get("since") or ["0"])[0]))
+            except ValueError:
+                since = 0
+            try:
+                self._send_json({"items": wezly_grow_mod.recent(chat, since)})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
             return
 
         # 1.32.0: diagnoza internetu warstwa po warstwie (agent/diagnoza.py) - w USŁUDZE,
@@ -1446,6 +1505,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self._send_json({
                     "host": sysinfo_mod.host_info(),
+                    # 1.44.0: pid/uptime procesu dla `gregai state` (bez systemctl).
+                    "service": {"pid": os.getpid(), "uptime_s": int(time.monotonic() - _PROCESS_START)},
                     "ollama": sysinfo_mod.ollama_info(router_mod.OLLAMA_HOST),
                     "ollama_model": router_mod.OLLAMA_MODEL,
                     # Wytrenowany router do kroku 1 (patrz router.py:
@@ -1495,7 +1556,9 @@ class Handler(BaseHTTPRequestHandler):
                     # Token wprost w odpowiedzi - ten endpoint i tak wymaga _authorized()
                     # (ta maszyna albo już poprawny token), jak każde /api/, więc to nie
                     # jest nowy wyciek: kto go czyta, już go ma albo jest na tym laptopie.
-                    "lan": {"enabled": LAN_MODE, "token_configured": bool(GREGAI_TOKEN), "token": GREGAI_TOKEN},
+                    "lan": {"enabled": LAN_MODE, "token_configured": bool(GREGAI_TOKEN),
+                            # [2026-11-11] (audyt MCP, #1): maska zamiast pełnego tokena.
+                            "token": _mask_token(GREGAI_TOKEN)},
                 })
             except Exception as e:
                 self._send_json({"error": _error_text(e)}, status=500)
@@ -1689,6 +1752,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(UI_DIR / "debug.html", "text/html; charset=utf-8")
             return
 
+        if route in ("/health", "/health/"):
+            self._send_file(UI_DIR / "health.html", "text/html; charset=utf-8")
+            return
+
         if route.startswith("/api/"):
             self._send_json({"error": "Nie znaleziono"}, status=404)
             return
@@ -1837,6 +1904,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": _error_text(e)}, status=500)
             return
+        if parsed.path == "/api/profil":
+            try:
+                payload = _parse_body(raw_body) or {}
+                if not isinstance(payload, dict):
+                    self._send_json({"error": "Profil musi być obiektem JSON."}, status=400)
+                    return
+                if payload.get("skip") is True:
+                    saved = profil_mod.skip_onboarding()
+                else:
+                    saved = profil_mod.save(payload, source="onboarding" if not profil_mod.exists() else "ui")
+                self._send_json({"ok": True, "exists": True, "profile": saved})
+            except Exception as e:
+                self._send_json({"error": _error_text(e)}, status=500)
+            return
         if parsed.path == "/api/sources":
             self._handle_sources(raw_body)
             return
@@ -1887,10 +1968,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = _parse_body(raw_body) or {}
                 ts = str(payload.get("ts") or "").strip()
-                if not ts:
-                    self._send_json({"error": "Brak znacznika czasu wpisu."}, status=400)
+                typ = str(payload.get("typ") or "").strip()[:64]
+                if not ts and not typ:
+                    self._send_json({"error": "Brak znacznika czasu wpisu albo typu alertu."}, status=400)
                     return
-                self._send_json({"ok": straz_mod.acknowledge(ts)})
+                self._send_json({"ok": straz_mod.acknowledge(ts, typ=typ), "typ": typ or None})
             except Exception as e:
                 self._send_json({"error": _error_text(e)}, status=500)
             return
@@ -2038,7 +2120,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({
             "ok": True,
             "enabled": enabled,
-            "token": token,
+            # [2026-11-11] (audyt MCP, #1): świeżo wygenerowany token pokazujemy
+            # raz (trzeba go przepisać na drugie urządzenie); istniejący tylko
+            # zamaskowany - pełna wartość zawsze w .env.
+            "token": token if token_generated else _mask_token(token),
             "token_generated": token_generated,
             "restart_required": True,
         })

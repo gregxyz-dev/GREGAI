@@ -90,6 +90,15 @@ def _load(fresh: bool = False) -> list[dict]:
                 raise ValueError("zły kształt")
             for e in data:
                 _normalize_entry(e)
+        except PermissionError:
+            # [2026-11-11] (audyt MCP, #6): plik śladu w obcej własności (CLI
+            # albo audyt uruchomiony jako drugi użytkownik podmienia plik
+            # atomic_write, a własność idzie za ostatnim pisarzem) nie może na
+            # stałe zabić śladu usługi: odsuwamy go jako dowód i budujemy
+            # nowy - zapis ma prawa do katalogu data/, więc przejęcie się
+            # udaje. Zwykłe chwilowe błędy odczytu nadal wylatują jak niżej.
+            data = []
+            fsutil.quarantine(TRACE_PATH)
         except OSError:
             raise  # 1.29.0 (kontrola): chwilowy błąd odczytu to nie uszkodzony plik - nic nie odsuwamy
         except Exception:

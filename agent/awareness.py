@@ -90,12 +90,13 @@ MAX_MEMORY_CHARS = 160
 # 2,7 znaku/token to ok. 800 tokenów z ok. 8900 wolnych na historię (patrz
 # 18. kontrola w check.sh, która liczy budżet Z tym blokiem).
 MAX_BLOCK_CHARS = 4000  # 2200 w 1.8.22; +1800 na streszczenie rozmowy (rozmowa.py, 1.10.0) - 18. kontrola liczy budżet z tym limitem
-# System lokalnego modelu (1.37.0): max 800 tokenów. 2,7 znaku/token to ten
-# sam przelicznik co router.SYSTEM_CHARS_PER_TOKEN; 2000 znaków zostawia
-# zapas na tokeny interpunkcji i cyfr (router._est_tokens liczy je osobno).
+# System lokalnego modelu (1.37.0, 1.42.2: 850 tokenów przez profil). 2,7
+# znaku/token to ten sam przelicznik co router.SYSTEM_CHARS_PER_TOKEN;
+# 2125 znaków zostawia zapas na tokeny interpunkcji i cyfr
+# (router._est_tokens liczy je osobno).
 # 1.38.9: LOCAL_SYSTEM_MAX to alias profilu (OLLAMA_* pozostaje źródłem prawdy
 # dla parametrów modelu; ten limit dotyczy tylko długości promptu).
-LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 800, 200, 4000)
+LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 850, 200, 4000)
 LOCAL_SYSTEM_MAX_CHARS = int(LOCAL_SYSTEM_MAX_TOKENS * 2.5)
 # Nazwa zadania stałego w bloku (reszta w notatce zadania).
 MAX_TASK_CHARS = 90
@@ -487,14 +488,24 @@ def _local_crisis(system_prompt: str) -> str:
     return _section(system_prompt, "Kryzys")
 
 
-def _fit_local_system(text: str) -> str:
-    """Twardy budżet systemu lokalnego: 800 tokenów (LOCAL_SYSTEM_MAX_CHARS).
+def _fit_local_system(text: str, drop="") -> str:
+    """Twardy budżet systemu lokalnego: 850 tokenów (LOCAL_SYSTEM_MAX_CHARS).
 
     Tniemy od KOŃCA, bo instrukcje i osobowość stoją na początku. Najpierw
-    odpada dopisek projektu (ma własny nagłówek), potem ostatnia sekcja.
+    odpadają bloki opcjonalne (`drop`: profil, format), potem dopisek projektu
+    (ma własny nagłówek), a na końcu ostatnia sekcja. Profil i format są
+    opcjonalne; sekcja „Kryzys” i kontekst projektu muszą przetrwać.
     """
     if len(text) <= LOCAL_SYSTEM_MAX_CHARS:
         return text
+    drops = [drop] if isinstance(drop, str) else list(drop or [])
+    for block in drops:
+        if not block or block not in text:
+            continue
+        without = re.sub(r"\n{3,}", "\n\n", text.replace(block, "")).strip()
+        if len(without) <= LOCAL_SYSTEM_MAX_CHARS:
+            return without
+        text = without
     cut = text[:LOCAL_SYSTEM_MAX_CHARS - 40]
     for sep in ("\n\n--- Kontekst: projekt", "\n\n## ", "\n"):
         i = cut.rfind(sep)
@@ -502,6 +513,24 @@ def _fit_local_system(text: str) -> str:
             cut = cut[:i]
             break
     return cut.rstrip() + "\n…"
+
+
+def _profile_block(cloud: bool = False) -> str:
+    """Profil użytkownika dla promptu (1.42.0). Błąd profilu nie psuje rozmowy."""
+    try:
+        import profil as profil_mod
+        return profil_mod.render(cloud=cloud)
+    except Exception:
+        return ""
+
+
+def _format_block(cloud: bool = False) -> str:
+    """Instrukcja formatowania odpowiedzi (1.45.0). Nie jest danymi profilu."""
+    try:
+        import profil as profil_mod
+        return profil_mod.formatting_hint(cloud=cloud)
+    except Exception:
+        return ""
 
 
 def local_system(system_prompt: str, now: datetime | None = None) -> str:
@@ -514,9 +543,12 @@ def local_system(system_prompt: str, now: datetime | None = None) -> str:
     też tu nie wchodzi: to nadal wyłącznie wersja lokalna w local_block().
 
     Od 1.38.9 treść pochodzi z prompts/system_local.md; plik może używać
-    {PERSONA}, {LOCAL_RULES}, {CRISIS}, {PROJECT}. Brak pliku = dawny kod.
+    {PERSONA}, {LOCAL_RULES}, {CRISIS}, {PROJECT}, {PROFILE}, {FORMAT}.
+    Brak pliku = dawny kod.
     """
     now = now or datetime.now()
+    profile = ""
+    format_hint = ""
     try:
         import persona as persona_mod
         persona_text = persona_mod.student_system_prompt()
@@ -526,21 +558,33 @@ def local_system(system_prompt: str, now: datetime | None = None) -> str:
         i = system_prompt.find("\n\n--- Kontekst: projekt")
         if i >= 0:
             project = system_prompt[i:]
+        profile = _profile_block(cloud=False)
+        format_hint = _format_block(cloud=False)
         template = config_mod.text("prompts.system_local", "").strip()
         if template:
             compact = (template.replace("{PERSONA}", persona_text)
                        .replace("{LOCAL_RULES}", rules)
                        .replace("{CRISIS}", crisis)
-                       .replace("{PROJECT}", project))
+                       .replace("{PROJECT}", project)
+                       .replace("{PROFILE}", profile)
+                       .replace("{FORMAT}", format_hint))
             if project and "{PROJECT}" not in template:
                 compact += project
+            if profile and "{PROFILE}" not in template:
+                compact += "\n\n" + profile
+            if format_hint and "{FORMAT}" not in template:
+                compact += "\n\n" + format_hint
         else:
             compact = persona_text + "\n\n" + rules + ("\n\n## Kryzys\n" + crisis if crisis else "")
+            if profile:
+                compact += "\n\n" + profile
+            if format_hint:
+                compact += "\n\n" + format_hint
             # Przegląd 1.32.4: rozmowa projektu niesie graf i konwencję NOWY_WEZEL na końcu promptu.
             compact += project
     except Exception:
         compact = system_prompt
-    return _fit_local_system(compact.rstrip() + "\n\n" + today_line(now))
+    return _fit_local_system(compact.rstrip() + "\n\n" + today_line(now), drop=(profile, format_hint))
 
 
 def local_prompt(system_prompt: str, vault, now: datetime | None = None, chat: str | None = None) -> str:
@@ -563,13 +607,27 @@ def cloud_prompt(system_prompt: str, now: datetime | None = None, chat: str | No
         block = ""  # bez maski nic: lepiej bez streszczenia niż z sekretem
     # 1.38.9: opcjonalny szablon prompts/system_cloud.md. Domyślnie plik ma
     # tylko {SYSTEM}, więc wynik jest identyczny z dotychczasowym.
+    profile = _profile_block(cloud=True)
+    format_hint = _format_block(cloud=True)
     try:
         template = config_mod.text("prompts.system_cloud", "").strip()
         if template:
             base = (template.replace("{SYSTEM}", system_prompt)
                     if "{SYSTEM}" in template else system_prompt + "\n\n" + template)
+            if "{PROFILE}" in template:
+                base = base.replace("{PROFILE}", profile)
+            elif profile:
+                base += "\n\n" + profile
+            if "{FORMAT}" in template:
+                base = base.replace("{FORMAT}", format_hint)
+            elif format_hint:
+                base += "\n\n" + format_hint
         else:
             base = system_prompt
+            if profile:
+                base += "\n\n" + profile
+            if format_hint:
+                base += "\n\n" + format_hint
     except Exception:
         base = system_prompt
     return base + block

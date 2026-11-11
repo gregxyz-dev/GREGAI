@@ -88,6 +88,7 @@ import komendy as komendy_mod
 import learning as learning_mod
 import lekcje as lekcje_mod
 import netguard as netguard_mod
+import profil as profil_mod
 import persona as persona_mod
 import skupienie as skupienie_mod
 import standing as standing_mod
@@ -384,10 +385,10 @@ def _est_tokens(text: str) -> int:
 
 # --- Budżety promptu lokalnego (1.37.0) --------------------------------------
 # 3B na CPU (i7-6600U) działa dobrze do ok. 4-6 tys. tokenów; powyżej gubi
-# instrukcje i zmyśla. Twarde limity: system 800, wiadomość użytkownika
-# 2000, całość 3000 tokenów. Nadmiar tniemy od KOŃCA (najstarsze notatki),
-# nigdy od początku (instrukcje).
-LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 800, 200, 4000)
+# instrukcje i zmyśla. Twarde limity: system 850 (1.42.2: profil użytkownika),
+# wiadomość użytkownika 2000, całość 3000 tokenów. Nadmiar tniemy od KOŃCA
+# (najstarsze notatki), nigdy od początku (instrukcje).
+LOCAL_SYSTEM_MAX_TOKENS = env_int("LOCAL_SYSTEM_MAX", 850, 200, 4000)
 LOCAL_USER_MAX_TOKENS = env_int("LOCAL_USER_MAX", 2000, 200, 8000)
 LOCAL_PROMPT_MAX_TOKENS = 3000
 # 1.38.4 (#26), alias od 1.38.9: bezpiecznik przed Ollamą. 12000 tokenów
@@ -423,7 +424,7 @@ def _trim_to_tokens(text: str, max_tokens: int, marker: str = " […]") -> str:
 def _local_prompt_budget(system: str, user: str, notes: str = "", file_text: str = "") -> tuple[str, str]:
     """(system_final, user_final) po przycięciu do limitów modelu lokalnego.
 
-    system: max 800 tokenów, cięte od końca.
+    system: max 850 tokenów, cięte od końca.
     user:   max 2000 tokenów; notatki do 500 tokenów, plik do 500 tokenów
             (jeśli jest dłuższy niż 1500, z odesłaniem do pełnej treści).
     Całość (system + user) nie przekracza 3000 tokenów.
@@ -941,19 +942,26 @@ def _unframe(text) -> str:
     return re.sub(r"[<>]{3,}", " ", str(text or ""))
 
 
-def namysl_cloud_call(rozdz: dict, system, msgs, msg, exclude=None, prefer=None, on_token=None):
-    """Jedno wywołanie sieciowe Namysłu według rozdzielnicy. Audyt 1.32.1: pusta lista
-    etapów znaczy "żadnego etapu sieciowego" (np. KORYTO bez darmowej puli, a waga 1-2
-    wyklucza płatny). Dawniej `[] or None` zamieniało to na pełne koryto i Namysł wołał
-    płatnego Claude'a.
+def namysl_cloud_call(rozdz: dict, system, msgs, msg, exclude=None, prefer=None, on_token=None,
+                      provider=None):
+    """Jedno wywołanie sieciowe Namysłu.
 
-    1.39.0: `on_token` (tylko Szkic) - najlepsza próba podglądu; dostawca, który
-    go nie wspiera, po prostu odda całość na końcu."""
-    if rozdz.get("etapy") == []:
+    1.40.0: `provider` to dostawca przypięty do CAŁEGO cyklu Namysłu przez
+    namysl._provider_plan. Wtedy wołamy juggler.chat z `only_provider`: bez
+    łańcucha, bez losowania i bez fallbacku - błąd dostawcy przerywa cykl i
+    namysl.run zaczyna go od fazy 1 na następnym etapie. `rozdz` służy już
+    tylko do modelu Claude (NAMYSL_MODEL); lista etapów rozdzielnicy nie
+    wybiera dostawcy Namysłu, bo atrybucja wymaga jednego dostawcy na cykl.
+
+    Bez `provider` (ścieżka zgodności) działa dawny łańcuch według
+    rozdzielnicy. Audyt 1.32.1: pusta lista etapów znaczy "żadnego etapu
+    sieciowego". 1.39.0: `on_token` (tylko Szkic) - najlepsza próba podglądu."""
+    if provider is None and rozdz.get("etapy") == []:
         raise RuntimeError("rozdzielnica: przy tej wadze żaden etap sieciowy nie jest dozwolony")
+    model = rozdz.get("model") if provider in (None, "anthropic") else None
     return juggler_mod.chat(system, msgs, msg, timeout=JUGGLER_TIMEOUT, preferred_provider=prefer,
                             exclude_provider=exclude, etapy=rozdz.get("etapy") or None,
-                            model=rozdz.get("model"), on_token=on_token)
+                            model=model, on_token=on_token, only_provider=provider)
 
 
 def _stage_order_for(poziom: int) -> list:
@@ -1369,7 +1377,11 @@ def _log_ollama_use(model: str | None, data: dict, quality: str = "") -> None:
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "model": model or OLLAMA_MODEL,
             "sekund": round(total_s, 2),
-            "tok_s": round(tokens / eval_s, 1) if eval_s > 0 and tokens else None,
+            # [2026-11-11] (audyt MCP, #4): urwane wywołanie (976 s, 1 token,
+            # eval_duration ~1 µs) pisało tok_s=1000000 i zatruwało medianę
+            # tok/s w ollama_sesja. Miarodajny log wymaga sensownego czasu
+            # ewaluacji i choć paru tokenów.
+            "tok_s": round(tokens / eval_s, 1) if eval_s >= 0.1 and tokens >= 2 else None,
             "tokeny": tokens or None,
         }
         if quality:
@@ -1426,6 +1438,18 @@ def _is_timeout_error(exc: BaseException) -> bool:
 
 # --- Walidacja odpowiedzi 3B (1.37.0) ----------------------------------------
 _PL_DIACRITICS = "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"
+# [2026-11-11] (audyt MCP, #9): CJK (chiński/japoński/koreański) w odpowiedzi
+# na polską rozmowę to zawsze błąd modelu; bramka "angielski" go nie widziała
+# ("仍未返回" przeleciało do Grzegorza).
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+# [2026-11-11] (audyt MCP, #10): meta-narracja zamiast odpowiedzi - mały model
+# przy długim kontekście opisuje rozmowę i siebie ("Grzegorz pytałeś o pogodę...",
+# "AI pamięta, że...", "GREGAI zapisuje te pytania..."). Wzorce celowo wąskie,
+# żeby rozmowa O sztucznej inteligencji przechodziła.
+_META_RE = re.compile(
+    r"(?i)(?:\bAI\s+(?:pami[eę]ta|powin\w*|nie\s+posiada)"
+    r"|\bGREGAI\s+zapisuje"
+    r"|\b[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+\s+pyta[lł][eęś]?\s+o)")
 _EN_WORDS_RE = re.compile(r"\b(?:the|is|are|and|of|with|you|here|this|that|for|have|will|not|can)\b", re.IGNORECASE)
 _END_OK_CHARS = ".!?…:;\"'”’)»]`"
 _LAST_LOCAL_QUALITY: dict = {"powod": "", "model": ""}
@@ -1475,6 +1499,17 @@ def _validate_local_response(response: str, prompt: str = "") -> tuple[bool, str
             and len(_EN_WORDS_RE.findall(text)) > _vcfg("angielski", "prog_slow", 3)):
         action = _vaction("angielski", "retry")
         return (action == "oznacz"), "angielski", action == "retry"
+    # [2026-11-11] (audyt MCP, #9): chiński/japoński/koreański w odpowiedzi
+    # (nawet w środku polskiego tekstu) = pomylenie języków przez model;
+    # ta sama polityka co "angielski": jedna próba ponowienia, potem oznaczenie.
+    if _CJK_RE.search(text):
+        action = _vaction("cjk", "retry")
+        return (action == "oznacz"), "cjk", action == "retry"
+    # [2026-11-11] (audyt MCP, #10): meta-narracja zamiast odpowiedzi (opis
+    # rozmowy i samego siebie zamiast treści). Ta sama polityka jak wyżej.
+    if (len(text) > _vcfg("meta", "min_dlugosc", 80) and _META_RE.search(text)):
+        action = _vaction("meta", "retry")
+        return (action == "oznacz"), "meta", action == "retry"
     if len(text) > _vcfg("urwane", "min_dlugosc", 500) and text[-1] not in _END_OK_CHARS:
         action = _vaction("urwane", "oznacz")
         return (action == "oznacz"), "urwane", action == "retry"
@@ -1484,6 +1519,15 @@ def _validate_local_response(response: str, prompt: str = "") -> tuple[bool, str
 def local_last_quality() -> dict:
     """Ostatni kod jakości odpowiedzi lokalnej (dla /debug i śladu decyzji)."""
     return dict(_LAST_LOCAL_QUALITY)
+
+
+def _meta_narracja_reply() -> str:
+    """[2026-11-11] (audyt MCP, #10): uczciwy tekst podstawiany za halucynowaną
+    meta-narrację na ścieżce awaryjnej - to jedyna odpowiedź, jaką użytkownik
+    dostaje, więc tekst "AI nie posiada..." nie może nią być."""
+    return ("Nie udało mi się dokończyć namysłu - zawiedli wszyscy dostawcy, "
+            "a odpowiedź lokalnego modelu wyszła bez sensu. Spróbuj jeszcze raz za chwilę; "
+            "jeśli to było polecenie (pogoda, cena, zapamiętaj), powtórz je.")
 
 
 def _ollama_request(payload: dict, timeout: int, quality: str = "") -> dict:
@@ -2476,11 +2520,17 @@ _SAFE_TICKER_RE = re.compile(r"^[A-Za-z0-9.^_-]{1,20}$")
 _SOCIAL_THANKS_RE = re.compile(r"(?i)\b(?:dzi[eę]k\w*|dziek\w*|thx|thanks|dzi[eę]ks|dzieks)\b")
 _SOCIAL_GREETING_RE = re.compile(
     r"(?i)^\s*(?:hej(?:ka)?|cze[sś][cć]|witaj|witam|siema|elo|dzie[nń]\s+dobry|dobry\s+wiecz[oó]r)\b")
-_SOCIAL_CACHE: dict = {"key": None, "thanks": _SOCIAL_THANKS_RE, "greet": _SOCIAL_GREETING_RE}
+# [2026-11-11] (audyt MCP, #5): pożegnania ("do widzenia", "żegnaj", "pa pa",
+# "dobranoc") też należą do szybkich ścieżek - wcześniej szły przez Koryto
+# albo pełny Namysł, paląc dostawców na "Cześć! W czym mogę pomóc?".
+_SOCIAL_FAREWELL_RE = re.compile(
+    r"(?i)^\s*(?:do\s+widzenia|do\s+zobaczenia|[zźż]egnaj|[zźż]egnam|pa\s+pa|pa\b|dobranoc|na\s+razie)\b")
+_SOCIAL_CACHE: dict = {"key": None, "thanks": _SOCIAL_THANKS_RE, "greet": _SOCIAL_GREETING_RE,
+                       "bye": _SOCIAL_FAREWELL_RE}
 
 
 def _social_patterns():
-    """Wzorce podziękowań/powitań z config/social.json (fallback: kod).
+    """Wzorce podziękowań/powitań/pożegnań z config/social.json (fallback: kod).
 
     1.38.9: hot-reload obejmuje ten plik; wzorce kompilują się od nowa tylko
     po zmianie treści (klucz = serializowany JSON)."""
@@ -2490,7 +2540,7 @@ def _social_patterns():
     except Exception:
         key = repr(data)
     if key == _SOCIAL_CACHE["key"]:
-        return _SOCIAL_CACHE["thanks"], _SOCIAL_CACHE["greet"]
+        return _SOCIAL_CACHE["thanks"], _SOCIAL_CACHE["greet"], _SOCIAL_CACHE["bye"]
 
     def _compile(name, fallback):
         raw = data.get(name) if isinstance(data, dict) else None
@@ -2504,8 +2554,9 @@ def _social_patterns():
 
     thanks = _compile("dziekuje", _SOCIAL_THANKS_RE)
     greet = _compile("powitania", _SOCIAL_GREETING_RE)
-    _SOCIAL_CACHE.update(key=key, thanks=thanks, greet=greet)
-    return thanks, greet
+    bye = _compile("pozegnania", _SOCIAL_FAREWELL_RE)
+    _SOCIAL_CACHE.update(key=key, thanks=thanks, greet=greet, bye=bye)
+    return thanks, greet, bye
 
 
 def _social_reply(message: str, settings: dict | None = None, files=None,
@@ -2522,11 +2573,21 @@ def _social_reply(message: str, settings: dict | None = None, files=None,
             return None
     except Exception:
         return None
-    thanks, greet = _social_patterns()
+    thanks, greet, bye = _social_patterns()
     if any(pattern.search(text) for pattern in thanks):
         return "Nie ma za co!"
     if any(pattern.match(text) for pattern in greet):
         return "Cześć! W czym mogę pomóc?"
+    if any(pattern.match(text) for pattern in bye):
+        return "Do widzenia! Będę tu, jak wrócisz."
+    if text.lower().strip(" !.,?") in ("tak", "nie"):
+        # [2026-11-11] (audyt MCP, #8): gołe "tak"/"nie" bez karty zgody szło
+        # do Koryta, a model halucynował akcje ("Zapisuję Twoje imię:
+        # Grzegorzu"). Uczciwa odpowiedź z kodu; z kartą zgody tę wiadomość
+        # przejmuje wcześniejsza gałąź pending_action. Szerokie synonimy
+        # ("ok", "dobrze") zostają rozmową - kontrola awaryjny-1382 pilnuje
+        # na nich lokalnego awaryjnego.
+        return "Nic nie czeka na moje potwierdzenie. Napisz, co mam zrobić."
     return None
 
 
@@ -2741,22 +2802,26 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
     _namysl_settings = namysl_mod.load_settings()
     # 1.38.7 (#30): flaga "Namysł już próbowany w tej wiadomości".
     namysl_tried = False
+    # 1.45.10: powód pominięcia trafia do decision_log (extra), nigdy do odpowiedzi.
+    namysl_skip_reason = ""
 
     def _try_namysl(model_up_now: bool, force: bool = False, kontekst: str = "", msg: str | None = None):
         # 1.38.7 (#30): JEDEN Namysł na wiadomość. Gdy pierwszy przebieg
         # (np. dla załącznika) zwróci None, dawniej ścieżka rozmowy wołała go
         # drugi raz - cała faza Zbierania czytała plik ponownie i "Czytam plik"
         # pojawiało się 2×, z "Notatki: nic" drugiego przebiegu pomiędzy.
-        nonlocal namysl_tried
+        nonlocal namysl_tried, namysl_skip_reason
         if namysl_tried and not force:
             return None
         namysl_tried = True
         # 1.32.0: komendy /plan, /badaj, /recenzja wymuszają Namysł (force) z blokiem
         # kontekstu trybu (komendy.KONTEKSTY) i własną treścią (msg = argument komendy).
         the_msg = msg if msg is not None else message
+        namysl_skip_reason = ""
         if not force:
             ok, _why = namysl_mod.wants(the_msg, files, _namysl_settings, first_turn=not history)
             if not ok:
+                namysl_skip_reason = _why
                 return None
         tools_mod = cap_mod.tools_mod
         ctx = namysl_mod.Context(
@@ -2776,18 +2841,22 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
             # ten sam lokalny krok co `local_chat`, z opcjonalnym callbackiem.
             on_token=on_token,
             local_stream=_namysl_local_chat,
-            # 1.30.23: rozdzielnica - waga uwagi decyduje, którą szyną (darmowa
-            # pula / płatny Claude) i jakim modelem puścić KAŻDE wywołanie Namysłu.
-            cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, on_token=None,
+            # 1.40.0: Namysł wybiera JEDNEGO dostawcę na cały cykl (plan w
+            # namysl.run, według KORYTO), więc rozdzielnica nie dzieli jego
+            # faz. `rozdz` zostaje tylko dla modelu Claude (NAMYSL_MODEL).
+            cloud_chat=lambda system, msgs, msg, exclude=None, prefer=None, on_token=None, provider=None,
             _rozdz=juggler_mod.rozdzielnica(skup_poziom): namysl_cloud_call(
-                _rozdz, system, msgs, msg, exclude, prefer or _last_juggler_provider(history),
-                on_token=on_token),
-            cloud_pool=lambda: juggler_mod.providers_pool(),
+                _rozdz, system, msgs, msg, exclude, prefer, on_token=on_token, provider=provider),
+            cloud_pool=lambda etap=None: juggler_mod.providers_pool(etap),
+            # 1.40.0: "pierwszy dostępny" = klucz, limit i bezpiecznik w porządku.
+            cloud_ready=lambda: juggler_mod.ready_providers(),
             research=lambda msg: juggler_mod.research(msg, timeout=JUGGLER_TIMEOUT),
             search_notes=lambda v, q: v.search(q, limit=namysl_mod.MAX_NOTES),
             research_web=tools_mod.research_web, wiki_lookup=tools_mod.wiki_lookup, market_quote=tools_mod.market_quote,
             market_history=tools_mod.market_history, read_page=tools_mod.fetch_page_text,
-            internet_allowed=lambda: netguard_mod.internet_allowed(), sanitize=_sanitize_leaked_tokens,
+            # 1.40.0: health check PRZED pierwszym wywołaniem LLM. Bez WARP
+            # (albo z rozłączonym WARP) Namysł idzie od razu na lokalny.
+            internet_allowed=lambda: netguard_mod.internet_allowed(fresh=True), sanitize=_sanitize_leaked_tokens,
             violates_style=persona_mod.violates_style, settings=_namysl_settings, progress=progress,
             chat=chat, skupienie=skup_poziom,
         )
@@ -3080,6 +3149,10 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
         return result
 
     def _finish(stage: str, result: dict, tool: str | None = None, extra: dict | None = None) -> dict:
+        # 1.45.10: dlaczego ta wiadomość nie dostała Namysłu (tylko ślad,
+        # nigdy treść odpowiedzi). Etap pozostaje ten sam, co dotąd.
+        if namysl_skip_reason and stage != "namysl":
+            extra = dict(extra or {}, namysl_pominiento=namysl_skip_reason)
         _wcard = result.get("card") if isinstance(result, dict) else None
         if isinstance(_wcard, dict) and _wcard.get("type") == "research_web" and _wcard.get("results"):
             try:
@@ -3413,6 +3486,13 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                                                          warp_blocked, exhausted_names):
             reply, stage, extra = _rozmowa_lokalnie(errors, on_token=on_token)
             if reply is not None:
+                # [2026-11-11] (audyt MCP, #10): na ścieżce awaryjnej ta
+                # odpowiedź jest JEDYNA, jaką użytkownik widzi - halucynowana
+                # meta-narracja ("AI nie posiada...") nie może nią zostać.
+                _ok_aw, _reason_aw, _retry_aw = _validate_local_response(reply, message)
+                if _reason_aw in ("meta", "cjk"):
+                    extra["lokalna_naprawa"] = _reason_aw
+                    reply = _meta_narracja_reply()
                 extra.update(extra_base)
                 extra.update({k: v for k, v in errors.items() if v})
                 if errors.get("juggler_error") or errors.get("cloud_error"):
@@ -3525,8 +3605,14 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                 except OSError as e:
                     return _finish("komenda", _tool_result(f"Nie zapisałem lekcji: nie mogę odczytać pliku lekcji ({type(e).__name__}). "
                                                            "Sprawdź dysk; Twoje dotychczasowe lekcje zostały nietknięte."), tool="lekcja")
+                proposal = profil_mod.propose_from_lesson(lesson)
+                hint = ""
+                if proposal:
+                    profil_mod.set_pending(_cid, proposal)
+                    hint = (" Ta lekcja brzmi jak Twoja preferencja. Dopisać ją do profilu? "
+                            "Napisz „tak” albo „nie”.")
                 return _finish("lekcja_zapisana", {"speech": f"Zapisałem lekcję „{lesson['tytul']}”. Będę ją stosował w każdej "
-                                                             "rozmowie; listę zobaczysz pod /lekcje.", "card": None,
+                                                             "rozmowie; listę zobaczysz pod /lekcje." + hint, "card": None,
                                                    "model_active": True, "kind": "tool"}, tool="lekcja")
         elif agentloop_mod.is_cancel(message):
             lekcje_mod.take_pending(_cid)
@@ -3534,6 +3620,30 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
                                                 "model_active": True, "kind": "tool"}, tool="lekcja")
         else:
             lekcje_mod.take_pending(_cid)
+
+    # 1.42.0: propozycja dopisania lekcji do profilu; TYLKO po „tak”, nigdy auto.
+    if profil_mod.has_pending(_cid):
+        if agentloop_mod.is_confirm(message):
+            update = profil_mod.take_pending(_cid)
+            if update:
+                try:
+                    if set(update) <= {"preferencje"}:
+                        profil_mod.add_preferences(update.get("preferencje") or [])
+                    else:
+                        profil_mod.save(update, source="lekcja")
+                except OSError as e:
+                    return _finish("komenda", _tool_result(
+                        f"Nie zapisałem profilu: nie mogę zapisać pliku profilu ({type(e).__name__})."), tool="profil")
+                return _finish("profil_zapisany", {
+                    "speech": "Dopisałem tę preferencję do profilu. Od następnej wiadomości będzie używana.",
+                    "card": None, "model_active": True, "kind": "tool"}, tool="profil")
+        elif agentloop_mod.is_cancel(message):
+            profil_mod.take_pending(_cid)
+            return _finish("profil_odrzucony", {
+                "speech": "Dobrze, nie zmieniam profilu.", "card": None,
+                "model_active": True, "kind": "tool"}, tool="profil")
+        else:
+            profil_mod.take_pending(_cid)
 
     # 1.32.0: komendy ukośnikowe (agent/komendy.py) - jawne, deterministyczne, przed modelem.
     # Przegląd 1.32.0 (L2): także w trakcie dopytania - jawna komenda wygrywa z dopytaniem.
@@ -3625,6 +3735,15 @@ def _route(vault, system_prompt: str, history: list, message: str, pending_clari
     time_answer = _time_answer(message)
     if time_answer:
         return _finish("szybka_sciezka", {"speech": time_answer, "card": None, "model_active": False})
+
+    # 1.42.0: tabu z profilu jest twardą granicą rozmowy (dane, nie polecenie).
+    # Komendy i sama zmiana profilu są dozwolone, żeby dało się tabu zdjąć.
+    _tabu = profil_mod.tabu_hit(message)
+    if _tabu and not message.lstrip().startswith("/") and not re.search(r"(?i)\b(profil|tabu|ustawie[nń])", message):
+        return _finish("profil_tabu", {
+            "speech": f"Temat „{_tabu}” jest w Twoim profilu oznaczony jako tabu, więc go nie rozwijam. "
+                      "Jeśli chcesz to zmienić, otwórz profil w nagłówku rozmowy.",
+            "card": None, "model_active": False, "kind": "tool"})
 
     # "dodaj do węzłów" / "zapisz to do notatek" (1.30.22): deterministycznie,
     # PRZED dwuznacznością i Namysłem. Bierze OSTATNIĄ odpowiedź GREGAI i

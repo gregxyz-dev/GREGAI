@@ -582,6 +582,29 @@ def _queue_alert(zlecenie: str, tresc: str) -> None:
         fsutil.atomic_write_text(ALERTS_PATH, json.dumps(alerts, ensure_ascii=False, indent=2))
 
 
+def drop_stale_straz() -> int:
+    """1.45.7: po autoryzowanym re-baseline (zmiana VERSION) usuń z kolejki
+    stary alert kodu/pieczęci („Kod GREGAI zmieniony…”), żeby fałszywy toast
+    nie wrócił przy najbliższej rozmowie. Innych alertów nie rusza."""
+    needle = "kod gregai zmieniony"
+    with _ALERT_LOCK:
+        alerts = _load_alerts()
+        kept = []
+        dropped = 0
+        for a in alerts:
+            text = str(a.get("tresc") or "").lower()
+            if isinstance(a, dict) and a.get("zlecenie") == "Straż systemu" and needle in text:
+                dropped += 1
+                continue
+            kept.append(a)
+        if dropped:
+            try:
+                fsutil.atomic_write_text(ALERTS_PATH, json.dumps(kept, ensure_ascii=False, indent=2))
+            except OSError:
+                return 0
+        return dropped
+
+
 def pop_pending_alerts() -> list[dict]:
     """Odczytuje i CZYŚCI kolejkę: każdy alert trafia do Grzegorza raz, przy
     jego najbliższej wiadomości (p. router.py:_finish) - skrzynka pocztowa,

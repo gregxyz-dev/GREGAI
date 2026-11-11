@@ -1,5 +1,5 @@
 {
-  "wersja": 1,
+  "wersja": 2,
   "pusty": {
     "min_dlugosc": 0,
     "akcja": "stop",
@@ -19,5 +19,12 @@
     "min_dlugosc": 500,
     "akcja": "oznacz"
   },
-  "opis": "Progi walidacji odpowiedzi lokalnego modelu. akcja: stop | retry | oznacz."
+  "opis": "Progi i akcje walidacji odpowiedzi lokalnego modelu (router._validate_local_response). cjk: znaki chińskie/japońskie/koreańskie w polskiej odpowiedzi. meta: meta-narracja (opis rozmowy/siebie zamiast treści) - obie z ponowieniem.",
+  "cjk": {
+    "akcja": "retry"
+  },
+  "meta": {
+    "min_dlugosc": 80,
+    "akcja": "retry"
+  }
 }

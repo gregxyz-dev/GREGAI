@@ -475,6 +475,11 @@ def understand(doc: dict, cel: str, ask: Callable[[str, str], str],
         try:
             summary = (ask(_CHUNK_SYSTEM, user) or "").strip()
         except Exception as e:
+            # 1.40.0: błąd przypiętego dostawcy Namysłu nie jest "jedną
+            # nieudaną częścią" - cały cykl musi się przerwać i przełączyć
+            # na następny etap od fazy 1 (namysl.ProviderFailure.fatal).
+            if getattr(e, "fatal", False):
+                raise
             summary = f"(nie udało się streścić tej części: {type(e).__name__})"
             failures_in_row += 1
         else:

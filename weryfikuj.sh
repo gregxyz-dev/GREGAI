@@ -23,7 +23,7 @@ if errors:
 print("OK: składnia Pythona")
 PY
 
-for script in install.sh aktualizuj.sh check.sh weryfikuj.sh wydaj.sh gregai; do
+for script in install.sh uninstall.sh aktualizuj.sh check.sh weryfikuj.sh wydaj.sh gregai; do
     if [ -f "$script" ]; then
         bash -n "$script"
     fi

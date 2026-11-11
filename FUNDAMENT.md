@@ -108,7 +108,15 @@ pomijany do jej końca (z pierwotnym powodem w komunikacie).
    (`_answer_from_notes`), nie tylko nazywany.
 7. Namysł (gdy `namysl.wants`): rozpoznanie, zbieranie, szkic, krytyka,
    poprawa, sprawdzenie; zwykła rozmowa bez materiału - tylko rozpoznanie i
-   szkic.
+   szkic. W UI 1.41.0 cały cykl ma jeden kolor koryta (fiolet Claude,
+   zielony darmowa pula, pomarańcz lokalny), sześć kart faz i widoczny
+   licznik restartów; fazy kodu (Zbieranie, Sprawdzenie) są oznaczone ⚙️,
+   a fazy LLM - ikoną dostawcy. Restart czyści fazy do „oczekuje”.
+   Od 1.42.0 profil użytkownika (`data/profil.json`, lokalny) dodaje do
+   promptu blok `[PROFIL UŻYTKOWNIKA]` (styl, cele, tabu, wagi krytyki,
+   SYSOP), a do chmury trafia tylko przy `profil_do_sieci=true`. Tabu jest
+   twardą granicą przed modelem. Motyw jasny jest nakładką tokenów CSS
+   (`data-theme`, `ui/theme-light.css`), wybieraną ręcznie albo z systemu.
 8. Rozmowa korytem (`_rozmowa_korytem`): etap po etapie, pierwszy sukces
    wygrywa; każda porażka z powodem w śladzie.
 9. Gdy nic nie odpowie: tryb zapasowy ze słów kluczowych + uczciwe zdanie,
@@ -134,9 +142,12 @@ przy drugim czyszczeniu).
 | `darmowe` | Groq, Gemini, OpenRouter, Hugging Face, Cloudflare (losowo) | gdy Claude nie odpowie |
 | `lokalnie` | uczeń -> Qwen2.5-3B (Ollama) | wg `KORYTO_LOKALNIE`: domyślnie TYLKO bez internetu/WARP albo bez kluczy |
 
-Ta sama kolejność obowiązuje: rozmowę, fazy Namysłu, krok 1
-(`KORYTO_ROUTING`), planer zadań (`KORYTO_ZADANIA`), streszczenia, odpowiedź
-z notatek, zadania stałe. Budżet jednego łańcucha `KORYTO_BUDZET_S` (120 s).
+Ta sama kolejność obowiązuje: rozmowę, krok 1 (`KORYTO_ROUTING`), planer
+zadań (`KORYTO_ZADANIA`), streszczenia, odpowiedź z notatek, zadania stałe.
+Namysł od 1.40.0 jest wyjątkiem: wybiera JEDEN etap na cały cykl (pierwszy
+dostępny; bez internetu od razu `lokalnie`) i przy błędzie restartuje cały
+cykl od fazy 1 na następnym etapie, zamiast mieszać dostawców między fazami.
+Budżet jednego łańcucha `KORYTO_BUDZET_S` (120 s).
 WARP sprawdzany raz na łańcuch (wynik ważny 10 s); zablokowany WARP nie
 psuje stanu dostawców. Ucięta odpowiedź każdego dostawcy jest raz
 dokańczana (`_continue_once`). U Claude stała część promptu (prompt.md +
@@ -207,6 +218,8 @@ klucz wydawcy. To podnosi poprzeczkę, nie czyni procesu nieomylnym (patrz §9).
 | treść rozmowy (bez odpowiedzi narzędzi) | tak | tak, sekrety maskowane |
 | blok "Teraz" | pełny | zegar z godziną, liczby, bez treści notatek |
 | notatki, pliki, materiał Namysłu | tak | tylko za zgodą "materiał do sieci" |
+| tytuły węzłów przy dowęzłowywaniu | tak | tylko za zgodą `material_do_sieci`; bez zgody wyłącznie lokalny model |
+| profil użytkownika (`data/profil.json`) | tak | tylko za zgodą `profil_do_sieci` |
 | odpowiedź z notatek w dalszej rozmowie | tak | tylko za tą samą zgodą |
 | obserwacje planera zadań | tak | przy `KORYTO_ZADANIA=1`; prywatne ścieżki w trybie pełnym - karta |
 | `.env`, klucze | nigdy | nigdy |
@@ -234,7 +247,8 @@ klucz wydawcy. To podnosi poprzeczkę, nie czyni procesu nieomylnym (patrz §9).
 2. Bez WARP sieć stoi, a lokalny model przejmuje - kontrole 15, 27.
 3. Blokady bezpieczeństwa rozpoznawane bez względu na wielkość liter -
    kontrola 20; reguły sudo zgodne z trybem - kontrola 17.
-4. Notatki nie idą do sieci bez zgody - kontrole 21, 22.
+4. Notatki nie idą do sieci bez zgody - kontrole 21, 22; automatyczne
+   dowęzłowywanie bez zgody działa tylko lokalnie - kontrola 111.
 5. Koryto: kolejność z `.env`, porażki z powodami, lokalny wg polityki -
    kontrola 27; tryb pełny bez rozjazdów - kontrola 28.
 6. gregaipanicmode odpowiada, zanim zamknie sieć - kontrola 26.
@@ -269,6 +283,10 @@ klucz wydawcy. To podnosi poprzeczkę, nie czyni procesu nieomylnym (patrz §9).
    bramka cen w tym samym zdaniu i wartością, klasyfikator u każdego dostawcy - kontrola 52.
 18. Decyzje 1.32.7: dokładne myślenie jedynym trybem (powitania i podziękowania krótko), pigułka
    rozmowy tylko przy problemie, jednolity przełącznik widoków - kontrola 53.
+   **1.45.10 (świadome cofnięcie 1.33.2):** przywrócono tryb inteligentny jako
+   domyślny. Powód: 4/5 cykli Namysłu w historii to wiadomości socjalne trwające
+   87-220 s. „Zawsze” (dokładne myślenie) zostaje jawnym wyborem użytkownika;
+   powód pominięcia trafia tylko do `decision_log`.
 19. Tura 12 (1.32.8): shell i odczyt pliku bez treści dla planera w sieci bez zgody, czas ze
    strefą (zadania stałe, straż, zegar), Namysł z tematem od routera i limitem lokalnym - kontrola 54.
 20. Tura 13 (1.32.9): Namysł nie przepuszcza kwot bez pokrycia, znaczników faz, angielskiej ani
@@ -319,6 +337,25 @@ klucz wydawcy. To podnosi poprzeczkę, nie czyni procesu nieomylnym (patrz §9).
    z KOŃCA długiej wiadomości, nie tylko jej początek; strona zapasowa `/debug` sama
    prosi o token dostępu i ponawia żądanie po odmowie autoryzacji, tak jak główna
    aplikacja - kontrola 64.
+
+15. Narzędzia agenta (1.44.0): `state`/`diag`/`impact`/`tokens`/`log`/`verify`
+   tylko czytają; `reset` zmienia wyłącznie liczniki dowęzłowywania. `/health`
+   pokazuje agregaty bez treści notatek i sekretów - kontrola 112.
+16. Czytelność czatu (1.45.0): profil `styl.dlugosc` steruje formatem przez
+   `{FORMAT}`, renderer daje h2-h4/tabele/kod/cytaty, a finalna odpowiedź
+   zastępuje dymek streamingu bez migania; style tylko na tokenach - kontrola 113.
+
+17. Spójność rozstawienia (1.45.1): `--sp-1..7` i `--r-*` w `crack.css`;
+   brak literowych px w margin/padding/gap poza 0/1px w trzech plikach UI -
+   kontrola 114.
+
+18. Motyw bez hard refresh (1.45.2): `gregai:theme-change` dociera do grafu,
+   który czyści cache kolorów i przerysowuje scenę; kolory przechodzą przez
+   transition, a reduced-motion go wyłącza - kontrola 114.
+
+19. Kontrakt API (1.45.3): `api_contract.md` jest źródłem prawdy dla
+   endpointów; kontrola 115 porównuje je z `ui/*.js` i `agent/main.py`.
+
 
 ## 8. Konwencje pracy
 

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="dark" />
+<meta name="color-scheme" content="dark light" />
+<script src="theme.js"></script>
 <title>GREGAI</title>
 <link rel="icon" type="image/svg+xml" href="ikona.svg" />
 <link rel="icon" type="image/png" sizes="32x32" href="ikona-32.png" />
@@ -13,6 +14,7 @@
 <link rel="stylesheet" href="sistem.css" />
 <link rel="stylesheet" href="kadr.css" />
 <link rel="stylesheet" href="crack.css" />
+<link rel="stylesheet" href="theme-light.css" />
 </head>
 <body class="segment-chat">
 
@@ -35,7 +37,7 @@
       <span class="header-dot" id="header-dot" aria-hidden="true"></span>
       <div class="rail-brand">
         <span class="rail-name">GREGAI</span>
-        <span class="rail-version" id="rail-version">1.36.0</span>
+        <span class="rail-version" id="rail-version">–</span>
       </div>
       <!-- Przełącznik segmentów: Rozmowa / Węzły / Nadzorca - trzy ikony w
            rogu panelu, nie karty w treści szyny. Od 1.11.0 jedna aplikacja:
@@ -91,6 +93,8 @@
         <span class="lt-title" id="chat-title">Ogólna rozmowa</span>
       </div>
       <span id="chat-project-badge" class="chat-project-badge hidden"></span>
+      <button type="button" class="theme-toggle" data-theme-toggle title="Motyw" aria-label="Motyw">◐</button>
+      <button type="button" id="profile-btn" class="profile-toggle" title="Profil użytkownika" aria-label="Profil użytkownika" aria-haspopup="dialog">Profil</button>
       <!-- Pigułka "Postęp" (1.16.2): jedyny WIDOCZNY BEZ KLIKANIA ślad tego,
            że GREGAI właśnie wieloetapowo myśli (Namysł) - pełny przebieg
            faz leci niżej, w dymku odpowiedzi, i w szufladzie "Postęp"
@@ -99,7 +103,7 @@
            otwiera panel wprost na szufladzie "Postęp". -->
       <button type="button" id="progress-pill" class="progress-pill hidden" title="Zobacz pełny przebieg w panelu „Ta rozmowa”">
         <span class="progress-pill-dot" aria-hidden="true"></span>
-        <span class="progress-pill-label" id="progress-pill-label">Namysł w toku</span>
+        <span class="progress-pill-label" id="progress-pill-label">Myślę…</span>
         <span class="progress-pill-timer" id="progress-pill-timer"></span>
       </button>
       <!-- Menu rozmowy (1.12.0): trzy paski w prawym górnym rogu otwierają
@@ -163,13 +167,21 @@
            zgoda na wysyłkę fragmentów notatek/plików do sieciowych AI.
            Ustawienia żyją na serwerze (data/namysl.json), nie w przeglądarce. -->
       <div class="namysl-control">
-        <button type="button" id="namysl-btn" class="namysl-btn" aria-haspopup="true" aria-expanded="false" title="Dokładne myślenie: GREGAI zawsze myśli krok po kroku">
+        <button type="button" id="namysl-btn" class="namysl-btn" aria-haspopup="true" aria-expanded="false" title="Inteligentne myślenie: GREGAI sam wybiera, kiedy myśleć krok po kroku">
           <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8a4.2 4.2 0 0 1 2.6 7.5c-.5.4-.8.9-.8 1.5v.4H6.2v-.4c0-.6-.3-1.1-.8-1.5A4.2 4.2 0 0 1 8 1.8z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><path d="M6.4 13.2h3.2M7 14.6h2" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/></svg>
-          <span id="namysl-btn-label">Dokładne myślenie</span>
+          <span id="namysl-btn-label">Inteligentne myślenie</span>
         </button>
         <div class="namysl-popover hidden" id="namysl-popover" role="dialog" aria-label="Ustawienia Namysłu">
-          <p class="namysl-popover-title">Dokładne myślenie</p>
-          <p class="namysl-popover-help">To jedyny sposób działania GREGAI: najpierw ustala, co masz na myśli, zbiera fakty, pisze szkic, sam go krytykuje i poprawia, a na końcu sprawdza. Każdy krok widzisz na żywo. Podziękowania i powitania dostają zwykłą, krótką odpowiedź.</p>
+          <p class="namysl-popover-title">Namysł</p>
+          <p class="namysl-popover-help">Inteligentne myślenie: GREGAI sam wybiera, kiedy potrzebuje sześciu faz (zadania, analizy, decyzje, pliki), a kiedy wystarczy zwykła rozmowa (powitania, podziękowania, krótkie reakcje, doprecyzowania). Dokładne myślenie uruchamia pełny cykl zawsze. Każdy krok widać na żywo.</p>
+          <label class="namysl-check">
+            <input type="radio" name="namysl-tryb" value="inteligentny" id="namysl-tryb-inteligentny" />
+            <span><b>Inteligentne</b> (zalecane): sam wybiera, kiedy myśleć dokładnie.</span>
+          </label>
+          <label class="namysl-check">
+            <input type="radio" name="namysl-tryb" value="zawsze" id="namysl-tryb-zawsze" />
+            <span><b>Dokładne</b>: zawsze pełny cykl sześciu faz.</span>
+          </label>
           <label class="namysl-check">
             <input type="checkbox" id="namysl-consent" />
             <span>Pozwól wysłać fragmenty moich notatek i plików do AI w internecie (hasła i klucze są ukrywane). Bez tego prywatne pliki czyta tylko model na laptopie.</span>
@@ -417,6 +429,7 @@
         <span class="lt-chip">Nadzorca</span>
         <h1 class="lt-title">Stan GREGAI</h1>
       </div>
+      <button type="button" class="theme-toggle" data-theme-toggle title="Motyw" aria-label="Motyw">◐</button>
     </div>
     <p class="subtitle">Tu sprawdzisz, czy GREGAI jest zdrowy, czy straż pilnuje i ile kosztuje.</p>
 
@@ -816,6 +829,73 @@
 </div>
 
 <!-- Modal: tworzenie nowego węzła -->
+<div id="profile-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-panel panel" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+    <p class="panel-label" id="profile-modal-title">Profil użytkownika</p>
+    <p class="profile-lead">Profil jest lokalny. Do sieciowych AI trafi tylko wtedy, gdy zaznaczysz zgodę poniżej.</p>
+    <div class="profile-grid">
+      <label class="modal-label">Ton
+        <select id="profil-ton" class="modal-input">
+          <option value="rzeczowy">rzeczowy</option>
+          <option value="formalny">formalny</option>
+          <option value="swobodny">swobodny</option>
+          <option value="cieply">ciepły</option>
+        </select>
+      </label>
+      <label class="modal-label">Długość odpowiedzi
+        <select id="profil-dlugosc" class="modal-input">
+          <option value="krotka">krótka</option>
+          <option value="srednia">średnia</option>
+          <option value="szczegolowa">szczegółowa</option>
+        </select>
+      </label>
+      <label class="modal-label">Emoji
+        <select id="profil-emoji" class="modal-input">
+          <option value="rzadko">rzadko</option>
+          <option value="nigdy">nigdy</option>
+          <option value="czasem">czasem</option>
+        </select>
+      </label>
+      <label class="modal-label">Wiek (opcjonalnie)
+        <input id="profil-wiek" class="modal-input" type="number" min="1" max="129" inputmode="numeric" />
+      </label>
+      <label class="modal-label">Pronominy (opcjonalnie)
+        <input id="profil-pronominy" class="modal-input" type="text" maxlength="40" placeholder="np. on / ona" />
+      </label>
+      <label class="modal-label">SYSOP - ton
+        <input id="profil-sysop-ton" class="modal-input" type="text" maxlength="60" placeholder="np. konkretny" />
+      </label>
+    </div>
+    <label class="modal-label">Cele (jedna na linię)
+      <textarea id="profil-cele" class="modal-input" rows="3" maxlength="1200"></textarea>
+    </label>
+    <label class="modal-label">Tabu (oddziel przecinkami)
+      <input id="profil-tabu" class="modal-input" type="text" maxlength="600" placeholder="np. polityka, zdrowie" />
+    </label>
+    <label class="modal-label">Zainteresowania (oddziel przecinkami)
+      <input id="profil-zainteresowania" class="modal-input" type="text" maxlength="400" placeholder="np. elektronika, kolarstwo" />
+    </label>
+    <label class="modal-label">Wagi krytyki (oddziel przecinkami)
+      <input id="profil-wagi" class="modal-input" type="text" maxlength="240" placeholder="koszt, ryzyko, czas" />
+    </label>
+    <label class="profile-check">
+      <input type="checkbox" id="profil-do-sieci" />
+      Profil może iść do sieciowych AI (domyślnie tylko lokalny model)
+    </label>
+    <label class="profile-check">
+      <input type="checkbox" id="profil-auto-wezly" />
+      Automatyczne dowęzłowywanie: nowe tematy z rozmów trafiają do grafu w tle
+      (domyślnie wyłączone; bez zgody „materiał do sieci” tylko model lokalny)
+    </label>
+    <p id="profil-status" class="profile-status" role="status" aria-live="polite"></p>
+    <div class="modal-actions">
+      <button type="button" id="profil-skip" class="inspector-btn">Pomiń</button>
+      <button type="button" id="profil-cancel" class="inspector-btn">Anuluj</button>
+      <button type="button" id="profil-save" class="inspector-btn primary">Zapisz</button>
+    </div>
+  </div>
+</div>
+
 <div id="create-modal-overlay" class="modal-overlay">
   <div class="modal-panel panel" role="dialog" aria-modal="true" aria-labelledby="create-modal-title">
     <p class="panel-label" id="create-modal-title">Nowa notatka</p>

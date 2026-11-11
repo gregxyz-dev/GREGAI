@@ -17,6 +17,17 @@
 #     gregai start|stop|restart   usługa systemd gregai
 #     gregai status          wersja, usługa, port, WARP, Ollama, koryto (Claude/darmowi), SYSOP - w jednej tabelce
 #     gregai logs [N]        ostatnie N linii dziennika usługi (domyślnie 50), potem na żywo
+#     gregai log [--tail N] [--filter M] [--level err|warn]   JSON z ostatnimi liniami (bez trybu live)
+#     gregai state [--json|--human] [--diff]   maszynowy stan: usługa, koryto, vault, profil, dowęzłowywanie
+#     gregai diag <moduł> [--human]   diagnostyka: koryto|vault|profil|wezly|config|namysl|straz|all
+#     gregai diag vault --orphans|--dups|--isolated   osierocone linki, duplikaty tytułów, węzły bez krawędzi
+#     gregai diag koryto --test   ping dostawców (używa sieci/limitów; tylko na żądanie)
+#     gregai impact <plik|funkcja> [--human]   kto importuje / gdzie wywoływane (AST + grep)
+#     gregai impact --css <klasa>   użycie klasy w ui/*.css, *.js, *.html
+#     gregai tokens [--budget] [--per-phase]   zużycie, budżet, (częściowo) fazy Namysłu
+#     gregai reset wezly|cooldown   jawne wyzerowanie liczników dowęzłowywania (bez usuwania węzłów)
+#     gregai verify --quick|--diff [--human]   szybka składnia/wersje; bez args = pełny weryfikuj.sh
+#     gregai health          JSON stanu dla panelu /health
 #     gregai open            otwórz czat w przeglądarce
 #     gregai version         numer wersji
 #     gregai help            ten opis
@@ -135,6 +146,12 @@ cmd_diagnoza() {
 
 cmd_eval() { python3 "$ROOT/agent/ewaluacja.py" "$@"; }
 
+cmd_ops() {
+  local px
+  if [ -x "$ROOT/.venv/bin/python" ]; then px="$ROOT/.venv/bin/python"; else px=python3; fi
+  "$px" "$ROOT/agent/ops.py" "$@"
+}
+
 cmd="${1:-status}"; shift || true
 case "$cmd" in
   help|-h|--help) cmd_help ;;
@@ -147,11 +164,21 @@ case "$cmd" in
   stop) cmd_stop ;;
   restart) cmd_restart ;;
   status) cmd_status ;;
-  logs|log) cmd_logs "$@" ;;
+  logs) cmd_logs "$@" ;;
+  log) cmd_ops log "$@" ;;
+  state|stan) cmd_ops state "$@" ;;
+  diag|diagnostyka) cmd_ops diag "$@" ;;
+  impact|wplyw) cmd_ops impact "$@" ;;
+  tokens|tokeny) cmd_ops tokens "$@" ;;
+  reset) cmd_ops reset "$@" ;;
+  health|zdrowie) cmd_ops health "$@" ;;
   open|otworz|otwórz) cmd_open ;;
   diagnoza|diagnose|internet) cmd_diagnoza ;;
   eval|ewaluacja|testy) cmd_eval "$@" ;;
-  weryfikuj|verify) exec bash "$ROOT/weryfikuj.sh" ;;
+  weryfikuj) exec bash "$ROOT/weryfikuj.sh" ;;
+  verify)
+    if [ "$#" -eq 0 ]; then exec bash "$ROOT/weryfikuj.sh"; fi
+    cmd_ops verify "$@" ;;
   wydaj|release) exec bash "$ROOT/wydaj.sh" ;;
   *) printf 'gregai: nieznane polecenie "%s"\n\n' "$cmd" >&2; cmd_help >&2; exit 2 ;;
 esac

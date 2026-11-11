@@ -1,0 +1,326 @@
+/* theme-light.css (1.42.0)
+ *
+ * Jasny motyw jest nakładką na tokeny crack.css. Ładowany PO crack.css,
+ * dlatego :root:root[data-theme="light"] wygrywa z :root:root.
+ * Ręczny wybór ustawia data-theme w theme.js; auto nadąża za systemem.
+ */
+:root:root[data-theme="light"] {
+  color-scheme: light;
+
+  --crack-bg: #f6f7fb;
+  --crack-card: #ffffff;
+  --crack-card-2: #f1f3f7;
+  --crack-line: rgba(11, 18, 32, 0.12);
+  --crack-line-soft: rgba(11, 18, 32, 0.08);
+  --crack-line-strong: rgba(11, 18, 32, 0.28);
+  --crack-line-muted: #cbd5e1;
+  --crack-text: #141a22;
+  --crack-dim: #6b7280;
+  --crack-cyan: #0e7490;
+  --crack-ok: #0f766e;
+  --crack-bad: #b91c1c;
+  --crack-warn: #b45309;
+  --crack-cyan-rgb: 14, 116, 144;
+  --crack-ok-rgb: 15, 118, 110;
+  --crack-bad-rgb: 185, 28, 28;
+  --crack-warn-rgb: 180, 83, 9;
+  --crack-err: #b91c1c;
+  --crack-err-rgb: 185, 28, 28;
+  --crack-err-text: #b91c1c;
+  --crack-ok-dot: #0f766e;
+  --crack-idle-dot: #9ca3af;
+  --crack-waiting-line: rgba(100, 116, 139, 0.35);
+  --crack-toast-ignore-line: rgba(11, 18, 32, 0.2);
+  --crack-active-line: rgba(11, 18, 32, 0.28);
+  --nk-color: #64748b;
+  --nk-rgb: 100, 116, 139;
+  --nk-fill: rgba(100, 116, 139, 0.10);
+
+  --on-ok: #ffffff;
+  --on-danger: #ffffff;
+  --on-accent: #ffffff;
+  --overlay: rgba(15, 23, 42, 0.32);
+
+  --bg: var(--crack-bg);
+  --card-2: var(--crack-card-2);
+  --text-primary: var(--crack-text);
+  --text-secondary: #3b4653;
+  --text-dim: var(--crack-dim);
+  --panel-border: var(--crack-line);
+  --panel-border-strong: var(--crack-line-strong);
+  --hair: var(--crack-line);
+  --hair-strong: var(--crack-line-strong);
+  --fill-1: rgba(11, 18, 32, 0.04);
+  --fill-2: rgba(11, 18, 32, 0.07);
+  --fill-3: rgba(11, 18, 32, 0.12);
+  --accent: var(--crack-cyan);
+  --accent-soft: rgba(8, 145, 178, 0.12);
+  --accent-ring: rgba(8, 145, 178, 0.38);
+  --ok: var(--crack-ok);
+  --danger: var(--crack-bad);
+  --orange: #b45309;
+  --pink: #be185d;
+  --purple: #6d28d9;
+  --blue: #0e7490;
+  --teal: #0f766e;
+  --stark-bg: var(--crack-bg);
+  --stark-card: var(--crack-card);
+  --stark-accent: var(--crack-cyan);
+  --stark-ok: var(--crack-ok);
+  --stark-bad: var(--crack-bad);
+  --stark-warn: var(--crack-warn);
+  --stark-text: var(--crack-text);
+  --stark-dim: var(--crack-dim);
+  --radius-panel: 20px;
+  --radius-card: 14px;
+  --shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.06), 0 18px 42px -28px rgba(15, 23, 42, 0.28);
+
+  --koryto-1: #7c3aed;
+  --koryto-1-text: #5b21b6;
+  --koryto-1-rgb: 124, 58, 237;
+  --koryto-1-fill: rgba(124, 58, 237, 0.12);
+  --koryto-2: #059669;
+  --koryto-2-text: #047857;
+  --koryto-2-rgb: 5, 150, 105;
+  --koryto-2-fill: rgba(5, 150, 105, 0.12);
+  --koryto-3: #d97706;
+  --koryto-3-text: #b45309;
+  --koryto-3-rgb: 217, 119, 6;
+  --koryto-3-fill: rgba(217, 119, 6, 0.12);
+  --nk-text: #5b4b79;
+  --nk-color: #64748b;
+  --nk-rgb: 100, 116, 139;
+  --nk-fill: rgba(100, 116, 139, 0.12);
+}
+
+/* Dekoracyjne tło i ziarno: w jasnym motywie nie mogą przykrywać treści. */
+:root[data-theme="light"] .bg-decor { display: none; }
+:root[data-theme="light"] .grain { opacity: 0.18; }
+:root[data-theme="light"] .rail-name {
+  background-image: none;
+  color: var(--crack-text);
+  -webkit-text-fill-color: currentColor;
+}
+
+/* Dymki i karty: ciemne odcienie z crack.css zamieniamy na jasne odpowiedniki. */
+:root[data-theme="light"] .chat-bubble {
+  background: var(--crack-card);
+  border-color: var(--crack-line);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .chat-bubble.user {
+  background: #e8eef6;
+  border-color: rgba(14, 116, 144, 0.28);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .chat-bubble.assistant.alarm {
+  background: #fff1f2;
+  border-color: rgba(185, 28, 28, 0.42);
+}
+:root[data-theme="light"] .chat-bubble.pending {
+  border-color: rgba(14, 116, 144, 0.35);
+}
+:root[data-theme="light"] .chat-bubble code {
+  background: rgba(14, 116, 144, 0.08);
+  color: var(--crack-cyan);
+}
+:root[data-theme="light"] .straz-toast[data-severity="high"] {
+  background: #fff1f2;
+  border-color: rgba(185, 28, 28, 0.45);
+}
+:root[data-theme="light"] .straz-toast[data-severity="medium"] {
+  background: #fffbeb;
+  border-color: rgba(180, 83, 9, 0.4);
+  border-left-color: rgba(180, 83, 9, 0.4);
+}
+/* 1.45.11: restart Namysłu to jasny pill na jasnym tle, nie czarna plama. */
+:root[data-theme="light"] .namysl-toast {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+/* Drobne wypełnienia, które w ciemnym motywie były białe. */
+:root[data-theme="light"] .namysl-card-toggle:hover,
+:root[data-theme="light"] .ntl-chip,
+:root[data-theme="light"] .nk-phase {
+  background: rgba(11, 18, 32, 0.035);
+}
+:root[data-theme="light"] .nk-status-done .nk-status-dot { background: #9ca3af; }
+:root[data-theme="light"] .nk-status-error .nk-status-dot { background: var(--crack-bad); }
+
+/* Formularze, tabele, logi i Nadzorca korzystają z tokenów; poniżej tylko
+   miejsca, które miały literalne ciemne tło. */
+:root[data-theme="light"] input,
+:root[data-theme="light"] textarea,
+:root[data-theme="light"] select,
+:root[data-theme="light"] .modal-input,
+:root[data-theme="light"] .chat-input {
+  background: #ffffff;
+  color: var(--crack-text);
+  border-color: var(--crack-line-strong);
+}
+:root[data-theme="light"] input::placeholder,
+:root[data-theme="light"] textarea::placeholder,
+:root[data-theme="light"] .chat-input::placeholder {
+  color: var(--crack-dim);
+}
+:root[data-theme="light"] .chat-input:focus,
+:root[data-theme="light"] .modal-input:focus {
+  border-color: var(--crack-cyan);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* Wyszukiwarka węzłów (1.42.2): pasek i pole brały ciemne tło z kadr.css,
+   więc w jasnym motywie tekst i placeholder ginęły. Teraz tylko tokeny. */
+:root[data-theme="light"] #bottom-bar.nodes-search {
+  background: var(--crack-card);
+  border-color: var(--crack-line-strong);
+}
+:root[data-theme="light"] #bottom-bar.nodes-search:focus-within {
+  border-color: var(--crack-cyan);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+:root[data-theme="light"] .nodes-search svg { color: var(--crack-dim); }
+:root[data-theme="light"] #search-input,
+:root[data-theme="light"] .nodes-search #search-input {
+  background: var(--crack-card);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] #search-input::placeholder {
+  color: var(--crack-dim);
+  opacity: 1;
+}
+
+/* Twoje rozmowy (1.42.2): aktywny wiersz miał biel na jasnym tle.
+   Stan normalny, hover i active biorą kolory z tokenów. */
+:root[data-theme="light"] .rail-projects .panel-label { color: var(--crack-cyan); }
+:root[data-theme="light"] .project-list li { color: var(--text-secondary); }
+:root[data-theme="light"] .project-list li:hover {
+  background: var(--fill-1);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .project-list li.active {
+  background: var(--accent-soft);
+  border-left-color: var(--crack-cyan);
+  box-shadow: inset 3px 0 0 var(--crack-cyan);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .project-list li.active .project-name { color: inherit; }
+
+/* Formularze systemowe i diagnostyka: jasny motyw musi mieć jasną listę
+   opcji i czytelne werdykty (kadr.css/sistem.css mają ciemne wersje). */
+:root[data-theme="light"] select { color-scheme: light; }
+:root[data-theme="light"] select option {
+  background: var(--crack-card);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .diag-verdict {
+  color: var(--crack-text);
+  background: var(--fill-1);
+  border-color: var(--crack-line-strong);
+}
+:root[data-theme="light"] .diag-verdict[data-ok="1"] {
+  background: color-mix(in srgb, var(--crack-ok) 10%, transparent);
+  border-color: color-mix(in srgb, var(--crack-ok) 45%, transparent);
+}
+
+/* Kod i podglądy: ciemne tło było nieczytelne na białym panelu. */
+:root[data-theme="light"] pre,
+:root[data-theme="light"] .chat-bubble pre,
+:root[data-theme="light"] .note-body pre {
+  background: var(--crack-bg);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .chat-bubble .chat-code {
+  background: var(--fill-1);
+  border-color: var(--crack-line);
+}
+:root[data-theme="light"] .chat-bubble .chat-code pre {
+  background: var(--crack-bg);
+}
+:root[data-theme="light"] .chat-bubble .chat-table th {
+  background: var(--fill-2);
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .chat-h2,
+:root[data-theme="light"] .chat-h3,
+:root[data-theme="light"] .chat-h4 {
+  color: var(--crack-text);
+}
+:root[data-theme="light"] .chat-quote {
+  color: var(--text-secondary);
+  border-left-color: var(--crack-cyan);
+}
+:root[data-theme="light"] .chat-bubble pre code,
+:root[data-theme="light"] .note-body pre code { background: transparent; }
+
+/* Pasek boczny i przełączniki: delikatny szary zamiast czarnego szkła. */
+:root[data-theme="light"] #chat-rail,
+:root[data-theme="light"] #nodes-topbar,
+:root[data-theme="light"] .chat-drawer,
+:root[data-theme="light"] .debug-inner,
+:root[data-theme="light"] .modal-panel {
+  background: #ffffff;
+  border-color: var(--crack-line);
+}
+:root[data-theme="light"] .segment-switch-btn.active {
+  background: rgba(8, 145, 178, 0.12);
+  color: var(--crack-cyan);
+  border-color: var(--crack-line-strong);
+}
+:root[data-theme="light"] .rail-add-link:hover,
+:root[data-theme="light"] .welcome-tile:hover,
+:root[data-theme="light"] .chat-card-option:hover {
+  background: rgba(11, 18, 32, 0.05);
+}
+
+/* 1.45.5: powitanie w trybie jasnym. kadr.css ustawia tytuł i pogrubienia
+   kroków na --biel (#f8f0e5, kremowa biel) - na jasnym tle to ~1:1.
+   Wymuszamy ciemny tekst tylko w jasnym motywie; ciemny zostaje bez zmian. */
+:root[data-theme="light"] .welcome-title,
+:root[data-theme="light"] .welcome-sub,
+:root[data-theme="light"] .welcome-steps b {
+  color: var(--crack-text);
+}
+
+/* Namysł: koryto ma już własne tokeny; w jasnym trzeba tylko przyciemnić
+   tekst faz i zostawić kolor jako akcent, nie jako tło pod tekstem. */
+:root[data-theme="light"] .nt-track.nt-koryto .nt-track-title,
+:root[data-theme="light"] .namysl-live.nt-koryto .ntl-title { color: var(--nk-text); }
+:root[data-theme="light"] .nt-track.nt-koryto .nt-track-step.done .nt-track-name,
+:root[data-theme="light"] .nt-track.nt-koryto .nt-track-step.done .nt-track-time,
+:root[data-theme="light"] .nt-track.nt-koryto .nt-track-step.done .nt-track-model {
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .nk-phase.done { background: rgba(var(--nk-rgb), 0.06); }
+:root[data-theme="light"] .nk-phase.is-code { border-color: var(--crack-line-strong); }
+:root[data-theme="light"] .nk-summary-check { color: var(--nk-text); }
+
+/* Tabele i logi Nadzorcy. */
+:root[data-theme="light"] #debug-segment table,
+:root[data-theme="light"] #debug-segment .table-scroll,
+:root[data-theme="light"] #debug-segment .dbg-card,
+:root[data-theme="light"] #debug-segment .dbg-pipe,
+:root[data-theme="light"] #debug-segment .dbg-hero,
+:root[data-theme="light"] #debug-segment .dbg-tabs {
+  background: #ffffff;
+  border-color: var(--crack-line);
+}
+:root[data-theme="light"] #debug-segment tr:hover th,
+:root[data-theme="light"] #debug-segment tr:hover td {
+  background: rgba(11, 18, 32, 0.04);
+}
+:root[data-theme="light"] #debug-segment .dbg-chip,
+:root[data-theme="light"] #debug-segment .chip {
+  background: #ffffff;
+  border-color: var(--crack-line);
+  color: var(--crack-text);
+}
+
+/* Węzły / graf: sama kanwa jest przezroczysta, więc tło bierze z motywu.
+   Etykiety i krawędzie pozostają kolorowe (czytelne na obu tłach). */
+:root[data-theme="light"] #graph-canvas { background: var(--crack-bg); }
+
+/* Toast motywu: ten sam język ruchu co reszta aplikacji. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="light"] * { transition-duration: 0.001ms !important; }
+}

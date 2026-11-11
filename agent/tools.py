@@ -1433,6 +1433,29 @@ def _first_sentence(text: str) -> str:
     return text
 
 
+def _wiki_topic_matches(topic: str, title: str) -> bool:
+    """Kontrola sensowności dopasowania opensearch (tylko offline, zero sieci).
+
+    [2026-11-11] (audyt MCP, #7): opensearch z limit=1 potrafi zwrócić
+    artykuł o zupełnie innym rzeczowniku - zapytanie "Ollama" dało
+    "Gary Oldman" (Wikipedii brakuje hasła, a fuzzy match łapie pierwsze
+    podobne). Streszczenie takiego artykułu trafia do szkicu jako materiał
+    i odpowiedź fałszywie twierdzi "Sprawdziłem na Wikipedii". Miarodajne
+    jest dopasowanie na poziomie tokenów: tytuł zaczyna się od tokenu
+    tematu albo odwrotnie (odmiana: "bitcoina" -> "Bitcoin"), za to sam
+    wspólny prefiks nie wystarcza ("Ollama" vs "Ollanta Humala")."""
+    from slowa import fold
+
+    stop = {"co", "to", "jest", "the", "a", "o", "w", "na", "i", "czy"}
+    tt = [w for w in fold(topic or "").split() if len(w) >= 2 and w not in stop]
+    it = [w for w in fold(title or "").split() if len(w) >= 2 and w not in stop]
+    for a in tt:
+        for b in it:
+            if a == b or (len(a) >= 4 and len(b) >= 4 and (b.startswith(a) or a.startswith(b))):
+                return True
+    return False
+
+
 def _wiki_resolve_title(topic: str) -> tuple[str | None, str | None]:
     """Zamienia to, co powiedział użytkownik (częsty skrót, literówka,
     inny przypadek odmiany) na prawdziwy tytuł artykułu Wikipedii,
@@ -1459,7 +1482,12 @@ def _wiki_resolve_title(topic: str) -> tuple[str | None, str | None]:
     # Tytuł w jednej linii i bez znaków wikilinku: odpowiedź serwisu trafia do nagłówka
     # notatki ("# tytuł"), więc nowa linia w niej dopisałaby własne "type:" albo [[linki]].
     title = " ".join(title.replace("[", "(").replace("]", ")").replace("|", "/").replace("#", "").split())[:200]
-    return (title or None), None
+    title = (title or None)
+    # [2026-11-11] (audyt MCP, #7): pierwszy hit opensearch bez kontroli
+    # sensowności = fałszywe "źródło z Wikipedii" o obcym temacie.
+    if title and not _wiki_topic_matches(topic, title):
+        return None, None
+    return title, None
 
 
 _MAX_EXTRACT_CHARS = 20_000

@@ -445,6 +445,19 @@ def providers_pool(etap: str | None = None) -> list[str]:
     return [name for e in etapy for name in _etap_providers(e) if _configured(name)]
 
 
+def ready_providers(etap: str | None = None) -> list[str]:
+    """Dostawcy gotowi TERAZ: skonfigurowani, poniżej dziennego limitu i poza
+    bezpiecznikiem. Kolejność jak providers_pool (KORYTO, potem _PRIORITY).
+
+    Namysł (1.40.0) bierze z tej listy JEDNEGO dostawcę na cały cykl, więc
+    "pierwszy dostępny" nie może być dostawcą w cooldownie albo z wyczerpanym
+    limitem. Gdy żaden nie jest gotowy, lista jest pusta - wtedy Namysł
+    schodzi na kolejny etap koryta (zwykle lokalny), zamiast udawać próbę."""
+    names = providers_pool(etap)
+    scope = _scope()
+    return [n for n in names if _allowed(n) and not _breaker_open(n) and not _scope_dead(scope, n)]
+
+
 # --- Rozdzielnica (1.30.23): "prąd" = płatny Claude. Waga uwagi (skupienie 1-4)
 # decyduje, którą SZYNĄ puścić zapytanie, żeby najdroższego modelu używać jak
 # najmniej przy jak najlepszym wyniku. Polityka B (domyślna, prośba Grzegorza):
@@ -1623,7 +1636,8 @@ def _mask_messages(messages: list[dict]) -> list[dict]:
 def chat(system_prompt: str, messages: list[dict], message: str, timeout: float = 60.0,
          preferred_provider: str | None = None, exclude_provider: str | None = None,
          etapy: list[str] | None = None, max_tokens: int | None = None,
-         model: str | None = None, on_token=None) -> tuple[str, str]:
+         model: str | None = None, on_token=None,
+         only_provider: str | None = None) -> tuple[str, str]:
     """Łańcuch: etapami koryta (1.17.0, agent/koryto.py - domyślnie Claude,
     potem darmowa pula), w obrębie darmowej puli w LOSOWEJ kolejności,
     losowanej od nowa przy każdym wywołaniu - pierwszy sukces wygrywa.
@@ -1668,6 +1682,13 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
     jednej linii; model, który zaczyna pisać prozę, kończy po kilkudziesięciu
     tokenach, a nie po 1600.
 
+    `only_provider` (1.40.0, Namysł): wywołanie DOKŁADNIE tego jednego
+    dostawcy, bez łańcucha, losowania i fallbacku. Dostawca niedostępny
+    (brak klucza, limit, bezpiecznik, cooldown) albo błąd = wyjątek; wołający
+    (namysl.py) traktuje to jako porażkę CAŁEGO cyklu i zaczyna go od fazy 1
+    na następnym etapie koryta. Dzięki temu żadna faza Namysłu nie może cicho
+    przeskoczyć na innego dostawcę.
+
     WARP (1.19.0): sprawdzany RAZ, świeżo, na początku (_guard_check). Blokada
     = od razu NetGuardBlocked, bez pytania dostawców i bez psucia ich
     bezpieczników (przy padniętym WARP to nie wina dostawcy).
@@ -1685,46 +1706,68 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
         msgs = msgs + [{"role": "user", "content": message}]
     msgs = _mask_messages(msgs)
     errors = []
-    if etapy is None:
-        etapy = samodopasowanie()
-    order = _try_order(preferred_provider, etapy)
-    if not any(_configured(n) for n in order):
-        raise RuntimeError("żaden dostawca nie odpowiedział (brak skonfigurowanych kluczy albo wszystkie limity wyczerpane)")
-    _guard_check()
-    # Bezpiecznik: dostawcy w cooldownie idą na koniec (próbowani tylko gdy
-    # zdrowi zawiedli), wyłączeni (zły klucz) wcale. Gdy wszyscy skonfigurowani
-    # są w cooldownie, zostaje kolejność "najdawniej padł pierwszy".
-    # 1.32.12 (audyt tura 16): dostawca pominięty przez budżet albo limit dzienny ma to w błędach
-    # (dotąd użytkownik widział tylko "brak kluczy albo limity", choć powód był znany).
-    for n in order:
-        if _configured(n) and not _allowed(n):
-            errors.append(f"{n}:pominięty, " + (over_budget(n) or "limit dzienny wyczerpany"))
-    healthy = [n for n in order if _allowed(n) and not _breaker_open(n)]
-    cooled = sorted((n for n in order if _allowed(n) and breaker_state(n)["stan"] == "cooldown"),
-                    key=lambda n: _breaker(n)["ostatnia_porazka"])
-    # Audyt 1.32.1: przerwy wyznaczonej przez serwer (Retry-After, 403) nie łamiemy przy
-    # każdej wiadomości. Taki dostawca wchodzi tylko wtedy, gdy nie ma nikogo innego -
-    # i wtedy jeden, ten, któremu przerwa kończy się najwcześniej.
-    soft = [n for n in cooled if not _breaker(n).get("twardy")]
-    hard = sorted((n for n in cooled if _breaker(n).get("twardy")), key=lambda n: _breaker(n)["cooldown_do"])
-    order = healthy + soft + ([] if (healthy or soft) else hard[:1])
-    if exclude_provider and exclude_provider in order and len(order) > 1:
-        # 1.17.1 (zgłoszenie Grzegorza, 2026-10-21, noc: "próbuje dostawców i
-        # każdy zawodzi"): do 1.17.0 wykluczony autor szkicu szedł NA KONIEC
-        # kolejki, więc recenzent Namysłu przy Claude jako autorze przechodził
-        # przez CAŁĄ darmową pulę (każdy padający dostawca = do 60 s), zanim
-        # wrócił do Claude. "Inny model niż autor" to zaleta, nie wymóg:
-        # próbujemy JEDNEGO innego zdrowego dostawcy, potem wracamy do autora,
-        # reszta dopiero gdyby oba zawiodły.
-        others = [n for n in order if n != exclude_provider]
-        # 1.32.12 (audyt tura 16): "inny" recenzent tylko z TEGO SAMEGO etapu co autor - inaczej
-        # przy darmowej puli w cooldownie recenzentem zostawał płatny Claude.
-        same_stage = [n for n in others if _ETAP.get(n) == _ETAP.get(exclude_provider)]
-        # Autor płatny (Claude): recenzent z darmowej puli jest tańszy, więc wolno; autor darmowy:
-        # tylko inny darmowy, nigdy awans na płatnego.
-        first = same_stage[:1] if same_stage or _ETAP.get(exclude_provider) != _PLATNY_ETAP else others[:1]
-        rest = [n for n in others if n not in first]
-        order = first + [exclude_provider] + rest
+    if only_provider is not None:
+        # 1.40.0 (Namysł): jedno wywołanie, jeden dostawca, zero fallbacku.
+        # Sprawdzamy dostępność ZANIM wyjdziemy siecią, żeby porażka była
+        # natychmiastowym, czytelnym powodem dla namysl.run (przełączenie
+        # etapu i restart cyklu od fazy 1).
+        if only_provider not in _PROVIDER_FN:
+            raise RuntimeError(f"nieznany dostawca: {only_provider}")
+        if not _configured(only_provider):
+            raise RuntimeError(f"{only_provider}: brak klucza albo dodatkowej zmiennej w .env")
+        reason = over_budget(only_provider)
+        if reason:
+            raise RuntimeError(f"{only_provider}: {reason}")
+        if _calls_today(only_provider) >= _DAILY_LIMIT[only_provider]:
+            raise RuntimeError(f"{only_provider}: limit dzienny wyczerpany")
+        bs = breaker_state(only_provider)
+        if bs["stan"] == "wylaczony":
+            raise RuntimeError(f"{only_provider}: {bs['powod']}")
+        if bs["stan"] == "cooldown":
+            raise RuntimeError(f"{only_provider}: cooldown ({bs['sekund']} s) - {bs['powod']}")
+        order = [only_provider]
+        _guard_check()
+    else:
+        if etapy is None:
+            etapy = samodopasowanie()
+        order = _try_order(preferred_provider, etapy)
+        if not any(_configured(n) for n in order):
+            raise RuntimeError("żaden dostawca nie odpowiedział (brak skonfigurowanych kluczy albo wszystkie limity wyczerpane)")
+        _guard_check()
+        # Bezpiecznik: dostawcy w cooldownie idą na koniec (próbowani tylko gdy
+        # zdrowi zawiedli), wyłączeni (zły klucz) wcale. Gdy wszyscy skonfigurowani
+        # są w cooldownie, zostaje kolejność "najdawniej padł pierwszy".
+        # 1.32.12 (audyt tura 16): dostawca pominięty przez budżet albo limit dzienny ma to w błędach
+        # (dotąd użytkownik widział tylko "brak kluczy albo limity", choć powód był znany).
+        for n in order:
+            if _configured(n) and not _allowed(n):
+                errors.append(f"{n}:pominięty, " + (over_budget(n) or "limit dzienny wyczerpany"))
+        healthy = [n for n in order if _allowed(n) and not _breaker_open(n)]
+        cooled = sorted((n for n in order if _allowed(n) and breaker_state(n)["stan"] == "cooldown"),
+                        key=lambda n: _breaker(n)["ostatnia_porazka"])
+        # Audyt 1.32.1: przerwy wyznaczonej przez serwer (Retry-After, 403) nie łamiemy przy
+        # każdej wiadomości. Taki dostawca wchodzi tylko wtedy, gdy nie ma nikogo innego -
+        # i wtedy jeden, ten, któremu przerwa kończy się najwcześniej.
+        soft = [n for n in cooled if not _breaker(n).get("twardy")]
+        hard = sorted((n for n in cooled if _breaker(n).get("twardy")), key=lambda n: _breaker(n)["cooldown_do"])
+        order = healthy + soft + ([] if (healthy or soft) else hard[:1])
+        if exclude_provider and exclude_provider in order and len(order) > 1:
+            # 1.17.1 (zgłoszenie Grzegorza, 2026-10-21, noc: "próbuje dostawców i
+            # każdy zawodzi"): do 1.17.0 wykluczony autor szkicu szedł NA KONIEC
+            # kolejki, więc recenzent Namysłu przy Claude jako autorze przechodził
+            # przez CAŁĄ darmową pulę (każdy padający dostawca = do 60 s), zanim
+            # wrócił do Claude. "Inny model niż autor" to zaleta, nie wymóg:
+            # próbujemy JEDNEGO innego zdrowego dostawcy, potem wracamy do autora,
+            # reszta dopiero gdyby oba zawiodły.
+            others = [n for n in order if n != exclude_provider]
+            # 1.32.12 (audyt tura 16): "inny" recenzent tylko z TEGO SAMEGO etapu co autor - inaczej
+            # przy darmowej puli w cooldownie recenzentem zostawał płatny Claude.
+            same_stage = [n for n in others if _ETAP.get(n) == _ETAP.get(exclude_provider)]
+            # Autor płatny (Claude): recenzent z darmowej puli jest tańszy, więc wolno; autor darmowy:
+            # tylko inny darmowy, nigdy awans na płatnego.
+            first = same_stage[:1] if same_stage or _ETAP.get(exclude_provider) != _PLATNY_ETAP else others[:1]
+            rest = [n for n in others if n not in first]
+            order = first + [exclude_provider] + rest
     # Łączny budżet czasu jednego łańcucha (KORYTO_BUDZET_S, domyślnie 120 s):
     # koryto ma oddać lokalnemu modelowi po dwóch minutach, nie po sumie
     # limitów wszystkich dostawców (5 x 60 s). Każdy kolejny dostawca dostaje
@@ -1786,8 +1829,8 @@ def chat(system_prompt: str, messages: list[dict], message: str, timeout: float 
             room = _CHAIN_BUDGET_S - (time.monotonic() - started)
             if scope is not None:
                 room = min(room, _scope_left(scope))
-            if (getattr(e, "code", None) == 429 and wait is not None and wait <= RETRY_AFTER_INLINE_S
-                    and wait + 5.0 <= room):
+            if (only_provider is None and getattr(e, "code", None) == 429 and wait is not None
+                    and wait <= RETRY_AFTER_INLINE_S and wait + 5.0 <= room):
                 retry_started = time.monotonic()
                 if _stopped():
                     errors.append(f"{name}:zatrzymane przez użytkownika")

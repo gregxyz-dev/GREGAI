@@ -2,6 +2,10 @@
 
 {LOCAL_RULES}
 
+{PROFILE}
+
 ## Kryzys
 {CRISIS}
+
+{FORMAT}
 {PROJECT}

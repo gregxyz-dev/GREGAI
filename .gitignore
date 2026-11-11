@@ -42,6 +42,9 @@ GREGAI.sha256.sig
 # Audyt i dane lokalne (katalog data/ jest wyłączony wyżej; wpis jawny dla czytelności).
 data/audyt/
 
+# Log odinstalowania (uninstall.sh pisze go w bieżącym katalogu).
+uninstall.log
+
 # Klucze i podpisy - nigdy do repozytorium.
 *.gpg
 *.key

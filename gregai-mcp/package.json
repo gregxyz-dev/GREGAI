@@ -1,0 +1,25 @@
+{
+  "name": "gregai-mcp",
+  "version": "0.1.0",
+  "description": "Pomost MCP: OpenCode <-> GREGAI (localhost:7777). Czysty klient HTTP, zero zmian w GREGAI.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.smoke.json",
+    "start": "node dist/index.js",
+    "smoke": "tsc -p tsconfig.smoke.json && node dist-smoke/test/smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -131,7 +131,7 @@ html, body {
 }
 
 ::selection {
-  color: #fff;
+  color: var(--on-accent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -200,9 +200,9 @@ html, body {
   transform: translate(-9999px, -9999px);
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(10, 10, 12, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: var(--text-dim);
+  background: var(--crack-card, var(--bg));
+  border: 1px solid var(--crack-line-strong, var(--panel-border-strong));
+  color: var(--crack-text, var(--text-primary));
   font-size: 12px;
   font-family: var(--font-sans);
   white-space: nowrap;
@@ -211,9 +211,9 @@ html, body {
 }
 
 .node-label-3d.is-active {
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(10, 10, 12, 0.88);
+  color: var(--crack-text, var(--text-primary));
+  border-color: var(--crack-cyan, var(--accent));
+  background: var(--crack-card, var(--bg));
 }
 
 /* --- Panele unoszące się: obsidian glass - głębia zamiast błyszczącego plastiku --- */
@@ -480,8 +480,8 @@ body.segment-notatki #notatki-segment {
 }
 
 .project-jump:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--crack-text, var(--text-primary));
+  background: var(--fill-2);
 }
 
 .project-jump:active {
@@ -705,10 +705,10 @@ body.segment-notatki #notatki-segment {
 
 #search-input {
   flex: 1;
-  background: transparent;
+  background: var(--crack-card, transparent);
   border: none;
   outline: none;
-  color: var(--text-primary);
+  color: var(--crack-text, var(--text-primary));
   font-family: var(--font-sans);
   font-size: 14px;
   padding: 6px 8px;
@@ -716,11 +716,11 @@ body.segment-notatki #notatki-segment {
 
 /* Pole wyszukiwania ma outline:none, więc fokus widać na całym pasku. */
 #bottom-bar:focus-within {
-  box-shadow: 0 0 0 2px var(--pink);
+  box-shadow: 0 0 0 2px var(--crack-cyan, var(--pink));
 }
 
 #search-input::placeholder {
-  color: var(--text-dim);
+  color: var(--crack-dim, var(--text-dim));
 }
 
 /* --- Status / błędy --- */
@@ -733,7 +733,7 @@ body.segment-notatki #notatki-segment {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--danger);
-  background: rgba(239, 99, 97, 0.1);
+  background: color-mix(in srgb, var(--crack-bad) 10%, transparent);
   border: 1px solid rgba(239, 99, 97, 0.3);
   padding: 6px 14px;
   border-radius: var(--radius-pill);
@@ -760,7 +760,7 @@ body.segment-notatki #notatki-segment {
 /* Komunikat informacyjny (nie błąd): np. pominięte pliki przy indeksowaniu. */
 #status-banner.info {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--fill-1);
   border-color: var(--panel-border-strong);
 }
 
@@ -768,7 +768,7 @@ body.segment-notatki #notatki-segment {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(4, 4, 5, 0.7);
+  background: var(--overlay);
   backdrop-filter: blur(3px);
   display: none;
   align-items: center;
@@ -814,7 +814,7 @@ body.segment-notatki #notatki-segment {
     position: sticky;
     bottom: -14px;
     padding: 8px 0 14px;
-    background: rgba(10, 10, 12, 0.97);
+    background: var(--crack-card);
   }
 }
 
@@ -1059,14 +1059,14 @@ select.modal-input {
 }
 
 .chat-bubble p {
-  margin: 0 0 6px;
+  margin: 0 0 var(--chat-gap, 6px);
 }
 .chat-bubble p:last-child {
   margin-bottom: 0;
 }
 .chat-bubble ul,
 .chat-bubble ol {
-  margin: 2px 0 6px;
+  margin: 0 0 var(--chat-gap, 6px);
   padding-left: 20px;
 }
 .chat-bubble ul:last-child,
@@ -1074,14 +1074,17 @@ select.modal-input {
   margin-bottom: 0;
 }
 .chat-bubble li {
-  margin: 2px 0;
+  margin: 0;
+}
+.chat-bubble li + li {
+  margin-top: 2px;
 }
 .chat-bubble code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   padding: 1px 4px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--fill-2);
 }
 
 .chat-bubble.user {
@@ -1210,7 +1213,7 @@ select.modal-input {
 .chat-card {
   align-self: flex-start;
   max-width: 94%;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--fill-2);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   padding: 8px 10px;
@@ -1287,7 +1290,7 @@ select.modal-input {
   border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   border-radius: 10px;
   padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--fill-1);
 }
 .mh-chart {
   display: block;
@@ -1299,8 +1302,8 @@ select.modal-input {
   font-size: 11px;
   font-family: inherit;
 }
-.mh-up { color: #39d98a; }
-.mh-down { color: #ff6b6b; }
+.mh-up { color: var(--crack-ok); }
+.mh-down { color: var(--crack-bad); }
 .chat-card-subcard {
   margin: 4px 0 8px;
   padding: 2px 0;
@@ -1316,12 +1319,12 @@ select.modal-input {
   white-space: nowrap;
 }
 .ntl-skup-3 {
-  color: #ffce7a;
-  background: rgba(255, 206, 122, 0.14);
+  color: var(--crack-warn);
+  background: color-mix(in srgb, var(--crack-warn) 14%, transparent);
 }
 .ntl-skup-4 {
-  color: #ff8f8f;
-  background: rgba(255, 107, 107, 0.16);
+  color: var(--crack-bad);
+  background: color-mix(in srgb, var(--crack-bad) 16%, transparent);
 }
 
 /* --- Karta research_web: wyniki z internetu jako kafelki-źródła (1.30.11) --- */
@@ -1336,7 +1339,7 @@ select.modal-input {
   flex-direction: column;
   gap: 3px;
   padding: 7px 9px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--fill-1);
   border: 1px solid var(--panel-border);
   border-radius: 8px;
   transition: border-color var(--dur-base) var(--ease-standard),
@@ -1393,8 +1396,8 @@ a.web-title:hover {
 
 /* --- Karta clarify: dwie opcje do wyboru przy dwuznacznym pytaniu --- */
 .chat-card-clarify {
-  background: rgba(139, 92, 246, 0.07);
-  border-color: rgba(139, 92, 246, 0.28);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* --- Karta "propozycja węzła": GREGAI proponuje zapisać fakt z rozmowy do
@@ -1402,8 +1405,8 @@ a.web-title:hover {
    odcień, inny niż fioletowa karta "confirm" wyżej: to NIE jest zmiana w
    systemie, tylko luźna propozycja, którą swobodnie można odrzucić. --- */
 .chat-card-suggest {
-  background: rgba(52, 211, 153, 0.06);
-  border-color: rgba(52, 211, 153, 0.26);
+  background: color-mix(in srgb, var(--crack-ok) 6%, transparent);
+  border-color: color-mix(in srgb, var(--crack-ok) 26%, transparent);
 }
 
 .chat-card-suggest-title {
@@ -1434,22 +1437,22 @@ a.web-title:hover {
   border-radius: var(--radius-pill);
   cursor: pointer;
   border: 1px solid var(--panel-border-strong);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--fill-1);
   color: var(--text-primary);
   transition: border-color var(--dur-base) var(--ease-standard), background var(--dur-base) var(--ease-standard), transform var(--dur-fast) var(--ease-standard);
 }
 
 .chat-card-suggest-btn.save {
-  border-color: rgba(52, 211, 153, 0.4);
+  border-color: color-mix(in srgb, var(--crack-ok) 40%, transparent);
   color: var(--ok);
 }
 
 .chat-card-suggest-btn.save:hover {
-  background: rgba(52, 211, 153, 0.14);
+  background: color-mix(in srgb, var(--crack-ok) 14%, transparent);
 }
 
 .chat-card-suggest-btn.reject:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--fill-1);
 }
 
 .chat-card-suggest-btn:disabled {
@@ -1480,11 +1483,11 @@ a.web-title:hover {
 }
 
 .chat-card-row.chat-card-option:hover {
-  background: rgba(139, 92, 246, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .chat-card-row.chat-card-option:active {
-  background: rgba(139, 92, 246, 0.24);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 /* Opcja karty z wcześniejszej wymiany: odpowiedź serwera już jej nie dotyczy. */
@@ -1503,12 +1506,12 @@ a.web-title:hover {
 /* Zgoda i odmowa muszą wyglądać inaczej: to decyzja o zmianie w systemie. */
 .chat-card-option[data-clarify-text="tak"] .chat-card-option-num {
   background: var(--ok);
-  color: #06100c;
+  color: var(--on-ok);
 }
 
 .chat-card-option[data-clarify-text="nie"] .chat-card-option-num {
   background: var(--danger);
-  color: #1a0605;
+  color: var(--on-danger);
 }
 
 .chat-card-option-num {
@@ -1517,7 +1520,7 @@ a.web-title:hover {
   height: 16px;
   border-radius: 50%;
   background: var(--purple);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 12px;
   display: flex;
   align-items: center;
@@ -1577,13 +1580,13 @@ a.web-title:hover {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--fill-2);
   border-radius: 99px;
   border: 2px solid var(--bg);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.26);
+  background: var(--fill-3);
 }
 
 /* Karty pętli agenta i narzędzi systemowych (agent/agentloop.py, sysop.py) */
@@ -1597,7 +1600,7 @@ a.web-title:hover {
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
-  background: rgba(0, 0, 0, 0.38);
+  background: var(--fill-2);
   border-radius: 6px;
 }
 .chat-card code {
@@ -1622,39 +1625,6 @@ a.web-title:hover {
    1.9.0: Namysł (agent/namysl.py) - narracja na żywo, karta "Jak myślałem",
    ustawienia; załączniki (spinacz); Źródła (foldery) w szynie.
    ====================================================================== */
-
-/* --- Oś faz na żywo: pod wskaźnikiem pisania, zamiast ogólnego narratora,
-   gdy backend faktycznie melduje, co robi (GET /api/chat/progress). Jedna
-   lista faz z czytelnym stanem każdej i jeden, pełny opis tego, co dzieje
-   się TERAZ - "ludzie nie lubią niewiedzy" (Grzegorz, 2026-10-19). --- */
-.chat-bubble.pending .namysl-live {
-  margin-top: 8px;
-  width: min(100%, 560px);
-  font-family: var(--font-sans);
-  color: var(--text-secondary);
-}
-
-.namysl-live-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-
-.namysl-live-head .namysl-live-timer {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-dim);
-  margin-left: auto;
-}
-
-.namysl-live-why {
-  font-size: 11.5px;
-  color: var(--text-dim);
-  margin: 2px 0 8px;
-  line-height: 1.4;
-}
 
 .namysl-phases {
   list-style: none;
@@ -1687,7 +1657,7 @@ a.web-title:hover {
 
 .namysl-phase.done .namysl-mark {
   border-color: var(--ok);
-  background: rgba(52, 211, 153, 0.18);
+  background: color-mix(in srgb, var(--crack-ok) 18%, transparent);
 }
 
 .namysl-phase.done .namysl-mark::after {
@@ -1709,13 +1679,13 @@ a.web-title:hover {
 
 .namysl-phase.active {
   color: var(--text-primary);
-  background: rgba(139, 92, 246, 0.10);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .namysl-phase.active .namysl-mark {
   border-color: var(--purple);
   animation: pending-status-pulse 1.4s infinite ease-in-out;
-  background: rgba(139, 92, 246, 0.35);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .namysl-phase .namysl-phase-name {
@@ -1743,7 +1713,7 @@ a.web-title:hover {
   margin-top: 8px;
   padding: 8px 10px;
   border-left: 2px solid var(--purple);
-  background: rgba(139, 92, 246, 0.07);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
   border-radius: 0 8px 8px 0;
   font-size: 12px;
   line-height: 1.5;
@@ -1782,7 +1752,7 @@ a.web-title:hover {
   background: var(--bg); border: 1.5px solid var(--panel-border-strong); margin-top: 1px;
   display: flex; align-items: center; justify-content: center;
 }
-.ntl-step.done .ntl-dot { border-color: var(--ok); background: rgba(110, 231, 200, 0.14); }
+.ntl-step.done .ntl-dot { border-color: var(--ok); background: color-mix(in srgb, var(--crack-ok) 14%, transparent); }
 .ntl-step.done .ntl-dot::after {
   content: ""; width: 3px; height: 6.5px; border: solid var(--ok);
   border-width: 0 1.5px 1.5px 0; transform: translateY(-1px) rotate(45deg);
@@ -1813,7 +1783,7 @@ a.web-title:hover {
 .ntl-foot-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin-right: 2px; }
 .ntl-chip {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: 999px; padding: 1px 8px;
+  background: var(--fill-1); border: 1px solid var(--panel-border); border-radius: 999px; padding: 1px 8px;
 }
 .ntl-foot-text { color: var(--text-secondary); }
 
@@ -1853,7 +1823,7 @@ a.web-title:hover {
   margin-left: auto;
   border-radius: 999px;
   border: 1px solid rgba(183, 156, 255, 0.4);
-  background: rgba(139, 92, 246, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 12.5px;
@@ -1863,8 +1833,8 @@ a.web-title:hover {
 }
 
 .progress-pill:hover {
-  background: rgba(139, 92, 246, 0.22);
-  border-color: rgba(183, 156, 255, 0.6);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 .progress-pill.hidden {
@@ -1872,8 +1842,8 @@ a.web-title:hover {
 }
 
 .progress-pill.done {
-  border-color: rgba(52, 211, 153, 0.45);
-  background: rgba(52, 211, 153, 0.12);
+  border-color: color-mix(in srgb, var(--crack-ok) 45%, transparent);
+  background: color-mix(in srgb, var(--crack-ok) 12%, transparent);
 }
 
 .progress-pill-dot {
@@ -1920,7 +1890,7 @@ a.web-title:hover {
 
 .namysl-card-toggle:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--fill-1);
 }
 
 .namysl-card-toggle .namysl-card-chevron {
@@ -2027,7 +1997,7 @@ a.web-title:hover {
   padding: 3px 8px;
   border-radius: var(--radius-pill);
   border: 1px solid rgba(139, 92, 246, 0.35);
-  background: rgba(139, 92, 246, 0.10);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--text-primary);
   font-size: 11.5px;
   max-width: 100%;
@@ -2036,7 +2006,7 @@ a.web-title:hover {
 .chat-attachment .chat-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .chat-attachment .chat-attachment-size { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
 .chat-attachment.uploading { opacity: 0.6; }
-.chat-attachment.failed { border-color: rgba(239, 99, 97, 0.5); background: rgba(239, 99, 97, 0.1); }
+.chat-attachment.failed { border-color: color-mix(in srgb, var(--crack-bad) 50%, transparent); background: color-mix(in srgb, var(--crack-bad) 10%, transparent); }
 
 .chat-attachment-remove {
   border: none;
@@ -2304,7 +2274,7 @@ a.web-title:hover {
 /* Znacznik modelu: serwer nie odpowiada / przeglądarka bez internetu. */
 .chat-model-badge.offline {
   color: var(--danger);
-  border-color: rgba(239, 99, 97, 0.4);
+  border-color: color-mix(in srgb, var(--crack-bad) 40%, transparent);
 }
 .chat-model-badge.net-offline {
   border-style: dashed;
@@ -2343,15 +2313,15 @@ a.web-title:hover {
 
 /* 1.24.0: prostsza obsługa (przegląd UX) */
 .chat-guard-pill { font: inherit; font-size: 12.5px; padding: 6px 12px; min-height: 32px; border-radius: 999px; border: 1px solid var(--hair, rgba(255,255,255,.14)); background: var(--fill-1, rgba(255,255,255,.05)); color: var(--text-secondary, inherit); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48vw; margin-left: auto; }
-.chat-guard-pill[data-level="warn"] { border-color: #ffb36b; color: #ffcf9e; }
-.chat-guard-pill[data-level="bad"] { border-color: #ff6b6b; color: #ffb0b0; }
+.chat-guard-pill[data-level="warn"] { border-color: var(--crack-warn); color: var(--crack-warn); }
+.chat-guard-pill[data-level="bad"] { border-color: var(--crack-bad); color: var(--crack-bad); }
 .chat-guard-pill.hidden { display: none; }
 .chat-card-ask { font-family: var(--font-sans, inherit); font-size: 15px; line-height: 1.45; text-transform: none; letter-spacing: 0; margin-bottom: 8px; }
 .chat-card-details { margin: 4px 0 10px; font-size: 13px; }
 .chat-card-details summary { cursor: pointer; opacity: .8; min-height: 32px; display: flex; align-items: center; }
 .chat-card-yesno { display: flex; gap: 10px; margin-top: 6px; }
 .chat-card-yesno .chat-card-option { flex: 1; min-height: 48px; justify-content: center; font-size: 15px; font-weight: 600; border-radius: 12px; margin: 0; text-transform: none; letter-spacing: 0; }
-.chat-card-yesno .chat-card-option.yes:not(.used) { background: rgba(80, 200, 120, .16); border: 1px solid rgba(80, 200, 120, .55); }
+.chat-card-yesno .chat-card-option.yes:not(.used) { background: color-mix(in srgb, var(--crack-ok) 16%, transparent); border: 1px solid color-mix(in srgb, var(--crack-ok) 55%, transparent); }
 .chat-card-yesno .chat-card-option.no:not(.used) { border: 1px solid var(--hair, rgba(255,255,255,.2)); }
 .chat-card-option.chosen { opacity: 1 !important; outline: 2px solid var(--accent, #b98cff); outline-offset: 1px; }
 .chat-card-option.chosen::after { content: " (wybrane)"; font-weight: 400; opacity: .8; margin-left: 4px; }
@@ -2396,7 +2366,7 @@ a.web-title:hover {
 :root { --t-cap: 12px; }
 .chat-copy, .namysl-who { font-size: 12px; }
 /* Kontrast: podpowiedź w polu i stan "czekam" czytelne */
-.chat-input::placeholder { color: var(--text-secondary, #c9bfe6); opacity: 1; }
+.chat-input::placeholder { color: var(--text-secondary); opacity: 1; }
 .chat-input:disabled { opacity: 1; border-style: dashed; }
 @media (pointer: coarse) {
   .chat-bubble .chat-copy { opacity: 1; }
@@ -2563,14 +2533,6 @@ button { transition: filter 150ms ease-out; }
   .nt-track { padding: 6px 8px; }
   .nt-track-name { font-size: 10px; }
   .nt-track-time { font-size: 9px; }
-}
-
-/* 1.33.0: linia "…przetwarzam (Ns)" pod aktywną fazą osi w dymku. */
-.ntl-sub.ntl-hb {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  opacity: 0.7;
-  margin-top: 2px;
 }
 
 /* ============================================================================

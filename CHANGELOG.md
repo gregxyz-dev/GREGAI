@@ -2,6 +2,911 @@
 
 Pełny opis każdego wydania (co, dlaczego, jak sprawdzone), od najnowszego. Wyniesiony z README w 1.11.0, żeby README opisywał stan obecny, a nie drogę do niego.
 
+## Co nowego w 1.45.19
+
+**Poprawki z drugiego, turbo-dokładnego audytu MCP na żywej instalacji (34 narzędzia, 16 testów rozmowy, ~90 wywołań MCP).**
+
+- `agent/tools.py`: resolver Wikipedii **nie bierze już ślepo pierwszego hitu
+  opensearch** - zapytanie "Co to jest Ollama?" dostawało streszczenie artykułu
+  o Garym Oldmanie (polska Wikipedia nie ma hasła "Ollama", a fuzzy match
+  zwracał dowolny podobny tytuł), po czym odpowiedź fałszywie twierdziła
+  "Sprawdziłem na Wikipedii" (audyt 🔴#7). Nowa walidacja tokenowa
+  (`_wiki_topic_matches`) przepuszcza odmianę przez przypadki ("bitcoina" ->
+  "Bitcoin"), a odrzuca obcy artykuł ("Ollama" vs "Ollanta Humala").
+- `agent/namysl.py` + `agent/router.py` + `config/social.json`: pożegnania
+  ("do widzenia", "żegnaj", "pa pa", "dobranoc") mają szybką ścieżkę - wcześniej
+  "Do widzenia" szło w 6 faz Namysłu (122 s, dwie awarie dostawców), a
+  "Dobranoc" wywoływało model zamiast odpowiedzi z kodu (audyt 🔴#5). Zadania
+  po pożegnaniu ("do widzenia, zrób X") przechodzą dalej jak dotąd.
+- `agent/router.py`: gołe "tak"/"nie" bez karty zgody dostaje uczciwą
+  odpowiedź z kodu - model odpowiadał halucynacją ("Zapisuję Twoje imię:
+  Grzegorzu"), nic nie zapisując (audyt 🔴#8). Szerokie synonimy ("ok")
+  zostają rozmową (pilnuje tego kontrola awaryjny-1382).
+- `agent/router.py`: bramka jakości lokalnego modelu łapie **znaki CJK**
+  ("仍未返回" przeleciało do użytkownika w środku polskiej odpowiedzi; audyt
+  🔴#9) oraz **meta-narrację** ("Grzegorz pytałeś o pogodę...", "AI nie
+  posiada...", "GREGAI zapisuje te pytania..." zamiast odpowiedzi; audyt
+  🔴#10). Na ścieżce awaryjnej (lokalnie_awaryjnie) halucynacja podstawiana
+  jest uczciwym komunikatem (`_meta_narracja_reply`) - to jedyna odpowiedź,
+  jaką użytkownik widzi.
+- `agent/trace.py`: plik śladu w obcej własności (uruchomienie CLI/audytu jako
+  drugi użytkownik podmienia plik atomic_write, a własność idzie za ostatnim
+  pisarzem) **nie zabija już śladu usługi** - PermissionError odsuwa obcy plik
+  do kwarantanny i buduje nowy (audyt 🔴#6). Na żywej instalacji doszło do
+  tego, że `data/decision_log.json` był własnością admina i `koryto_history`/
+  `decision_log` były martwe; naprawiono też grupy plików w data/ (setgid,
+  dziedziczenie grupy `gregai`).
+- Pomost `gregai-mcp`: `gregai_chat` przyjmuje `pending_action` i
+  `pending_clarify` - agent OpenCode może dokończyć akcje wymagające zgody
+  (potwierdzenie research_web przetestowane end-to-end); przy porażce sieci
+  w pętli wait zawsze wraca `hint`.
+- `api_contract.md`: maska tokena LAN, pola `next`/`skupienie`, brak `sig` na
+  ścieżkach deterministycznych i awaryjnych.
+- `check.sh`: kontrole **119** (pożegnania), **120** (własności data/), **121**
+  (resolver Wikipedii), **122** (gołe tak/nie), **123** (CJK), **124**
+  (meta-narracja); TOTAL 118 -> 124.
+
+**Nie naprawiane (poza zakresem lub do decyzji użytkownika):** zerwany łańcuch
+dziennika bezpieczeństwa (dwie kotwice przy mieszanych uruchomieniach -
+straz.py poza zakresem), licznik budżetu nie widzący 0.60 USD z SPEND_LOG
+(juggler.py poza zakresie; widoczne w odpowiedzi budget: dzien=0 przy
+wydatkach 0.15), karta confirm dla destrukcyjnych akcji przez rozmowę przy
+padach dostawców (środowiskowe), install.sh tworzy data/ jako 700 a żywa
+instalacja działa na 2770 - do uporządkowania modelu uprawnień.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+kontrole audytowe 117-124 OK. Na żywej usłudze: "Co to jest Ollama?" -> uczciwe
+"Nie ma hasła o „Ollama", więc sprawdziłem w wyszukiwarce" z prawidłowym
+wynikiem; "Do widzenia" -> odpowiedź z kodu; potwierdzenie research_web przez
+MCP wykonane end-to-end; delete/restore notatki przez MCP bez wisieńców.
+
+## Co nowego w 1.45.18
+
+**Poprawki z autonomicznego audytu MCP (gregai-mcp, 34 narzędzia) na żywej instalacji.**
+
+- `agent/main.py`: `/api/system_info` i odpowiedź `/api/debug/lan` maskują
+  `GREGAI_TOKEN` (helper `_mask_token`: trzy pierwsze + "…" + trzy ostatnie
+  znaki). Wcześniej localhost bez tokenu czytał pełny token uprawniający
+  do API z LAN (audyt 🔴#1). Świeżo wygenerowany token nadal pokazuje się
+  w całości, raz - żeby dało się go przepisać na drugie urządzenie.
+- `agent/ops.py`: metryka wisieńców w `_vault_state` była odwrócona -
+  liczyła linki zawiązane pomyślnie (health pokazywał 433 przy 0
+  prawdziwych), a linki wiszące zostawały niewidoczne (audyt 🔴#2).
+  Teraz wisieńcem jest wyłącznie cel bez notatki; samowskazanie nie liczy
+  się jako wisieniec.
+- `agent/router.py`: log inferencji lokalnych zwraca `tok_s: null`, gdy
+  `eval_duration < 0.1 s` albo `eval_count < 2` - urwane wywołanie (976 s,
+  1 token) pisało `tok_s: 1000000` i zatruwało medianę (audyt 🟡).
+- `api_contract.md`: udokumentowana maska tokena, pola `next`/`skupienie`
+  w finalnej odpowiedzi czatu i brak `sig` na szybkich ścieżkach
+  deterministycznych.
+- `check.sh`: kontrole **117** (maska tokena, statycznie + żywy serwis
+  poza CI) i **118** (metryka wisieńców na atrapie vaulta z linkiem
+  zawiązanym, wiszącym i samowskazaniem); TOTAL 116 -> 118.
+- Pomost `gregai-mcp`: `gregai_chat` przy porażce sieci w pętli wait
+  zwraca teraz też `hint` (zadanie żyje na serwerze: dopytaj
+  `gregai_chat_wait` albo przerwij `gregai_chat_cancel`); opis filtra
+  poziomów w `gregai_straz_history` zgodny z rzeczywistymi wartościami
+  ("średnie"/"wysokie"/"inne").
+
+**Nie naprawiane (świadomie, poza zakresem audytu):** zerwany łańcuch
+dziennika bezpieczeństwa (dwie kotwice przy mieszanych uruchomieniach
+usługa `gregai` / ręcznie `gregxyz2` - wymaga decyzji operacyjnej, nie
+łatki w straz.py) oraz brakujące 0.60 USD w liczniku budżetu przy
+mieszanym uruchamianiu (juggler.py poza zakresem poprawek audytu).
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh`: kontrole
+117 i 118 OK na żywej instalacji (pełny przebieg w raporcie audytu
+`audit/GRAGAI_AUDIT_2026-11-11.md`). Po restarcie usługi
+`/api/system_info` zwraca zamaskowany token, a `vault.orphans` liczy
+realne wisieńce.
+
+## Co nowego w 1.45.17
+
+**Padding nagłówka Nadzorcy na telefonie jak w panelach.**
+
+- `ui/crack.css`: w bloku 1.45.16 doszła reguła `@media (max-width: 760px)`
+  z `#debug-segment .debug-head { padding: var(--sp-2); }`. Na telefonie
+  nagłówek ma 8 px ze wszystkich stron, dokładnie jak `.panele-top`
+  w Zadaniach i Notatkach (wcześniej zostawał przy 8/12 px).
+- Desktop bez zmian: 8/12 px, tło `--crack-card` i obrys `--crack-line`
+  z 1.45.16. Zero zmian w HTML, JS i pozostałych plikach CSS.
+
+**Weryfikacja.** Headless WebKit 375 px: `.debug-head` padding `8px`,
+`.panele-top` padding `8px`, tło i obrys bez zmian, zero poziomego
+overflow. `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+71/116 OK, 1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.16
+
+**Nagłówek Nadzorcy jest kartą tak jak `.panele-top`.**
+
+- `ui/crack.css` (nowy blok na końcu): `#debug-segment .debug-head` dostaje
+  `background: var(--crack-card)`, `border: 1px solid var(--crack-line)`
+  i `margin-bottom: var(--sp-3)`. `.panele-top` w Zadaniach/Notatkach jest
+  kartą przez klasę `.panel` w markupie; `.debug-head` tej klasy nie ma,
+  więc wcześniej był przezroczysty i brakowało paska za przyciskami.
+- Tokeny działają w obu motywach: ciemny `#0c0c14` + cyan 0.15, jasny
+  `#ffffff` + `rgba(11, 18, 32, 0.12)` - dokładnie jak `.panele-top`.
+- Bez zmian: promień 0, padding 8/12 px i `min-height: 56px` z 1.45.13,
+  `.dbg-hero` (już karta z 1.45.14), Zadania/Notatki, `theme-light.css`,
+  `debug.css`, `sistem.css`, `kadr.css`, JS i HTML.
+
+**Weryfikacja.** Headless WebKit: ciemny - `.debug-head` bg
+`rgb(12, 12, 20)`, border `rgba(0, 212, 255, 0.15)`, promień 0, padding
+8/12 px, min-height 56 px; jasny - bg `rgb(255, 255, 255)`, border
+`rgba(11, 18, 32, 0.12)`. Wartości identyczne z `.panele-top.panel`
+w obu segmentach; `.dbg-hero` i panele bez zmian. Mobile 375 px: zero
+poziomego overflow. `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+71/116 OK, 1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.15
+
+**Zdjęty ciężar z Nadzorcy - koniec monolitu.**
+
+- `ui/crack.css` (nowa sekcja na końcu): `#debug-segment .debug-inner`
+  dostaje `box-shadow: none`, a `.debug-inner::before` `content: none`.
+  `kadr.css:396-405` ustawia te dekoracje na (1,1,0), więc wygrywały ze
+  szkłem (0,1,0) i „Twardym zerem" (1,0,0); ta sama specyficzność później
+  w pliku czyści je bez ruszania `kadr.css`.
+- Rytm: `#debug-segment section` padding i margin-bottom `var(--sp-3)`
+  (12 px) zamiast `--s4` (16 px) z `sistem.css:458`; `.dbg-hero` padding
+  `var(--sp-3)`; `.dbg-tabs` padding `var(--sp-1)` (4 px) zamiast
+  literału 3 px z `sistem.css:453`.
+- `#debug-segment` ma `background: transparent` - inne segmenty
+  przepuszczają ziarno tła, Nadzorca malował opaque `--crack-bg`
+  (`crack.css:1049`) i wyglądał płasko.
+- Bez zmian: promienie, obrysy, `max-width: 1180px`, `[data-state]` hero,
+  tabele. Zero zmian w `kadr.css`, `debug.css`, `sistem.css`, `styles.css`,
+  JS i HTML.
+
+**Weryfikacja.** Headless WebKit, ciemny i jasny: `.debug-inner`
+`box-shadow: none`, `::before` `content: none`, `#debug-segment`
+`rgba(0, 0, 0, 0)`, sekcje 12/12 px, hero 12 px, zakładki 4 px, promienie
+0 px. Mobile 375 px: segment 8 px, `.debug-inner` 0, sekcje 12/12 px,
+zakładki 4 px i promienie 12/8 px, zero poziomego overflow. `bash
+weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`: 71/116 OK, 1 pominięta.
+Pełny `bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.14
+
+**Obrys kart Nadzorcy taki sam jak paneli Zadania i Notatki.**
+
+- `ui/crack.css`: grupa kart Nadzorcy (`section`, `.dbg-hero`, `.sysinfo-item`,
+  `.dbg-tabs`, `.dbg-pipe-node`, `.dbg-model-table`, `.teraz-pre`,
+  `.browse-card`, `.insp-card`) oraz re-deklaracje `.dbg-pipe-node` i
+  `.dbg-model-table` używają `border: 1px solid var(--crack-line)` zamiast
+  `rgba(var(--crack-cyan-rgb), 0.15)`.
+- W ciemnym motywie `--crack-line` ma tę samą wartość co stary literał, więc
+  wygląd się nie zmienia. W jasnym karty dostają neutralny obrys
+  `rgba(11, 18, 32, 0.12)` - dokładnie jak `.panel` w `#zadania`/`#notatki`
+  (wcześniej zostawał teal z literału).
+- `border-radius` i `box-shadow` bez zmian: cała aplikacja pozostaje
+  kwadratowa (`--r-none`), tak jak panele. `[data-state]` na hero i pipe nadal
+  nadpisuje kolor obrysu sygnalizacją stanu.
+- Zero zmian w `debug.css`, `sistem.css`, `kadr.css`, `theme-light.css`, JS
+  i HTML.
+
+**Weryfikacja.** Headless WebKit: ciemny - `section`, `.sysinfo-item`,
+`.dbg-pipe-node`, `.teraz-pre` i `.dbg-hero` mają `rgba(0, 212, 255, 0.15)`,
+identycznie jak `.panel` (no-op); jasny - wszystkie `rgba(11, 18, 32, 0.12)`,
+identycznie jak `.panel`. Hero z `data-state="ok"` w ciemnym dostaje kolor
+stanu (color-mix), promienie 0 px, zakładki mobilne 8 px, brak poziomego
+overflow na 375 px. `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+71/116 OK, 1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.13
+
+**Nadzorca w rytmie paneli Zadania i Notatki.**
+
+- `ui/crack.css` (nowa sekcja na końcu): `.debug-head` dostał center, gap
+  `--sp-3`, wrap, min-height 56 px i padding `--sp-2/--sp-3` jak
+  `.panele-top`; `h1.lt-title` 16 px. `.subtitle`, `.status-row`, `.dbg-hero`,
+  `.dbg-columns`, `.sysinfo-grid`, `.sysinfo-more-grid`, `.dbg-timeline li`,
+  `.dbg-tl-co/.dbg-tl-ocena`, `.dbg-budget`, `.dbg-budget-head` i
+  `.dbg-guard-line` używają teraz `--sp-*` zamiast literałów z `debug.css`.
+- Puste stany: `.empty` ma 13 px i padding jak `.panele-empty`. Centrowane są
+  TYLKO listy (`ol + .empty`, `ul + .empty`, `.dbg-timeline + .empty`);
+  puste tabele i siatki zostają wyrównane do lewej (standard UX).
+- Mobile: `#debug-segment` padding `--sp-2`, `.debug-inner` padding 0
+  (koniec podwójnego paddingu), sekcje `--sp-3`, hero `--sp-3`; zakładki
+  `gap/padding --sp-1`, promienie `--r-card`/`--r-ctl` (selektor podbity do
+  `nav.dbg-tabs.dbg-tabs`, żeby wygrał z `debug.css`).
+- `ui/debug.css`, `ui/panele.js`, `ui/debug.js`, `ui/index.html`,
+  `ui/styles.css`, `ui/sistem.css`, `ui/kadr.css` - bez zmian.
+- `check.sh` bez zmian; kontrola 114 nadal pilnuje braku literałowych
+  px w margin/padding/gap w `crack.css`.
+
+**Weryfikacja.** Headless WebKit, desktop: `.debug-head` center/gap 12 px/
+wrap/min-height 56/padding 8-12, tytuł 16 px, `.sysinfo-grid` gap i margin
+12 px, `.dbg-timeline li` padding 16 px, puste listy center (13 px,
+padding 12-16), puste tabele `text-align: start` (lewo). Mobile 375 px:
+segment padding 8 px, `.debug-inner` 0, sekcje 12 px, zakładki gap/padding
+4 px i promienie 12/8 px, zero poziomego overflow. `bash weryfikuj.sh`:
+GOTOWE. `bash check.sh --no-sudo`: 71/116 OK, 1 pominięta. Pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.12
+
+**Czytelny wynik końcowej kontroli w `install.sh`.**
+
+Zamiast surowego outputu `check.sh` (116 linii pod rząd) instalator grupuje
+wynik na siedem sekcji: 📦 Instalacja, 🔒 Bezpieczeństwo, 🧠 Namysł, 🎨 UI,
+📊 Diagnostyka, 📝 Dokumentacja, 🔗 Integracja. Mapowanie numerów kontroli
+1-116 jest jawne w `install.sh`; nowy numer w przyszłości trafi do Integracji,
+więc format się nie wywróci.
+
+- Każda grupa ma nagłówek, linie `✓`/`✗`/`⚠` i własne `→ X/Y OK`
+  (pominięte liczone osobno).
+- Globalne podsumowanie: `X/Y OK · N błędów · M pominiętych` + czas.
+- Błędy są wypisane na końcu z sugestią `->` z `check.sh`; pełny log zostaje
+  w `/tmp/gregai-install-check-*.log` tylko przy błędzie.
+- `--quiet` (tylko sekcja testów): wyłącznie podsumowanie i czas - dla CI.
+- Parser nie znaleziony wyników (check.sh padł przed wypisaniem kontroli)
+  daje `✗ nie udało się odczytać wyników` + ścieżkę logu i kod błędu.
+- Opisy dłuższe niż 100 znaków są skracane w widoku grup; pełne zostają w logu.
+
+`check.sh` i `weryfikuj.sh` są nietknięte - zmiana dotyczy wyłącznie
+prezentacji w `install.sh`. `weryfikuj.sh` nie jest dodatkowo uruchamiany
+(`check.sh` ma szybki eval w kontroli 46).
+
+**Weryfikacja.** Parser sprawdzony na prawdziwym logu `check.sh --no-sudo`
+(71/71 OK, 1 pominięta) oraz na syntetycznych logach: pełne 116/116 w siedmiu
+grupach, błąd + sugestia na końcu (exit 1), tryb `--quiet` (tylko
+podsumowanie i czas). `bash -n install.sh`: OK. `bash weryfikuj.sh`: GOTOWE.
+`bash check.sh --no-sudo`: 71/116 OK, 1 pominięta. Pełna instalacja nie była
+uruchamiana na tej maszynie.
+
+## Co nowego w 1.45.11
+
+**Tryb jasny: usunięte resztki ciemnego, które naprawdę były widoczne.**
+
+Audyt wszystkich plików CSS (styles → debug → sistem → kadr → crack →
+theme-light) dał 64 surowe trafienia literowych kolorów; 56 z nich to reguły
+martwe, nadpisane przez `crack.css`. Naprawiono 9 żywych:
+
+- `ui/theme-light.css`: jasne tło toastu Straży `[data-severity="medium"]`
+  (#fffbeb), biały pill `.namysl-toast` i chłodniejsze `--nk-*`
+  (`#64748b`, `rgba(100,116,139,…)`).
+- `ui/crack.css`: nowe tokeny stanów (`--crack-err*`, `--crack-ok-dot`,
+  `--crack-idle-dot`, `--crack-waiting-line`, `--crack-toast-ignore-line`,
+  `--crack-active-line`) o wartościach ciemnych **identycznych jak przed
+  poprawką** i jasnych odpowiednikach; użyte w `.nk-phase.err`,
+  `.nk-status-*`, `.nt-track…err/waiting` i `.straz-toast-ignore`.
+- `ui/sistem.css`: `.project-item.active` bierze border z tokenu
+  `--crack-active-line` (light: neutralny, dark: dotychczasowy róż).
+
+Martwe litery w `debug.css` (21), `kadr.css` (1), `sistem.css` (5) i
+`styles.css` (2) **zostawiono świadomie**: każda jest nadpisana późniejszą
+regułą `crack.css` tokenem i nie dociera do ekranu. Tokenizowanie ich byłoby
+szumem w diffie bez zmiany wyglądu.
+
+`check.sh`: kontrola 114 skanuje teraz także `crack.css` pod kątem **żywych**
+literałów `background/color/border-color`; wyjątki to tokeny `:root`, kolory
+koryt, gradienty, keyframes i selektory nadpisane dokładnie w theme-light.
+Przed poprawką skaner wskazałby 9 pozycji, po niej 0.
+
+**Weryfikacja.** Headless WebKit, te same elementy w light i dark:
+`medium` rgb(255,251,235) / rgb(20,18,12); `namysl-toast`
+rgba(255,255,255,.95) / rgba(10,10,15,.94); błąd fazy
+rgba(185,28,28,.5) / rgba(239,68,68,.5); tekst błędu #b91c1c / #fca5a5;
+kropka aktywna #0f766e / #22c55e; border projektu rgba(11,18,32,.28) /
+rgba(255,158,201,.6). Dark pozostał identyczny. `bash weryfikuj.sh`: GOTOWE.
+`bash check.sh --no-sudo`: 71/116 OK, 1 pominięta. Pełny `bash check.sh`
+z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.10
+
+**Tryb inteligentny Namysłu (świadome cofnięcie decyzji 1.32.7/1.33.2).**
+
+Dane z `decision_log` pokazały, że 4 z 5 cykli Namysłu to wiadomości
+socjalne („okej”, „cieszę się”, „super”) trwające 87-220 s. `wants()` już
+istniał i był deterministyczny; problemem były dwa przecieki heurystyki.
+
+- `agent/namysl.py`: `TRYBY = ("zawsze", "inteligentny")`; nowy tryb jest
+  domyślny. Stary zapis `{"tryb": "zawsze"}` (bez `tryb_wybrany`, bo 1.33.2
+  nie dawało wyboru) migruje atomowo do `"inteligentny"`; jawny wybór
+  „zawsze” z UI jest zapamiętywany przez `tryb_wybrany=true`.
+- `wants()` w trybie inteligentnym dokłada dwie reguły: **reakcję
+  z planistycznym ogonem** („okej, super cieszę się, co by tu dziś zrobić?”)
+  i **doprecyzowanie poprzedniej odpowiedzi** („wyjaśnij to prościej”,
+  „bardziej obszernie to wyjaśnij”). Wyjątki: pliki, prefiks, realny temat
+  (kurs/BTC/pogoda/notatki), liczby/waluty i konkretne zadania nadal dają
+  pełny cykl. Tryb „zawsze” zachowuje dotychczasowe zachowanie.
+- `agent/router.py`: przy pominięciu `_try_namysl` zapisuje powód
+  (`socjalne`, `reakcja_planistyczna`, `doprecyzowanie`) do
+  `decision_log.extra.namysl_pominiento`; etap pozostaje `szybka_sciezka`
+  albo inny dotychczasowy. W odpowiedzi użytkownika nie ma ani słowa o tym.
+- `ui/index.html` + `ui/app.js`: w panelu Namysłu radio **Inteligentne**
+  (domyślne) / **Dokładne (zawsze)**; etykieta przycisku i stan radia
+  zmieniają się natychmiast po zapisie, bez restartu.
+- `agent/ewaluacja.py` + `training/ewaluacja/regresja.jsonl`: 3 przypadki
+  regresji (reakcja, doprecyzowanie, realne zadanie) plus test migracji
+  `zawsze` → `inteligentny` i trwałości jawnego `zawsze`.
+- `check.sh`: kontrola 53 dopuszcza dwa tryby i sprawdza nowe reguły;
+  audyt 1.33.2 (kontrola 78) pilnuje `TRYBY == ("zawsze", "inteligentny")`
+  i nadal zakazuje `szybko`/`sam decyduj`/`wylaczony`/`auto`.
+- `FUNDAMENT.md`: do decyzji 18 dopisane świadome cofnięcie (bez
+  przepisywania historii); `api_contract.md` opisuje nowe wartości trybu.
+
+**Weryfikacja.** `namysl.wants` na przypadkach: reakcja i oba
+doprecyzowania → `False` w inteligentnym i `True` w zawsze; realne zadanie
+i prefiks → `True` w obu; „okej, a kurs BTC?” → `True`; migracja zapisuje
+`inteligentny`, a jawny `zawsze` przeżywa reload. UI w headless WebKit:
+2 radia, etykiety „Inteligentne myślenie”/„Dokładne myślenie” i poprawne
+zaznaczenie. `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+71/116 OK, 1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.9
+
+**Dymka „...” nie zgrzyta już z paskiem Namysłu.**
+
+- `ui/crack.css`: `.chat-bubble.pending` ma `border-radius: var(--r-card)`
+  (zamiast kwadratowego `--r-none`), `margin-bottom: var(--sp-3)` (12 px),
+  widoczny border `rgba(var(--crack-cyan-rgb), 0.28)` i tło
+  `var(--crack-card)`. Pasek `#namysl-track` zostaje przy
+  `border-radius: var(--r-pill)` i ma `margin-top: 0` - odstęp należy do dymki.
+- `ui/crack.css`: na `max-width: 620px` odstęp spada do `var(--sp-2)` (8 px).
+- `ui/app.js`: gdy pasek Namysłu pojawia się po raz pierwszy (zabiera 36 px
+  wysokości czatu), `renderNamyslTrack` dociąga rozmowę do dołu, o ile
+  użytkownik jest przy dole. Bez tego dymka była przycinana dokładnie na
+  krawędzi paska - to było źródło wrażenia nakładania.
+
+**Weryfikacja.** Headless WebKit na żywej aplikacji, dymka pending +
+aktywny pasek: promień dymki 12 px, paska 999 px (`--r-pill`), `margin-top`
+paska 0, zmierzony odstęp między dymką a paskiem 12 px na desktopie i 8 px
+na 375 px, zero poziomego overflow. `bash weryfikuj.sh`: GOTOWE.
+`bash check.sh --no-sudo`: 71/116 OK, 1 pominięta. Pełny `bash check.sh`
+z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.8
+
+**Auto-scroll rozmowy i Namysł jako tło.**
+
+- `ui/app.js`: jedno miejsce decyduje o podążaniu za odpowiedzią
+  (`scrollChatToBottom`, `chatPinned`). Wysłanie wiadomości, pierwszy token
+  i `finalizeAssistantBubble` przewijają płynnie; kółko, palec, pasek
+  przewijania i kierunek `scrollTop` natychmiast zatrzymują podążanie, gdy
+  użytkownik czyta starsze. Powrót do ≤50 px od dołu wznawia je. Zamiast
+  wyrywania w górę pojawia się „↓ Nowa odpowiedź”.
+- `ui/app.js` + `ui/crack.css`: stepper Namysłu to kompaktowy pasek 36 px
+  (`● Myślę…` · dostawca · koryto · ↻ · czas). Fazy są ukryte do kliknięcia
+  (`.nt-expanded`); klik poza zwija. Zakończony pasek ma `✓ Zakończono …`,
+  po 5 s dostaje `.nt-collapse`, a po animacji `.nt-hidden` (display:none).
+  Błąd końcowy ma `✗ Błąd: …`, czerwony border i **nie** znika sam.
+  `restoreProgressFor` nie wskrzesza zakończonego paska po powrocie do
+  rozmowy - historia zostaje w panelu „Postęp”.
+- `ui/app.js`: status w pasku korzysta z kanonicznego `namyslStatusText()`;
+  badge statusu nie dubluje się w meta (provider/koryto/restarty zostają).
+- `check.sh`: kontrola 113 pilnuje tokenów auto-scrollu, kompaktowego paska,
+  `nt-expanded`/`nt-collapse`/`nt-done`/`nt-error`/`nt-hidden` i tego, że
+  zakończony pasek nie jest przywracany.
+
+**Weryfikacja.** Headless WebKit na żywej aplikacji: przy dole
+`chatPinned=true`, po przewinięciu w górę `false` i brak wyrywania, powrót
+do dołu wznawia; kompaktowy pasek ma 36 px i ukryte fazy, klik rozwija,
+klik poza zwija; `✗ Błąd: HTTP 413` zostaje po 6 s, a `✓ Zakończono · 1,6s`
+znika po 5 s; na 375 px pasek nie przelewa się poziomo, rozwinięty stepper
+jest pionowy. `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+71/116 OK, 1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.7
+
+**Straż bez false positives po aktualizacjach.**
+
+Prawdziwą przyczyną toastów nie była baza (`baza.json` odświeża się cicho po
+zmianie `VERSION`), tylko **pieczęć kodu**: `GREGAI.sha256` pochodził ze
+starego wydania, a pliki po kolejnych zmianach się różniły. Każdy cykl
+donosił więc „kod GREGAI zmieniony poza aktualizacją” dla kilkudziesięciu
+plików.
+
+- `agent/straz.py`: zmiana `VERSION` otwiera **okno autoryzacji pieczęci**.
+  Mismatche z tego cyklu trafiają do kotwicy (`pieczec_akceptowane`:
+  wersja → plik → hash) i są cicho odtwarzane przy kolejnych obiegach tej
+  wersji; każda późniejsza zmiana pliku (inny hash) znowu alarmuje. Zmiana
+  samego manifestu bez zmiany wersji nadal jest alertem. `seal_check()`
+  loguje `pieczec_rebaseline`, a `cycle()` - `baza_rebaseline`; oba wpisy
+  idą do łańcucha bezpieczeństwa, bez toastu.
+- `agent/straz.py`: dedup `widziane.json` (24 h) przeżywa restart, a
+  `wyciszone_typu.json` (1 h) realizuje „Zignoruj” na typ alertu. Dziennik
+  i łańcuch bezpieczeństwa piszą się zawsze; wyciszenie blokuje tylko toast.
+- Alert kodu jest agregowany: jedno zdanie „Kod GREGAI zmieniony: N plików.
+  Szczegóły w Nadzorcy.” (≤120 znaków), pełna lista zostaje w dzienniku.
+  Duplikat baseline+pieczęć tego samego pliku liczy się raz.
+- `agent/standing.py`: `drop_stale_straz()` usuwa z kolejki stary fałszywy
+  alert pieczęci po autoryzowanym re-baseline, żeby nie wrócił w najbliższej
+  rozmowie.
+- `agent/main.py`: `POST /api/straz/wycisz` przyjmuje teraz `{typ}`;
+  `ui/app.js` wysyła go po „Zignoruj” i mapuje treść alertu na typ.
+- `agent/ops.py`: `gregai diag straz` (i sekcja w `diag all`) pokazuje
+  wersje plik/baza/kotwica, re-baseline, liczbę alertów 24 h, dedup,
+  cooldown, zakres/wykluczenia i stan pieczęci (m.in. `rebaseline` gdy
+  mismatche są już zaakceptowane).
+- `agent/straz.py`: stałe `ALERTS_SCOPE` i `ALERTS_EXCLUDE` dokumentują
+  zakres; baseline nie dubluje `ui/` i `prompts/`, bo pokrywa je pieczęć.
+
+**Weryfikacja.** Testy jednostkowe na atrapach (bez dotykania `data/`):
+pierwszy `seal_check` po zmianie `VERSION` daje `[]` i zapisuje akceptację,
+drugi nadal `[]`, późniejsza zmiana pliku daje dokładnie jedną anomalię;
+agregacja dwóch wpisów o tym samym pliku daje „1 plik”; `widziane.json`
+i `wyciszone_typu.json` działają po reloadzie; `drop_stale_straz()` usuwa
+tylko stary alert pieczęci. Kontrola 31 w `check.sh` została rozszerzona o te
+przypadki (kontrola 79 to w obecnej numeracji audyt 1.33.3, więc jej nie
+ruszano). `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`: 71/116 OK,
+1 pominięta. Pełny `bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.6
+
+**Jedna karta Namysłu i jeden status.**
+
+- `ui/app.js`: dymek czekania nie woła już `renderNamyslLive(pending, …)`.
+  Zostaje jeden stepper `#namysl-track`; szczegółowy przebieg w dymku był
+  duplikatem tego samego strumienia zdarzeń. `renderNamyslLive` rysuje
+  teraz wyłącznie panel „Postęp” w szufladzie.
+- Stepper dostał narrację pod aktywną fazą (`st.sub[current]` albo ostatni
+  wpis `st.acts[current]`) w nowym `.nt-track-detail`; na 620 px krok jest
+  pionowy, opis jednoliniowy z wielokropkiem, bez przepełnienia.
+- Nowy `namyslStatusText()` jest jedynym źródłem statusu: `Inicjuję…`,
+  `Myślę…`, `Przełączam na {dostawca}…`, `Offline – myślę lokalnie…`,
+  `Zakończono · 12,4s`, `Błąd: {powód}`. Usunięto `NAMYSL_STATUS_LABELS`,
+  heartbeat `…przetwarzam (Ns)`, teksty „Pytam darmowe modele w sieci”,
+  „Namysł w toku” i plakietkę „Namysł: faza”. Narrator w dymku zachowuje
+  rozwijane szczegóły trasy, ale jego etykieta jest kanoniczna
+  (`Myślę…` / `Offline – myślę lokalnie…`).
+- Usunięto martwy CSS: reguły `.chat-bubble.pending .namysl-live`,
+  `.namysl-live-head/-timer/-why`, `.ntl-sub.ntl-hb`, `.nk-offline`.
+- `check.sh`: kontrola 113 pilnuje braku starych stringów, obecności
+  kanonicznych statusów, braku `renderNamyslLive(pending` i klasy
+  `.nt-track-detail`.
+
+**Weryfikacja.** Headless WebKit (GJS) na prawdziwej aplikacji
+`http://127.0.0.1:7777` z syntetycznymi zdarzeniami backendu: w dymku
+0 elementów `.namysl-live`, w szufladzie dokładnie 1; statusy kolejno
+`Inicjuję…`, `Myślę…`, `Przełączam na Gemini…`, `Offline – myślę lokalnie…`,
+`Zakończono · 12,4s`; toast restartu `Przełączam na Gemini…`; narracja pod
+aktywną fazą `Zbieram materiał do odpowiedzi.`; na 620 px
+`flex-direction: column`, `text-overflow: ellipsis`, brak poziomego
+przewijania. `"namysł trwa.."` nie występowało w kodzie – sprawdzone
+grepem; wszystkie znalezione warianty statusu sprowadzono do tabeli.
+`bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`: 71/116 OK,
+1 pominięta, kontrola 113 rozszerzona przechodzi.
+
+## Co nowego w 1.45.5
+
+**Powitanie w jasnym motywie i prawdziwa wersja w UI.**
+
+- `ui/theme-light.css`: tytuł powitania, opis i pogrubienia kroków dostają
+  `var(--crack-text)`. Wcześniej `kadr.css` ustawiał je na `--biel`
+  (#f8f0e5, kremowa biel), co na jasnym tle dawało kontrast 1,06:1 - tekst
+  wyglądał jak żółty i był praktycznie nieczytelny. Nowy kontrast: 16,3:1.
+  Reguła jest zawężona do `[data-theme="light"]`, więc ciemny motyw się nie
+  zmienia.
+- `ui/app.js`: nowe `setRailVersion` / `refreshRailVersion` czytają pole
+  `version` z `/api/system_info` (jeden odczyt na starcie; odświeżenie także
+  przy okazji odczytu stanu sieci). Usunięto martwy odczyt `data.version`
+  z `/api/status`, który nigdy nie zwracał tego pola.
+- `ui/index.html`: zapasowa wartość w szynie to "–", nie "1.36.0".
+
+**Weryfikacja.** Headless WebKit (GJS) na prawdziwej aplikacji
+`http://127.0.0.1:7777`: w trybie jasnym `#rail-version` pokazał `1.45.4`
+z `/api/system_info` (usługa działała jeszcze na poprzedniej wersji; po
+restarcie z `VERSION=1.45.5` pokaże `1.45.5`), a computed color powitania
+to `rgb(20, 26, 34)` (kontrast 16,3:1 wobec tła `rgb(246, 247, 251)`). W trybie ciemnym kolory
+zostały bez zmian (`rgb(224, 224, 232)` tytuł, `rgb(248, 240, 229)`
+pogrubienia). `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+wszystkie kontrole offline przeszły (wynik w opisie wydania).
+
+## Co nowego w 1.45.4
+
+**Odinstalowanie jedną komendą.** Nowy `uninstall.sh` cofa `install.sh`:
+zatrzymuje i usuwa usługi `gregai`/`gregai-siec`, reguły ufw z komentarzem
+GREGAI, tabelę nftables `gregai_warp`, swap `/swap.img` i wpis w `/etc/fstab`,
+Cloudflare WARP (apt, nie snap), Ollamę z modelami, pliki systemd/sudoers/
+fail2ban/logind, klucz wydawcy, źródła apt, symlink CLI, konfigurację, konto
+i grupę `gregai` oraz opcjonalnie pakiety systemowe. `python3` i ustawienie
+`gsettings` zostają świadomie: ich usunięcie zepsułoby system albo pulpit.
+
+Zasady działania:
+
+- `--dry-run` pokazuje plan i naprawdę nic nie zmienia (nawet `warp-cli`),
+- `--yes` potwierdza wszystko poza usunięciem folderu projektu,
+- folder projektu (notatki, pamięć, `.env`) zawsze ma osobne pytanie,
+- każdy krok sprawdza istnienie elementu, więc drugie uruchomienie daje same
+  `[SKIP]` i kod 0,
+- log `uninstall.log` ma datę i godzinę każdej akcji; kopia trafia do
+  `/tmp/gregai-uninstall.log`, zanim folder projektu zniknie,
+- kody wyjścia: 0 sukces, 1 błąd, 2 anulowano, 130 Ctrl+C.
+
+**Nowa kontrola 116** sprawdza shebang, `set -euo pipefail`, flagi
+`--dry-run`/`--yes`, potwierdzenia, log z datą, `/swap.img` (nie
+`/swapfile`), WARP przez apt, Ollamę, kody 2/130, brak `autoremove`,
+`snap remove`, `eval` i restartu `systemd-logind` oraz składnię `bash -n`.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE (node nieobecny, składnia JS
+pominięta). `bash check.sh --no-sudo`: 71/116 OK, 1 pominięta; kontrola 116
+przeszła. Testy `uninstall.sh` w sandboksie bwrap z atrapami `sudo` i
+systemowych ścieżek (bez dotykania prawdziwego `/etc`): `--dry-run` zostawił
+drzewo plików bez zmian; pełny `--yes` usunął przygotowane elementy i drugi
+przebieg dał same `[SKIP]` z kodem 0; odpowiedź `n` przy WARP dała kod 2;
+Ctrl+C dał kod 130 i zapisany log; odmowa usunięcia folderu projektu
+zostawiła go i zakończyła się kodem 0. Prawdziwego odinstalowania na tej
+maszynie nie uruchamiano (usunęłoby działającą instalację), a pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.45.3
+
+**Audyt stabilności i kontrakt API.** Powstał `api_contract.md` opisujący
+rzeczywiste endpointy `/api/*` (request, response, kody błędów, SSE
+`token/done/err`). Nowa kontrola 115 sprawdza, że każdy endpoint wołany z
+`ui/*.js` istnieje w `agent/main.py` i jest opisany w kontrakcie.
+
+Naprawione w tej rundzie:
+
+- `profil.save()` trzyma `_LOCK` przez cały odczyt-merge-zapis, więc dwa
+  równoległe zapisy (onboarding + UI) nie gubią już jednej zmiany;
+- `_PENDING` profilu usuwa wpisy po TTL przy każdym `set_pending`;
+- `ui/app.js` dodaje `AbortController` do `/api/chat/stream` (30 min) i
+  `/api/chat/wait` (250 s na próbę), więc zerwany podgląd nie wisi w
+  nieskończoność;
+- SSE `event: err` czyści podgląd zamiast zostawiać stary tekst.
+
+Audyt nie znalazł nieobsłużonych timeoutów w warstwie HTTP: wszystkie
+`netguard.urlopen`/`local_urlopen` i `httpx.Client` mają jawny timeout.
+Logi (`trace`, `straz`) i kolejki mają limity. Pełny raport błędów MED/LOW
+zostaje w opisie tej rundy, bez zmian w logice biznesowej.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+70/115 OK, 1 pominięta. Kontrola 115 przeszła na rzeczywistych plikach
+`ui/*.js`, `agent/main.py` i `api_contract.md`. Testy nie wołały prawdziwych
+modeli ani sieci; pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.45.2
+
+**Przełączanie motywu bez hard refresh.** `ui/theme.js` po każdej realnej
+zmianie wyglądu wysyła `gregai:theme-change` (z `detail.theme` i
+`detail.mode`). `ui/graph.js` nasłuchuje tego zdarzenia i czyści cache
+kolorów (`_colors`), materiały typów i poświat, po czym odświeża mgłę,
+siatkę, skybox, aury, puls, kolory węzłów i krawędzi oraz przerysowuje
+scenę. Krawędzie nie używają już `#ffffff`, tylko `--crack-text`, więc są
+widoczne także na jasnym tle.
+
+W `ui/crack.css` doszedł globalny `transition` na `background-color`,
+`color` i `border-color` (0.2 s), wyłączony w `prefers-reduced-motion`.
+Jasny motyw dostał jasną listę `select option` i czytelne werdykty
+diagnostyczne. W `ui/styles.css`, `ui/kadr.css` i `ui/sistem.css`
+najważniejsze literały kolorów zamieniono na tokeny lub `color-mix`;
+audyt kontroli 114 pomija reguły nadpisane przez `crack.css`/`theme-light.css`
+oraz gradienty dekoracyjne.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+69/114 OK, 1 pominięta. Kontrola 114 sprawdza teraz także dispatch
+`gregai:theme-change`, listener i redraw w `graph.js`, globalny transition
+oraz brak efektywnych literałów kolorów w trzech legacy plikach.
+Testy nie wołały prawdziwych modeli ani sieci; pełny `bash check.sh` z
+sudo/systemd/WARP nie był uruchamiany. Głębszy test WebGL w przeglądarce
+nie był wykonywany - graf sprawdzono statycznie (GJS) i przez listener.
+
+## Co nowego w 1.45.1
+
+**Spójne odstępy i promienie.** Doszła wspólna skala `--sp-1..7`
+(4/8/12/16/24/32/48 px) jako aliasy istniejących `--s1..--s6` oraz nowe
+tokeny promieni `--r-none`, `--r-chip` (6 px), `--r-ctl` (8 px),
+`--r-card` (12 px) i `--r-pill` (999 px) w `ui/crack.css`.
+
+W `ui/crack.css`, `ui/theme-light.css` i `ui/health.css` literowe wartości
+w `margin`, `padding` i `gap` zostały zamienione na `var(--sp-N)`. Wyjątki
+to 0, 1px oraz pozycjonowanie (`top/left/right/bottom`). Wartości poza skalą
+trafiły na najbliższy krok (np. 14 → 16, 18 → 16, 20 → 24), a `border-radius`
+używa wyłącznie tokenów `--r-*` (poza celowymi 999px i 50%). `font-weight`
+ograniczono do 400/500/600; 700 zostało tylko przy nazwie GREGAI i tytule
+toastu Straży. `!important` usunięto z twardego resetu Nadzorcy i animacji
+bootowania - zostało wyłącznie w `prefers-reduced-motion`.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+69/114 OK, 1 pominięta. Nowa kontrola 114 sprawdza definicje `--sp-1..7`,
+`--r-*`, brak literowych px w `margin/padding/gap` poza 0/1px, skalę
+`font-weight` i `!important` tylko w `prefers-reduced-motion`. Pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany; testy nie wołały
+prawdziwych modeli ani sieci.
+
+## Co nowego w 1.45.0
+
+**Czytelność czatu.** Profil użytkownika steruje teraz formatem także w
+zwykłej rozmowie, nie tylko w Namyśle. `profil.formatting_hint()` zwraca
+krótką instrukcję per `styl.dlugosc`:
+
+- `krotka`: 1-3 zdania, bez nagłówków i tabel,
+- `srednia`: najpierw 1 zdanie, max 1 tabela ALBO lista, bez `---` i h1,
+- `szczegolowa`: 1-zdaniowe TL;DR, h3 dla sekcji, tabele/kod, bez `---` i h1/h2.
+
+Instrukcja jest wstawiana przez `{FORMAT}` w `prompts/system_local.md` i
+`prompts/system_cloud.md`; nie zależy od zgody `profil_do_sieci`, bo nie jest
+danymi profilu. Lokalny wariant jest krótszy (dwie linie), żeby przy budżecie
+850 tokenów zostały i `[PROFIL UŻYTKOWNIKA]`, i sekcja „Kryzys”. Namysł w
+fazach Szkic i Poprawa dopuszcza teraz h3, tabelę i kod przy odpowiedzi
+wieloetapowej, ale nadal zakazuje `---` i h1/h2.
+
+Renderer `ui/app.js` zamienia nagłówki na prawdziwe `h2/h3/h4` z klasami
+`chat-h2/h3/h4`, cytaty dostają `chat-quote`, a odpowiedzi dłuższe niż 500
+słów - klasę `.long` z gęstszym rytmem. Nowe tokeny `--chat-fs`, `--chat-lh`,
+`--chat-max`, `--chat-gap` i `--chat-code-fs` ustawiają typografię; tabele
+mają przewijanie i przyklejony nagłówek, kod - limit wysokości i własne tło.
+Style działają w obu motywach, bez inline.
+
+Streaming nadal pokazuje surowy tekst (niedomknięty markdown nie może psuć
+layoutu), ale finalna odpowiedź jest renderowana w TYM SAMYM dymku, zamiast
+`remove()` + nowy `appendChatBubble()`. Dzięki temu nie ma migania ani skoku
+po zakończeniu.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+68/113 OK, 1 pominięta. Nowa kontrola 113 sprawdza trzy warianty
+`formatting_hint`, obecność profilu i Kryzysu w lokalnym promptcie, klasy
+renderera, tokeny CSS, zero inline stylów i `prefers-reduced-motion`. Eval
+`format-hint-1450` przechodzi. Renderer sprawdzony dodatkowo na atrapie w
+GJS: h2/h3, dwa bloki kodu, tabela, cytat i ucieczka `<script>`. Pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany; testy nie wołały
+prawdziwych modeli ani sieci.
+
+## Co nowego w 1.44.0
+
+**Narzędzia operacyjne dla agenta.** Nowy `agent/ops.py` i podkomendy
+`gregai` dają maszynowy wgląd w system bez czytania kilkudziesięciu plików.
+Wszystkie domyślnie zwracają JSON, `--human` daje czytelny wydruk. Diagnostyka
+jest tylko do odczytu: nie zmienia notatek, profilu ani `.env`.
+
+- `gregai state [--diff]` - usługa, system, koryto, vault, profil i
+  dowęzłowywanie. `--diff` porównuje z poprzednim odczytem i pomija pola
+  zmieniające się przy każdym uruchomieniu (RAM, load, uptime, liczniki
+  wywołań). Stan koryta jest brany z żywej usługi (`/api/system_info`), a bez
+  usługi spada do konfiguracji. Vault ma cache po odcisku plików, więc ciepły
+  `state` trwa ok. 0,08-0,1 s.
+- `gregai diag <moduł>` - `koryto`, `vault`, `profil`, `wezly`, `config`,
+  `namysl`, `all`. `diag vault` potrafi wypisać osierocone wikilinki,
+  duplikaty tytułów i węzły bez krawędzi. `diag config` waliduje `.env`
+  (etapy KORYTO, wartości liczbowe, duplikaty, prawa pliku) i maskuje
+  sekrety. `diag koryto --test` robi mały ping dostawców - jawnie włącza
+  sieć i zużywa limity.
+- `gregai impact <plik|funkcja>` - reverse dependency graph po AST
+  (`Import`/`ImportFrom`) i wywołania funkcji; `impact --css <klasa>` szuka
+  użycia klasy w `ui/*.css`, `*.js` i `*.html`.
+- `gregai tokens [--budget] [--per-phase]` - dziennik koryta, ślad wydatków
+  Claude, lokalne tokeny z `data/ollama_uzycie.jsonl`, budżet oraz fazy
+  Namysłu z `decision_log`. Dziennik nie zapisuje tokenów per faza, więc
+  sekcja faz podaje liczbę i czas, a nie tokeny.
+- `gregai log --tail N --filter ... --level err|warn` - ostatnie linie
+  `journalctl`, bez trybu live.
+- `gregai reset wezly|cooldown` - jawne wyzerowanie liczników
+  dowęzłowywania (węzły i pliki zostają).
+- `gregai verify --quick|--diff` - składnia zmienionych plików Pythona,
+  bash i CSS, wersje `VERSION`/README/CHANGELOG oraz lista plików od
+  ostatniego verify. `gregai verify` bez argumentów nadal uruchamia pełny
+  `weryfikuj.sh`.
+- `GET /health` - minimalny panel w `ui/health.html` + `health.css` +
+  `health.js`: usługa, system, dostawcy koryta, graf, dowęzłowywanie i profil.
+  Tokeny CSS, zero inline stylów, przełącznik motywu. `GET /api/health`
+  zwraca tylko agregaty, bez treści notatek i sekretów.
+
+Świadomie poza zakresem: `kill koryto` (wymagałoby zmiany żywego stanu
+koryta) i `dry-run` (uruchamiałby płatny cykl Namysłu). `diag koryto --test`
+jest jedyną komendą, która wychodzi do sieci; reszta działa offline.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+67/112 OK, 1 pominięta. Nowa kontrola 112 sprawdza JSON z
+`state`/`diag`/`impact`/`tokens`, `reset` na tymczasowym pliku, pliki
+`/health` bez inline stylów oraz podpięcie `ops` w CLI i `main.py`.
+Testy nie wołały prawdziwych modeli ani sieci (`diag koryto --test` nie był
+uruchamiany); pełny `bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.43.0
+
+**Automatyczne dowęzłowywanie.** Po odpowiedzi w Ogólnej rozmowie GREGAI
+może w tle dopisać nowy temat do grafu wiedzy. Nie powstaje żaden nowy
+magazyn: węzeł to plik `.md` w `notatki/` (ten sam format co ręczne
+notatki), a krawędź to `[[wikilink]]` do istniejącej notatki. Wątek tła
+(`agent/wezly_grow.py`) startuje po `_run_chat`, więc nie opóźnia
+odpowiedzi i obejmuje także odpowiedzi Namysłu.
+
+Zgoda jest w profilu: `wierzchowanie.auto_dowezlywowanie` (checkbox w
+onboardingu i w modalu Profil, domyślnie wyłączony, hot reload bez
+restartu). `.env WEZLY_AUTO=off` jest twardym wyłączeniem dla
+zaawansowanych; limity można zmienić przez `WEZLY_AUTO_MAX_RUN`,
+`WEZLY_AUTO_MAX_DZIEN` i `WEZLY_AUTO_COOLDOWN_MIN`.
+
+Konserwatywny zakres: typy tylko z whitelisty (`Note`, `Concept`,
+`Wiedza`, `Nauka`), nigdy nowy typ ani nowy węzeł-kategoria; `KAT` i
+`LINK` muszą wskazywać istniejące notatki (walidacja `Vault.by_title`),
+maks. 3 linki na węzeł, 3 węzły na przebieg, 6 dziennie i 15 minut przerwy
+na rozmowę. Duplikat tytułu jest pomijany. Prompt `prompts/wezly.md` ma
+ściśle format i przykłady dobre/złe, a parser `wezly_grow.py` toleruje
+`**bold**`, nadmiarowe spacje i brak treści (wtedy powstaje węzeł bez
+opisu). Zapis idzie przez `fsutil.create_new_text` pod `fsutil.NOTES_LOCK`.
+
+Prywatność: bez zgody `material_do_sieci` tytuły notatek nie idą do sieci.
+Wtedy działa wyłącznie lokalny model (jeśli jest dozwolony w KORYCIE), a
+bez lokalnego przebieg jest pomijany. Z zgodą kolejność jest ta sama co
+przy streszczeniach: najpierw lokalny, potem tanie etapy sieciowe.
+
+UI nie zgaduje czasu: serwer zwraca `wezly_auto`, a przeglądarka kilka
+razy pyta `/api/wezly/ostatnie` (8, 12, 20 i 30 s). Po znalezieniu nowych
+węzłów odświeża graf i pokazuje toast „Nowe węzły” z „Cofnij” (reuse
+`/api/note/delete` - plik trafia do `data/kosz`) oraz „Pokaż w Węzłach”.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+66/111 OK, 1 pominięta. Nowa kontrola 111 sprawdza na atrapie: zgodę w
+profilu, `WEZLY_AUTO=off`, parser z boldem i brakiem treści, whitelist
+typów, walidację linków, duplikat, cooldown, limit dzienny, zapis pliku i
+podpięcie UI/API. Testy nie wołały prawdziwych modeli ani sieci; pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany.
+
+## Co nowego w 1.42.2
+
+**Wyszukiwarka i lista rozmów w trybie jasnym.** Pasek wyszukiwania w
+widoku Węzły brał tło z `ui/kadr.css` (`rgba(12, 7, 4, 0.6)`), a pole
+`#search-input` miało przezroczyste tło. Po przełączeniu na
+`data-theme="light"` dawało to ciemny pasek z ciemnym tekstem. Teraz pasek
+i pole używają tokenów: tło `var(--crack-card)`, tekst
+`var(--crack-text)`, placeholder `var(--crack-dim)`, obramowanie
+`var(--crack-line-strong)`, a fokus `var(--crack-cyan)`.
+
+Aktywny wiersz w „Twoje rozmowy” („Ogólna rozmowa”) dostawał z
+`ui/kadr.css` kolor `var(--biel)` na jasnym, zielonym gradiencie. Teraz
+kolor tekstu to `var(--crack-text)`, a w jasnym motywie tło
+`var(--accent-soft)`, lewa belka i obramowanie `var(--crack-cyan)`.
+Hover i stan normalny korzystają z `var(--fill-1)` i
+`var(--text-secondary)`. Ciemny motyw zachowuje zielony gradient i belkę
+w `var(--sygnal)` (gradient jest teraz zapisany przez `color-mix()` na
+tej zmiennej), a tekst dostał wspólny token zamiast ciepłej bieli.
+
+**Profil nie wypycha kryzysu z promptu lokalnego.** Przy istniejącym
+`data/profil.json` system lokalny przekraczał 800 tokenów, a
+`_fit_local_system` ucinał od końca sekcję „Kryzys” i kontekst projektu.
+Od 1.42.2 budżet systemu lokalnego to 850 tokenów (`LOCAL_SYSTEM_MAX`), a
+profil jest pierwszym blokiem, który odpada, gdy zabraknie miejsca -
+„Kryzys” i projekt zostają. Wagi krytyki i SYSOP trafiają tylko do promptu
+chmurowego (Namysł ma własne `style_hint`/`critique_hint`), więc lokalny
+prompt mieści się bez nich.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+65/110 OK, 1 pominięta; kontrola 110 sprawdza teraz także tokeny
+wyszukiwarki i aktywnego wiersza rozmów. Testy nie wołały prawdziwych
+modeli ani sieci; pełny `bash check.sh` z sudo/systemd/WARP nie był
+uruchamiany.
+
+## Co nowego w 1.42.1
+
+**Etykiety węzłów w trybie jasnym.** Opisy nad kulkami w widoku Węzły
+(np. „Matematyka”, „Fizyka”) to warstwa DOM `#graph-labels`
+(`.node-label-3d`), nie tekst na canvasie. `ui/styles.css` trzymał tam
+hardkodowane ciemne tło i jasny tekst, więc po przełączeniu na
+`data-theme="light"` etykiety zostawały ciemne. Teraz `ui/styles.css` i
+`ui/crack.css` używają tokenów: tło `var(--crack-card)`, tekst
+`var(--crack-text)`, border `var(--crack-line-strong)`, a aktywna etykieta
+`var(--crack-cyan)`. Jasny
+motyw nadpisuje te same tokeny w `ui/theme-light.css`, więc etykiety
+zmieniają kolor razem z resztą UI, bez przebudowy canvasu i bez inline
+styles. Ciemny motyw wygląda jak dotąd.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+65/110 OK, 1 pominięta (kontrola 110 sprawdza teraz także tokeny etykiet
+węzłów). Pełny `bash check.sh` z sudo/systemd/WARP nie był uruchamiany;
+testy nie wołały prawdziwych modeli ani sieci.
+
+## Co nowego w 1.42.0
+
+**Profil użytkownika i tryb jasny.**
+
+Profil jest w `data/profil.json` (lokalny, poza paczką), czytany przez
+`agent/profil.py` z cache po mtime - zmiana działa bez restartu usługi.
+Zawiera styl (ton, długość, emoji), cele, zainteresowania, tabu, wagi
+krytyki, preferencje z lekcji i ton SYSOP. `awareness.py` dokłada do promptu lokalnego blok
+`[PROFIL UŻYTKOWNIKA]`, a do promptu chmurowego tylko przy
+`prywatnosc.profil_do_sieci=true` (domyślnie profil zostaje lokalnie).
+Namysł używa profilu w fazach 3-5 (styl, wagi krytyki, tabu); tabu jest
+sprawdzane deterministycznie w routerze przed modelem. Onboarding to modal
+w UI (`/api/profil`) z opcją „Pomiń”; po lekcji GREGAI może **zaproponować**
+wpis do profilu, ale zapisuje go dopiero po „tak”. `.env` nadal jest
+źródłem tożsamości (imię, płeć, twórca).
+
+Tryb jasny: `ui/theme.js` jest ładowany w `<head>` przed CSS i ustawia
+`data-theme` na `<html>` z `localStorage["gregai.theme"]` (`auto`, `light`,
+`dark`). `auto` słucha `prefers-color-scheme` i reaguje bez reloadu; ręczny
+wybór ma pierwszeństwo. `ui/theme-light.css` (po `crack.css`) nadpisuje
+tokeny: tło `#F6F7FB`, karty `#FFFFFF`, tekst `#141A22`, akcent `#0E7490`,
+koryta `#5B21B6` / `#047857` / `#B45309` dla tekstu i `-fill` alpha 0.12.
+Przełącznik jest w nagłówku rozmowy, w segmencie Nadzorcy i na `/debug`.
+W `crack.css` powtarzane ciemne kolory zamieniono na istniejące zmienne
+(`--crack-cyan`, `--crack-text`, `--crack-dim`, `--crack-card` itd.), więc
+oba motywy korzystają z jednego źródła. Zero inline styles, CSP bez zmian.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE. `bash check.sh --no-sudo`:
+65/110 OK, 1 pominięta. Nowe kontrole 109 (profil: JSON, hot reload, zgoda
+na chmurę, tabu, lekcja->propozycja, UI/API) i 110 (motyw: seed przed CSS,
+auto/light/dark, localStorage, paleta i koryta, zero inline,
+reduced-motion). `bash gregai eval --bez-zapisu`: GOTOWE. JS sprawdzony
+dodatkowo parserem GJS, bo `node` nie był zainstalowany. Pełny
+`bash check.sh` z sudo/systemd/WARP nie był uruchamiany; testy nie wołały
+prawdziwych modeli ani sieci.
+
+## Co nowego w 1.41.0
+
+**Front Namysłu: jeden kolor koryta przez cały cykl.** Atrybucja z 1.40.0
+dostała czytelny interfejs. Nagłówek karty i stepper pokazują dostawcę
+(🟣 Claude, 🟢 Gemini, 🟠 Groq, 🔵 Lokalny), badge `Koryto 1/2/3`
+(fiolet/zielony/pomarańcz), licznik restartów `↻ N` i pulsujący status
+(zielony = działa, czerwony = restart/błąd, szary = zakończony). Kolor
+koryta przechodzi przez obramowanie, aktywne fazy, ikony i badge - jeden
+kolor = jeden dostawca na cały cykl.
+
+Sześć faz to teraz osobne karty w siatce (6 kolumn na desktopie, 3 na
+średnim ekranie, pionowy stepper na telefonie). Fazy wykonane kodem
+(Zbieranie i Sprawdzenie - wewnętrzne `KOD_FAZY`) mają ⚙️ i etykietę
+„kod”; fazy LLM mają ikonę dostawcy i jego nazwę. Karta po zakończeniu
+pokazuje podsumowanie: `✓ Namysł zakończony · 12,4s · Claude (Koryto 1)`
+albo `... · 2 próby · Claude → Gemini (Koryto 1→2)`.
+
+Restart cyklu czyści fazy do „oczekuje”, zmienia kolor karty w 0,4 s,
+podbija licznik prób i pokazuje toast `↻ Restart na Gemini (Koryto 2)`
+(auto-hide 3 s). Brak internetu od razu ustawia pomarańczowe Koryto 3,
+badge `🔌 Offline – lokalny model` i nie animuje przełączania. Aktywna
+faza ma subtelny shimmer (2 s); `prefers-reduced-motion` wyłącza shimmer,
+pulsowanie i flash, zostawiając kolor oraz ✓. Kolory są w custom
+properties (`--koryto-1/2/3`) i mają jaśniejsze warianty tekstu dla
+kontrastu WCAG AA w ciemnym motywie; `matchMedia` przygotowuje przyszły
+tryb jasny. Zero inline styles - CSP bez zmian.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE (składnia Pythona i bash;
+JS sprawdzony dodatkowo parserem GJS, bo `node` nie był zainstalowany).
+`bash check.sh --no-sudo`: 63/108 OK, 1 pominięta. Nowa kontrola 108
+sprawdza kolory koryt, 6-kolumnową siatkę, fazy kodu, status/restarty,
+toast, mobile i reduced-motion; kontrola 107 nadal pilnuje atrybucji
+dostawcy. `bash gregai eval --bez-zapisu`: GOTOWE. Pełny `bash check.sh`
+z sudo/systemd/WARP nie był uruchamiany w tym środowisku; testy nie
+wołały prawdziwych modeli ani sieci.
+
+## Co nowego w 1.40.0
+
+**Namysł trzyma JEDNEGO dostawcę przez cały cykl.** Wcześniej każda faza
+wybierała model osobno: rozdzielnica mogła oddać rozpoznanie Claude'owi,
+szkic darmowej puli, a krytykę jeszcze innemu dostawcy (albo lokalnemu po
+błędzie chmury). Teraz `namysl._provider_plan` ustala plan RAZ, przed
+pierwszą fazą, a `Context.provider` jest przypięty do końca cyklu:
+
+- **Koryto 1 (Claude) aktywny** - wszystkie fazy idą przez Anthropic.
+- **Claude niedostępny** - pierwszy gotowy dostawca z darmowej puli
+  (`juggler.ready_providers`: klucz, limit i bezpiecznik w porządku), jeden
+  na cały cykl.
+- **Darmowy zawiedzie w połowie** - `ProviderFailure` przerywa cały cykl;
+  następny dostawca z puli dostaje Namysł **od fazy 1**, nie od fazy 4.
+- **Brak internetu** - `netguard.internet_allowed(fresh=True)` na starcie
+  wyłącza etapy sieciowe; Namysł od razu idzie na lokalną Ollamę, bez prób
+  Claude'a i darmowej puli.
+- **Prywatne notatki/pliki bez zgody `material_do_sieci`** - jeśli lokalny
+  jest w planie, cały cykl restartuje się na lokalny od fazy 1; jeśli go nie
+  ma w KORYTO, materiał jest pomijany, a nie wysyłany do sieci.
+
+W `juggler.chat` doszedł parametr `only_provider`: jedno wywołanie dokładnie
+wskazanego dostawcy, bez łańcucha, losowania i fallbacku. `namysl_cloud_call`
+przekazuje tam dostawcę z planu. Usunięte zostały "opinie juniorów" z fazy
+Zbierania - `juggler.research` pyta kilku różnych dostawców naraz, więc
+łamałby atrybucję jednego cyklu. `analiza.understand` przepuszcza
+`ProviderFailure` zamiast połykać go jako "nie udało się streścić części
+pliku". Karta Namysłu pokazuje `dostawca`/`koryto`, a przy restarcie -
+`proby` z powodem.
+
+**Weryfikacja.** `bash weryfikuj.sh`: GOTOWE (składnia Pythona, bash, JS +
+szybki eval). `bash check.sh --no-sudo`: 62/107 OK, 1 pominięta (kontrola
+22 wymaga trybu pełnego; jej scenariusze dostawców powtarza nowa kontrola
+107 na atrapach: Claude -> darmowy -> lokalny, restart od fazy 1, brak
+internetu, prywatne notatki). `bash gregai eval --bez-zapisu`: GOTOWE.
+Pełny `bash check.sh` z sudo/systemd/WARP nie był uruchamiany w tym
+środowisku; testy nie wołały prawdziwych modeli ani sieci.
+
 ## Co nowego w 1.39.2
 
 Wydanie naprawcze po audycie 1.39.1. Cztery błędy, każdy z testem

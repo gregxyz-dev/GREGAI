@@ -44,9 +44,9 @@ load_env()
 ROOT = Path(__file__).resolve().parent.parent
 CASES_PATH = ROOT / "training" / "ewaluacja" / "regresja.jsonl"
 HISTORY_PATH = ROOT / "data" / "ewaluacja" / "historia.jsonl"
-OFFLINE_TYPES = ("routing", "komenda", "bramka", "spoleczne", "slonce", "straz", "nauka", "pretensja", "devtools",
+OFFLINE_TYPES = ("routing", "komenda", "bramka", "spoleczne", "namysl_inteligentny", "slonce", "straz", "nauka", "pretensja", "devtools",
                  "lokalny_timeout", "izolacja", "audyt_1329", "audyt_1330", "audyt_1331", "audyt_1332", "audyt_1333", "audyt_1334",
-                 "audyt_1351", "lokalny_cache", "lokalny_budzet", "lokalny_styl", "lokalny_parametry", "lokalny_walidacja",
+                 "audyt_1351", "lokalny_cache", "lokalny_budzet", "lokalny_styl", "format_hint_1450", "lokalny_parametry", "lokalny_walidacja",
                  "lokalny_kolejka", "lokalny_retry", "lokalny_sesja", "lokalny_warmup",
                  "spoleczne_1380", "czas_1380", "plik_1380", "plik_upload_1381", "namysl_413_1382", "awaryjny_1382",
                  "duplikat_1383", "prompt_ctx_1383", "notatki_1384", "normalizacja_1385", "dedup_1386", "namysl_once_1387",
@@ -522,8 +522,10 @@ def _check_audyt_1330() -> tuple[bool, str]:
             violates_style=lambda _text: [], settings={"tryb": "zawsze", "material_do_sieci": False},
         )
         models = namysl_mod._Models(ctx, namysl_mod.Narrator(None))
-        if models.local_allowed:
-            problems.append("#4 test: lokalny nie powinien być dozwolony na starcie")
+        # 1.40.0: lokalny jest w planie jako rezerwa CAŁEGO cyklu (nie tylko
+        # przy braku internetu), więc local_allowed ma być True.
+        if not models.local_allowed:
+            problems.append("#4 test: lokalny powinien być w planie jako rezerwa")
         got_text, got_who = models.ask("test", "sys", "sys", "user", private=False, history=False)
         if (got_text, got_who) != ("lokalnie ok", "lokalnie"):
             problems.append(f"#4 NetGuardBlocked -> lokalnie: {got_text!r}, {got_who!r}")
@@ -593,9 +595,10 @@ def _check_audyt_1331() -> tuple[bool, str]:
         violates_style=lambda _text: [], settings={"tryb": "zawsze", "material_do_sieci": True},
     )
     models = namysl_mod._Models(ctx, namysl_mod.Narrator(None))
-    if models.local_allowed:
-        problems.append("test: lokalny nie powinien być dozwolony na starcie"
-                        " (KORYTO_LOKALNIE=bez_internetu, internet działa)")
+    # 1.40.0: lokalny jest rezerwą całego cyklu także przy działającym
+    # internecie - to on przejmuje cykl po porażce chmury.
+    if not models.local_allowed:
+        problems.append("test: lokalny powinien być w planie jako rezerwa cyklu")
     text, who = models.ask("szkic", "SYS-s", "SYS-c", "USER-cloud + MATERIAŁ 16k", private=True,
                            history=False, user_local="USER-local + MATERIAŁ 7k")
     if (text, who) != ("szkic lokalny", "lokalnie"):
@@ -618,9 +621,10 @@ def _check_audyt_1331() -> tuple[bool, str]:
 
 
 def _check_audyt_1332() -> tuple[bool, str]:
-    """Testy poprawek 1.33.2: akcje w powitaniach (#6), wąska maska outbound
-    (#11), przywrócenie checkboxa zgody (#14), brak martwych trybów (#16)
-    i dokładna godzina w bloku „Teraz” (#17)."""
+    """Testy poprawek 1.33.2 (z aktualizacją 1.45.10): akcje w powitaniach (#6),
+    wąska maska outbound (#11), przywrócenie checkboxa zgody (#14), dokładnie
+    dwa żywe tryby - inteligentny i zawsze, bez starych (#16), i dokładna
+    godzina w bloku „Teraz” (#17)."""
     import inspect
     import re
     from datetime import datetime
@@ -670,10 +674,13 @@ def _check_audyt_1332() -> tuple[bool, str]:
     if "consent.checked = !!namyslSettings.material_do_sieci" not in block:
         problems.append("#14 brak przywrócenia checkboxa w catch")
 
-    # #16: w wants() nie ma już gałęzi starych trybów.
+    # #16: w wants() nie ma gałęzi starych trybów, a TRYBY ma dokładnie
+    # dwa żywe tryby (1.45.10 przywróciło inteligentny).
     src = inspect.getsource(namysl.wants)
     if 'settings["tryb"] == "wylaczony"' in src or 'settings["tryb"] == "auto"' in src:
         problems.append("#16 martwa gałąź trybu nadal w wants()")
+    if tuple(getattr(namysl, "TRYBY", ())) != ("zawsze", "inteligentny"):
+        problems.append(f"#16 TRYBY={getattr(namysl, 'TRYBY', None)!r}")
 
     # #17: dokładna godzina w bloku „Teraz” (lokalny i sieciowy).
     now = datetime(2026, 11, 4, 14, 5)
@@ -707,8 +714,10 @@ def _check_audyt_1333() -> tuple[bool, str]:
             problems.append(f"#18 brak numeru {i}. {name}")
     if "pending-status-timer" in app:
         problems.append("#18 pending status nadal ma własny timer")
-    if "Namysł \\u2014" not in app:
-        problems.append("#18 brak jednowierszowego „Namysł — Ns”")
+    if "function namyslStatusText" not in app:
+        problems.append("#18 brak kanonicznego namyslStatusText")
+    if "Zakończono \\u00b7 " not in app:
+        problems.append("#18 brak statusu „Zakończono · Ns”")
     if "nt-track-clickable" not in app:
         problems.append("#18 stepper nie przejął kliknięcia w panel Postęp")
 
@@ -858,15 +867,18 @@ def _check_audyt_1334() -> tuple[bool, str]:
         if any("SUROWY WYCIAG 77" in prompt for prompt in cloud_prompts):
             problems.append("#19b A: treść pliku wyciekła do promptu chmurowego")
 
-        # B) brak Ollamy (snapshot i recheck=False) i brak zgody -> pominięty.
+        # B) brak Ollamy (snapshot i recheck=False) i brak zgody -> nie ma
+        # czym przeczytać pliku. 1.40.0: bez żadnego dostawcy cykl nie
+        # startuje (None), więc nie ma etykiety „nie mogę przeczytać”;
+        # najważniejsze, że treść pliku nie trafiła do lokalnego promptu.
         events2, seen2, cloud_prompts2 = [], [], []
         out2 = namysl_mod.run(make_ctx(lambda: False, events2, seen2, cloud_prompts2))
-        labels2 = [str(e.get("label") or "") for e in events2]
-        if not any("nie mogę przeczytać" in label for label in labels2):
-            problems.append("#19b B: brak uczciwego „nie mogę przeczytać” bez żadnego dostawcy")
         if any("DIGEST:" in prompt for prompt in seen2):
             problems.append("#19b B: lokalny dostał plik, choć nie odpowiadał")
-        _ = out2
+        if out2 is not None:
+            problems.append("#19b B: cykl bez żadnego dostawcy nie powinien zwrócić odpowiedzi")
+        if not any(e.get("etap") == "koniec" and e.get("faza") == "namysl" for e in events2):
+            problems.append("#19b B: brak uczciwego zakończenia bez dostawcy")
     finally:
         (analiza_mod.read_document, analiza_mod.describe, analiza_mod.understand,
          analiza_mod.VERBATIM_CHARS, analiza_mod.split_chunks) = originals
@@ -1065,7 +1077,7 @@ def _check_local_cache() -> tuple[bool, str]:
 
 
 def _check_local_budget() -> tuple[bool, str]:
-    """1.37.0 #2: system 800 tok, user 2000 tok, materiał lokalny 5300 znaków."""
+    """1.37.0 #2: system 850 tok, user 2000 tok, materiał lokalny 5300 znaków."""
     import router as router_mod
     import awareness as aw
     import namysl as namysl_mod
@@ -1075,7 +1087,7 @@ def _check_local_budget() -> tuple[bool, str]:
                                                    notes="N" * 20_000, file_text="F" * 20_000)
     st, ut = router_mod._est_tokens(system), router_mod._est_tokens(user)
     if st > router_mod.LOCAL_SYSTEM_MAX_TOKENS:
-        problems.append(f"system {st} > 800")
+        problems.append(f"system {st} > {router_mod.LOCAL_SYSTEM_MAX_TOKENS}")
     if ut > router_mod.LOCAL_USER_MAX_TOKENS:
         problems.append(f"user {ut} > 2000")
     if st + ut > router_mod.LOCAL_PROMPT_MAX_TOKENS:
@@ -1117,6 +1129,50 @@ def _check_local_style() -> tuple[bool, str]:
             if words > 15:
                 problems.append(f"zdanie {words} słów: {sentence[:40]}")
     return (not problems), "; ".join(problems) if problems else "8 krótkich, numerowanych zasad"
+
+
+def _check_format_hint_1450() -> tuple[bool, str]:
+    """1.45.0: instrukcja formatowania per styl.dlugosc i budżet lokalny."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import awareness as aw
+    import profil
+
+    problems: list[str] = []
+    old_path = profil.PATH
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-1450-"))
+    try:
+        profil.PATH = tmp / "profil.json"
+        cases = {
+            "krotka": ("bez nagłówków", "tabel"),
+            "srednia": ("1 zdanie", "tabela"),
+            "szczegolowa": ("TL;DR", "h3"),
+        }
+        for length, needles in cases.items():
+            profil.save({"styl": {"dlugosc": length}}, source="test")
+            hint = profil.formatting_hint(cloud=False)
+            if len(hint) > 300:
+                problems.append(f"{length}: hint {len(hint)} znaków")
+            for needle in needles:
+                if needle.lower() not in hint.lower():
+                    problems.append(f"{length}: brak „{needle}”")
+            local = aw.local_system("## Kryzys\n116 123.")
+            if "116 123" not in local:
+                problems.append(f"{length}: Kryzys wypadł z promptu")
+            if "[PROFIL UŻYTKOWNIKA]" not in local:
+                problems.append(f"{length}: profil wypadł z promptu")
+            if "Format:" not in local:
+                problems.append(f"{length}: brak formatu w promptcie")
+        cloud = profil.formatting_hint(cloud=True)
+        if "h3" not in cloud or "TL;DR" not in cloud:
+            problems.append("wariant chmurowy bez h3/TL;DR")
+    finally:
+        profil.PATH = old_path
+        profil._CACHE["mtime"], profil._CACHE["data"] = None, None
+        shutil.rmtree(tmp, ignore_errors=True)
+    return (not problems), "; ".join(problems) if problems else "3 warianty formatu, budżet i profil w promptcie"
 
 
 def _check_local_params() -> tuple[bool, str]:
@@ -1382,6 +1438,46 @@ def _check_spoleczne_1380() -> tuple[bool, str]:
     return (not problems), "; ".join(problems) if problems else "dzięki/cześć bez modelu, <1 s"
 
 
+def _check_namysl_inteligentny(case: dict) -> tuple[bool, str]:
+    """1.45.10: tryb inteligentny vs zawsze na tej samej wiadomości oraz
+    migracja starego zapisu {"tryb": "zawsze"} (bez tryb_wybrany) do
+    inteligentnego; jawny zapis "zawsze" ma się utrzymać."""
+    import json
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import namysl as n
+
+    problems: list[str] = []
+    msg = str(case.get("wiadomosc") or "")
+    for tryb, field in (("inteligentny", "oczekiwane_inteligentny"), ("zawsze", "oczekiwane_zawsze")):
+        want = bool(case.get(field, case.get("oczekiwane")))
+        got, why = n.wants(msg, None, {"tryb": tryb, "material_do_sieci": False})
+        if got != want:
+            problems.append(f"{tryb}: {got} != {want} ({why})")
+
+    old = n.STATE_PATH
+    tmp = Path(tempfile.mkdtemp(prefix="gregai-namysl-int-"))
+    try:
+        n.STATE_PATH = tmp / "namysl.json"
+        n.STATE_PATH.write_text(json.dumps({"tryb": "zawsze", "material_do_sieci": True}), encoding="utf-8")
+        migrated = n.load_settings()
+        if migrated.get("tryb") != "inteligentny":
+            problems.append(f"migracja: {migrated.get('tryb')!r} zamiast inteligentny")
+        zapis = json.loads(n.STATE_PATH.read_text(encoding="utf-8"))
+        if zapis.get("tryb") != "inteligentny":
+            problems.append("migracja nie zapisała trybu do pliku")
+        n.save_settings({"tryb": "zawsze"})
+        if n.load_settings().get("tryb") != "zawsze":
+            problems.append("jawny zapis zawsze wrócił jako inteligentny")
+    finally:
+        n.STATE_PATH = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return (not problems), "; ".join(problems) if problems else "tryb inteligentny: decyzje i migracja OK"
+
+
 def _check_czas_1380() -> tuple[bool, str]:
     """1.38.0 #22: warianty pytania o godzinę/datę trafiają w szybką ścieżkę."""
     import namysl as namysl_mod
@@ -1511,10 +1607,13 @@ def _check_plik_1380() -> tuple[bool, str]:
             problems.append("digest nie trafił do promptu lokalnego")
 
         events2, seen2 = [], []
-        namysl_mod.run(make_ctx(lambda: False, events2, seen2))
-        labels2 = [str(e.get("label") or "") for e in events2]
-        if not any("nie mogę przeczytać" in label for label in labels2):
-            problems.append("brak „nie mogę przeczytać” bez lokalnego i bez zgody")
+        out2 = namysl_mod.run(make_ctx(lambda: False, events2, seen2))
+        # 1.40.0: bez modelu lokalnego i bez puli sieciowej nie ma czym
+        # policzyć cyklu; ważne, że plik nie trafił do żadnego promptu.
+        if out2 is not None:
+            problems.append("cykl bez dostawcy zwrócił odpowiedź")
+        if seen2:
+            problems.append("plik/local dostał prompt, choć nie było dostawcy")
 
         if namysl_mod._plausible_file_ref("to"):
             problems.append("filtr przepuścił „to”")
@@ -1714,9 +1813,13 @@ def _check_namysl_413_1382() -> tuple[bool, str]:
             problems.append("plik/digest nie trafił do promptu lokalnego")
         if str(stored) not in read_paths:
             problems.append(f"nie czytano wgranego pliku: {read_paths[:2]}")
-        labels = [str(e.get("label") or "") for e in events]
-        if not any("Sieć nie odpowiedziała - liczę lokalnie" in label for label in labels):
-            problems.append("brak komunikatu „Sieć nie odpowiedziała - liczę lokalnie”")
+        # 1.40.0: po 413 cykl NIE spada po cichu w środku fazy na lokalny -
+        # zaczyna się od nowa na lokalnym. W strumieniu jest jawne "restart".
+        restarts = [e for e in events if e.get("faza") == "namysl" and e.get("etap") == "restart"]
+        if not restarts:
+            problems.append("brak zdarzenia restartu cyklu po 413")
+        elif "413" not in str(restarts[-1].get("detail") or ""):
+            problems.append(f"restart bez powodu 413: {restarts[-1].get('detail')!r}")
         zrodla = (out or {}).get("card", {}).get("zrodla") or []
         if not any("plik:" in str(z) for z in zrodla):
             problems.append(f"plik nie jest źródłem odpowiedzi: {zrodla}")
@@ -2321,6 +2424,8 @@ def _check_offline(case: dict) -> tuple[bool, str]:
         return _check_local_budget()
     if typ == "lokalny_styl":
         return _check_local_style()
+    if typ == "format_hint_1450":
+        return _check_format_hint_1450()
     if typ == "lokalny_parametry":
         return _check_local_params()
     if typ == "lokalny_walidacja":
@@ -2335,6 +2440,8 @@ def _check_offline(case: dict) -> tuple[bool, str]:
         return _check_local_warmup()
     if typ == "spoleczne_1380":
         return _check_spoleczne_1380()
+    if typ == "namysl_inteligentny":
+        return _check_namysl_inteligentny(case)
     if typ == "czas_1380":
         return _check_czas_1380()
     if typ == "plik_1380":

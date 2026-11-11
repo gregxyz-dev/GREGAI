@@ -11,6 +11,12 @@ pytają TEN moduł o kolejność etapów i idą nią po kolei, pierwszy sukces
 wygrywa. Sam etap myślenia ("co płynie") zostaje bez zmian; zmienia się tylko
 "kto liczy".
 
+WYJĄTEK - NAMYSŁ (1.40.0): jeden cykl Namysłu nie miesza dostawców. Router
+wybiera JEDEN etap z `namysl_stages()` na starcie i trzyma go przez wszystkie
+fazy; błąd dostawcy przerywa cały cykl i zaczyna go od fazy 1 na następnym
+etapie (szczegóły: agent/namysl.py). Dlatego Namysł nie używa rozdzielnicy
+do wyboru etapu - respektuje kolejność KORYTO, a nie politykę wag uwagi.
+
 Trzy etapy (nazwy w .env, KORYTO=..., oddzielone przecinkami):
 
   anthropic  - Claude (Anthropic, PŁATNY): domyślnie PIERWSZY. Decyzja
@@ -97,6 +103,19 @@ def order() -> list[str]:
 def network_order() -> list[str]:
     """Tylko etapy sieciowe, w kolejności koryta (dla juggler.chat)."""
     return [e for e in order() if e in SIECIOWE]
+
+
+def namysl_stages(internet_ok: bool = True) -> list[str]:
+    """Etapy dozwolone dla JEDNEGO cyklu Namysłu (1.40.0).
+
+    Namysł nie dzieli cyklu między dostawców: bierze pierwszy dostępny etap
+    z tej listy i trzyma go przez wszystkie sześć faz. Bez internetu (health
+    check przed pierwszym wywołaniem LLM, patrz namysl._provider_plan) lista
+    zawiera WYŁĄCZNIE "lokalnie" - żaden etap sieciowy nie jest próbowany.
+    Kolejność etapów nadal pochodzi z KORYTO; KORYTO_LOKALNIE nie decyduje
+    o tym, czy lokalny jest rezerwą Namysłu (rezerwą jest zawsze, gdy jest
+    na komputerze i jest w KORYTO)."""
+    return order() if internet_ok else [e for e in order() if e == "lokalnie"]
 
 
 def order_with_network(network_stages: list[str]) -> list[str]:

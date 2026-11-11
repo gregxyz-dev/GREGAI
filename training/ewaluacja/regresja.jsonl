@@ -90,3 +90,7 @@
 {"id": "config-loader-1389", "typ": "config_loader_1389", "oczekiwane": true, "zrodlo": "1.38.9: JSON+prompts, fallback do kodu, hot-reload po mtime i odporność na zły JSON"}
 {"id": "config-files-1389", "typ": "config_files_1389", "oczekiwane": true, "zrodlo": "1.38.9: prompts/system_local + lokalne zasady/kryzys oraz config/social/fastpaths/namysl/commands podpięte"}
 {"id": "config-export-1389", "typ": "config_export_1389", "oczekiwane": true, "zrodlo": "1.38.9: config/tools.json i prompts/persona.md to aktualne snapshoty read-only z capabilities.py/persona.py"}
+{"id": "format-hint-1450", "typ": "format_hint_1450", "oczekiwane": true, "zrodlo": "1.45.0: formatting_hint per styl.dlugosc, budzet lokalny i profil/Kryzys w promptcie"}
+{"id": "namysl-inteligentny-reakcja", "typ": "namysl_inteligentny", "wiadomosc": "okej, super cieszę się, co by tu dziś zrobić?", "oczekiwane_inteligentny": false, "oczekiwane_zawsze": true, "zrodlo": "1.45.10: 4/5 cykli Namysłu to socjalne; reakcja z planistycznym ogonem"}
+{"id": "namysl-inteligentny-doprecyzowanie", "typ": "namysl_inteligentny", "wiadomosc": "wyjaśnij to prościej, jak dziecku", "oczekiwane_inteligentny": false, "oczekiwane_zawsze": true, "zrodlo": "1.45.10: doprecyzowanie poprzedniej odpowiedzi bez nowego zadania"}
+{"id": "namysl-inteligentny-zadanie", "typ": "namysl_inteligentny", "wiadomosc": "usuń wątek, zostaw tabelę i zrób podsumowanie", "oczekiwane_inteligentny": true, "oczekiwane_zawsze": true, "zrodlo": "1.45.10: realne zadanie zawsze pełny Namysł"}

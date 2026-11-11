@@ -126,6 +126,8 @@ class Graph {
       return;
     }
     this._bindEvents();
+    this._onThemeChange = () => this._themeChanged();
+    document.documentElement.addEventListener("gregai:theme-change", this._onThemeChange);
   }
 
   // --- Inicjalizacja sceny ---
@@ -168,8 +170,7 @@ class Graph {
 
     // Siatka pod węzłami - ten sam pomysł "stania na czymś", co płaska
     // siatka CSS pod kanwą w wersji 2D, tylko teraz naprawdę w przestrzeni.
-    this._grid = new THREE.GridHelper(900, 36, 0x4a2c18, 0x2e1b0e); // 1.31.0: siatka w ciepłym brązie (kadr)
-    this._grid.position.y = -180;
+    this._grid = this._makeGrid();
     this.scene.add(this._grid);
 
     // Skybox: wielka, prawie niewidoczna siatkowa kula otaczająca cały graf -
@@ -184,16 +185,16 @@ class Graph {
     // false`, bo inaczej gęsta mgła (FogExp2, patrz niżej) na takim
     // dystansie gasi je niemal całkowicie - zanikanie odległości ma działać
     // na węzłach/krawędziach, nie na samym "niebie" wokół nich.
-    const skyOuter = new THREE.LineSegments(
+    this._skyOuter = new THREE.LineSegments(
       new THREE.WireframeGeometry(new THREE.SphereGeometry(1300, 20, 14)),
       new THREE.LineBasicMaterial({ color: this._cv("--purple") || "#8b5cf6", transparent: true, opacity: 0.07, depthWrite: false, fog: false })
     );
-    this.scene.add(skyOuter);
-    const skyInner = new THREE.LineSegments(
+    this.scene.add(this._skyOuter);
+    this._skyInner = new THREE.LineSegments(
       new THREE.WireframeGeometry(new THREE.SphereGeometry(760, 14, 10)),
       new THREE.LineBasicMaterial({ color: this._cv("--pink") || "#ff4d6d", transparent: true, opacity: 0.05, depthWrite: false, fog: false })
     );
-    this.scene.add(skyInner);
+    this.scene.add(this._skyInner);
 
     this._sphereGeo = new THREE.SphereGeometry(1, 20, 14);
 
@@ -307,6 +308,52 @@ class Graph {
       if (value) this._colors.set(name, value);
     }
     return value;
+  }
+
+  _makeGrid() {
+    const major = this._cv("--crack-cyan") || "#4a2c18";
+    const minor = this._cv("--crack-dim") || "#2e1b0e";
+    const grid = new THREE.GridHelper(
+      900, 36,
+      new THREE.Color(major).getHex(),
+      new THREE.Color(minor).getHex(),
+    );
+    grid.position.y = -180;
+    return grid;
+  }
+
+  _themeChanged() {
+    if (this._failed) return;
+    this._colors.clear();
+    this._materials.clear();
+    this._haloMaterials.clear();
+    const fog = this._cv("--crack-bg") || this._cv("--bg") || "#050508";
+    if (this.scene && this.scene.fog) this.scene.fog.color.set(new THREE.Color(fog).getHex());
+    if (this._grid) {
+      this.scene.remove(this._grid);
+      try {
+        this._grid.geometry.dispose();
+        if (Array.isArray(this._grid.material)) this._grid.material.forEach((m) => m.dispose());
+        else this._grid.material.dispose();
+      } catch (e) { /* starsze Three.js */ }
+      this._grid = this._makeGrid();
+      this.scene.add(this._grid);
+    }
+    if (this._skyOuter) this._skyOuter.material.color.set(new THREE.Color(this._cv("--purple") || "#8b5cf6").getHex());
+    if (this._skyInner) this._skyInner.material.color.set(new THREE.Color(this._cv("--pink") || "#ff4d6d").getHex());
+    const aura = this._cv("--accent") || "#00d4ff";
+    for (const mesh of [this._auraSelected, this._auraHover, this._popMesh]) {
+      if (mesh) mesh.material.color.set(new THREE.Color(aura).getHex());
+    }
+    if (this._pulseMesh) this._pulseMesh.material.color.set(new THREE.Color(aura).getHex());
+    for (const n of this.nodes) {
+      const token = Object.hasOwn(TYPE_COLORS, n.type) ? TYPE_COLORS[n.type] : "--type-note";
+      const color = new THREE.Color(this._cv(token) || "#e0e0e8").getHex();
+      if (n._mesh) n._mesh.material.color.set(color);
+      if (n._halo) n._halo.material.color.set(color);
+    }
+    this._applyVisibility();
+    this._invalidate();
   }
 
   _materialFor(type) {
@@ -749,7 +796,7 @@ class Graph {
       if (!visible) continue;
       const dim = this._dimmed(e.source) || this._dimmed(e.target);
       const onPath = this.activePath.has(e.source.id) && this.activePath.has(e.target.id);
-      const color = onPath ? (this._cv("--accent") || "#ff4d6d") : "#ffffff";
+      const color = onPath ? (this._cv("--accent") || "#ff4d6d") : (this._cv("--crack-text") || "#ffffff");
       e._line.material.color.set(color);
       e._line.material.opacity = onPath ? 0.75 : (dim ? 0.02 : 0.14);
     }

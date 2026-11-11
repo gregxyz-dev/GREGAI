@@ -53,6 +53,24 @@ ROOT = Path(__file__).parent.parent
 STRAZ_DIR = ROOT / "data" / "straz"
 BASELINE_PATH = STRAZ_DIR / "baza.json"
 LOG_PATH = STRAZ_DIR / "dziennik.jsonl"
+# 1.45.7: dedup i wyciszenie typów przeżywają restart. Wcześniej "widziane"
+# żyło tylko w pamięci procesu, więc po każdym restarcie te same false
+# positive wracały do kolejki alertów.
+SEEN_PATH = STRAZ_DIR / "widziane.json"
+MUTED_PATH = STRAZ_DIR / "wyciszone_typu.json"
+SEEN_TTL_S = 24 * 3600
+MUTE_TTL_S = 3600
+CODE_TYPES = ("pieczec_kodu", "plik_kod")
+
+# 1.45.7: jawny, dokumentowany zakres. Baseline pilnuje kodu agenta i miejsc
+# trwałości systemu; pieczęć (GREGAI.sha256) pokrywa resztę kodu i dokumentów.
+# Notatki, data/, memory/ i logi są poza zakresem - zmieniają się w użyciu.
+ALERTS_SCOPE = (
+    "baseline: agent/*.py, .env, /etc/passwd, /etc/group, cron/systemd/sudoers.d/profile.d",
+    "pieczęć: pliki z GREGAI.sha256 (agent/, ui/, training/, skrypty, dokumenty)",
+)
+ALERTS_EXCLUDE = ("data/**", "notatki/**", "memory/**", ".venv/**", "__pycache__/**",
+                  "*.log", "uninstall.log")
 # 1.30.0 (Twierdza): dziennik bezpieczenstwa - lancuch sum kontrolnych. Kazdy wpis niesie
 # skrot poprzedniego, wiec po cichu usunietego ani zmienionego wpisu nie da sie
 # ukryc: weryfikacja lancucha (verify_seclog) wykryje przerwe. Plik dopisywany,
@@ -78,6 +96,7 @@ MAX_LOG_BYTES = 1_000_000
 
 _FAIL_RE = re.compile(r"Failed password|Invalid user|authentication failure|Connection closed by invalid user", re.I)
 _LOCK = threading.Lock()
+_MUTE_LOCK = threading.Lock()  # 1.45.7: read-merge-write wyciszeń typów
 _STATE: dict = {"oceny": [], "widziane": {}, "ostatni_cykl": 0.0, "bledy": 0}
 
 
@@ -301,6 +320,14 @@ def _typ_for(path: str) -> str:
     return "plik_trwalosc"
 
 
+def _rel_name(path: str) -> str:
+    """Ścieżka względna do ROOT (do grupowania i dedupu alertów), inaczej nazwa."""
+    try:
+        return str(Path(path).resolve().relative_to(ROOT.resolve()))
+    except (OSError, ValueError):
+        return Path(path).name
+
+
 def snapshot() -> dict:
     ports: set[int] = set()
     outbound: set[str] = set()
@@ -365,9 +392,11 @@ def diff(base: dict, cur: dict, failed: int = 0) -> list[dict]:
         for path, h in cur["pliki"].items():
             if path in old and old[path] != h:
                 name = Path(path).name
-                out.append({"klucz": f"plik:{path}:{h[:8]}", "typ": _typ_for(path), "opis": f"zmieniony plik: {name}"})
+                out.append({"klucz": f"plik:{path}:{h[:8]}", "typ": _typ_for(path), "opis": f"zmieniony plik: {name}",
+                            "plik": _rel_name(path)})
             elif path not in old and h:
-                out.append({"klucz": f"plik_nowy:{path}", "typ": _typ_for(path), "opis": f"nowy plik: {path}"})
+                out.append({"klucz": f"plik_nowy:{path}", "typ": _typ_for(path), "opis": f"nowy plik: {path}",
+                            "plik": _rel_name(path)})
     for c in cur.get("wyjscia", []):
         out.append({"klucz": f"wyjscie:{c}", "typ": "polaczenie_podejrzane",
                      "opis": f"połączenie wychodzące na podejrzany port: {c}"})
@@ -751,6 +780,67 @@ def _load_base() -> dict:
         return {}
 
 
+# --- 1.45.7: trwały dedup i wyciszenie typów --------------------------------
+
+def _load_ts_map(path: Path) -> dict:
+    """Mapa klucz -> epoch z pliku JSON; uszkodzony plik = pusta mapa."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for key, value in data.items():
+        if key.startswith("_") or not isinstance(value, str):
+            continue
+        try:
+            out[str(key)] = datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S").timestamp()
+        except ValueError:
+            continue
+    return out
+
+
+def _save_ts_map(path: Path, data: dict, ttl_h: int) -> None:
+    payload = {"_ttl_h": int(ttl_h)}
+    for key, ts in data.items():
+        if key.startswith("_"):
+            continue
+        payload[str(key)] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(float(ts)))
+    try:
+        STRAZ_DIR.mkdir(parents=True, exist_ok=True)
+        fsutil.atomic_write_text(path, json.dumps(payload, ensure_ascii=False), mode=0o600)
+    except OSError:
+        pass
+
+
+def _load_seen() -> dict:
+    now = time.time()
+    return {k: t for k, t in _load_ts_map(SEEN_PATH).items() if now - t <= SEEN_TTL_S}
+
+
+def seen_count() -> int:
+    return len(_load_seen())
+
+
+def muted_types(now: float | None = None) -> set[str]:
+    now = time.time() if now is None else now
+    return {k for k, t in _load_ts_map(MUTED_PATH).items() if now - t <= MUTE_TTL_S}
+
+
+def mute_type(typ: str) -> bool:
+    """Wycisza typ alertu na MUTE_TTL_S (domyślnie 1 h). Dziennik i łańcuch
+    bezpieczeństwa nadal zapisują każdą anomalię."""
+    typ = str(typ or "").strip()[:64]
+    if not typ:
+        return False
+    with _MUTE_LOCK:
+        data = {k: t for k, t in _load_ts_map(MUTED_PATH).items() if time.time() - t <= MUTE_TTL_S}
+        data[typ] = time.time()
+        _save_ts_map(MUTED_PATH, data, MUTE_TTL_S // 3600)
+    return True
+
+
 MANIFEST_PATH = ROOT / "GREGAI.sha256"
 # Pliki, ktore po instalacji NIE powinny sie zmienic (kod i skrypty). Notatki,
 # data/, memory/ i .env zmieniaja sie w uzyciu, wiec ich nie pieczetujemy.
@@ -782,37 +872,69 @@ def seal_check() -> list[dict]:
     pieczeci - to anomalia. Skrot samego manifestu trzymamy w kotwicy (z kluczem,
     poza data/) i przy tej samej wersji GREGAI pilnujemy, ze manifest sie nie
     zmienil - atakujacy, ktory podmieni kod I manifest, musialby jeszcze podmienic
-    kotwice, ktorej nie zna klucza."""
+    kotwice, ktorej nie zna klucza.
+
+    1.45.7: zmiana VERSION to okno autoryzacji dla zmian kodu, ktore przyszły
+    bez przeliczenia manifestu (dev/repo). Mismatche z tego cyklu zapisujemy
+    w kotwicy (wersja -> nazwa pliku -> hash) i odtwarzamy cicho przy każdym
+    kolejnym obiegu tej wersji. Każda późniejsza zmiana tego pliku (inny hash)
+    znów alarmuje. Instalacja z paczki ma świeży manifest, więc tam okno jest
+    puste, a podpisany manifest dalej jest weryfikowany przez aktualizuj.sh.
+    """
     out = []
     man = _manifest()
     cur_man_h = _manifest_hash()
     a = _load_anchor()
     cur_ver = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exists() else ""
-    # Zapamietujemy skrot manifestu jako wzorzec, gdy: nowa wersja (aktualizacja)
-    # albo jeszcze nigdy nie zapisalismy skrotu dla tej wersji. Tylko PRAWDZIWY
-    # (niepusty) manifest wolno zapamietac - brak manifestu nie staje sie wzorcem.
-    if cur_man_h and (a.get("wersja") != cur_ver or not a.get("manifest_h")):
-        with _EV_LOCK:  # 1.32.2: zapis kotwicy nie może wyprzedzić równoległego log_security
-            a = _load_anchor()
-            a["wersja"] = cur_ver
-            a["manifest_h"] = cur_man_h
-            _save_anchor()
+    prev_ver = str(a.get("wersja") or "")
+    old_man_h = str(a.get("manifest_h") or "")
+    version_changed = prev_ver != cur_ver
+    accepted = a.get("pieczec_akceptowane")
+    if not isinstance(accepted, dict) or accepted.get("wersja") != cur_ver:
+        accepted = {"wersja": cur_ver, "pliki": {}}
+    accepted = {"wersja": cur_ver,
+                "pliki": dict(accepted.get("pliki") or {}) if isinstance(accepted.get("pliki"), dict) else {}}
     if not man:
         out.append({"klucz": "pieczec:manifest_brak", "typ": "pieczec_kodu",
                     "opis": "brak albo pusty GREGAI.sha256 - pieczęć kodu wyłączona (ktoś usunął sumy kontrolne?)"})
         return out
-    if a.get("manifest_h") and cur_man_h and cur_man_h != a.get("manifest_h"):
+    # Zmiana manifestu bez zmiany wersji to nadal alarm (próba przykrycia podmiany).
+    if not version_changed and old_man_h and cur_man_h and cur_man_h != old_man_h:
         out.append({"klucz": f"pieczec:manifest:{cur_man_h[:8]}", "typ": "pieczec_kodu",
                     "opis": "GREGAI.sha256 (sumy kontrolne) zmieniony bez aktualizacji - ktoś próbował przykryć podmianę kodu"})
+    accepted_names: list[str] = []
     for name, want in man.items():
         path = ROOT / name
         got = _sha(path)
         if got == "":
-            out.append({"klucz": f"pieczec:brak:{name}", "typ": "pieczec_kodu",
+            out.append({"klucz": f"pieczec:brak:{name}", "typ": "pieczec_kodu", "plik": name,
                         "opis": f"plik kodu zniknął albo jest nieczytelny: {name}"})
         elif got != want:
-            out.append({"klucz": f"pieczec:{name}:{got[:8]}", "typ": "pieczec_kodu",
-                        "opis": f"kod GREGAI zmieniony poza aktualizacją: {name}"})
+            if version_changed:
+                # Autoryzowane okno po zmianie VERSION: przyjmij stan plików.
+                accepted["pliki"][name] = got
+                accepted_names.append(name)
+            elif accepted["pliki"].get(name) == got:
+                continue  # ten sam, już przyjęty stan po re-baseline tej wersji
+            else:
+                out.append({"klucz": f"pieczec:{name}:{got[:8]}", "typ": "pieczec_kodu", "plik": name,
+                            "opis": f"kod GREGAI zmieniony poza aktualizacją: {name}"})
+    if version_changed or (cur_man_h and not old_man_h):
+        with _EV_LOCK:
+            a = _load_anchor()
+            a["wersja"] = cur_ver
+            a["manifest_h"] = cur_man_h
+            if version_changed:
+                a["pieczec_akceptowane"] = accepted
+            _save_anchor()
+        if version_changed:
+            opis = f"{prev_ver or 'brak'} \u2192 {cur_ver}"
+            if accepted_names:
+                opis += f" ({len(accepted_names)} plików bez świeżego manifestu)"
+            try:
+                log_security("pieczec_rebaseline", opis)
+            except Exception:
+                pass
     return out
 
 
@@ -846,6 +968,32 @@ def _after_install(anomalies: list, base, cur: dict):
     return anomalies, base
 
 
+def _pl_pliki(n: int) -> str:
+    n = abs(int(n))
+    if n == 1:
+        return "plik"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "pliki"
+    return "plików"
+
+
+def _alert_text(anomalies: list[dict], ocena: str) -> str:
+    """Treść alertu dla rozmowy. Kod GREGAI zawsze jednym zdaniem (N plików),
+    szczegóły zostają w dzienniku Straży. Inne alerty zachowują pełny opis."""
+    code = [a for a in anomalies if a.get("typ") in CODE_TYPES]
+    other = [a for a in anomalies if a.get("typ") not in CODE_TYPES]
+    if code:
+        names = {str(a.get("plik") or a.get("opis") or "") for a in code}
+        n = len([x for x in names if x])
+        head = f"Kod GREGAI zmieniony: {n} {_pl_pliki(n)}"
+        if other:
+            rest = "; ".join(str(a.get("opis") or "") for a in other)
+            return f"{head}; {rest}. Szczegóły w Nadzorcy."[:120]
+        return f"{head}. Szczegóły w Nadzorcy."[:120]
+    desc = "; ".join(str(a.get("opis") or "") for a in anomalies)
+    return f"{desc}. {ocena}"[:500].strip()
+
+
 def cycle() -> list[dict]:
     """Jeden obchód. Zwraca NOWE anomalie (takie, których klucz nie był jeszcze zgłoszony)."""
     cur = snapshot()
@@ -859,18 +1007,29 @@ def cycle() -> list[dict]:
                              "opis": f"plik bazy straży ({BASELINE_PATH.name}) jest {problem} - porównuję z ostatnią znaną bazą"})
     now = time.time()
     with _LOCK:
-        seen = _STATE["widziane"]
-        for k in [k for k, t in seen.items() if now - t > 86400]:
-            del seen[k]
+        seen = _load_seen()  # 1.45.7: dedup przeżywa restart (wcześniej tylko RAM)
         fresh = [a for a in anomalies if a["klucz"] not in seen]
         for a in fresh:
             seen[a["klucz"]] = now
+        if fresh:
+            _save_ts_map(SEEN_PATH, seen, SEEN_TTL_S // 3600)
+        _STATE["widziane"] = seen
         _STATE["ostatni_cykl"] = now
     # Baza: pierwsze uruchomienie albo nowa wersja = nowy stan odniesienia. Porty
     # z anomalii są dopisywane, żeby ten sam port nie alarmował po restarcie.
     stable = {k: v for k, v in cur.items() if k not in ("wyjscia", "procesy_tmp")}
     if not base or base.get("wersja") != cur["wersja"]:
+        old_ver = (base or {}).get("wersja") or "brak"
         _save_base(stable)
+        try:
+            log_security("baza_rebaseline", f"{old_ver} \u2192 {cur['wersja']}")
+        except Exception:
+            pass
+        try:
+            import standing as standing_mod
+            standing_mod.drop_stale_straz()
+        except Exception:
+            pass
     elif fresh:
         merged = dict(base)
         merged["porty"] = sorted(set(base.get("porty", [])) | set(cur["porty"]))
@@ -885,11 +1044,16 @@ def cycle() -> list[dict]:
                 log_security(a.get("typ", "anomalia"), a.get("opis", ""))
             except Exception:
                 pass
-        try:
-            import standing as standing_mod
-            standing_mod._queue_alert("Straż systemu", f"{'; '.join(a['opis'] for a in fresh)}. {text}"[:500])
-        except Exception:
-            pass
+        # 1.45.7: wyciszenie typu wstrzymuje tylko toast; dziennik i łańcuch
+        # bezpieczeństwa powyżej zapisują się zawsze.
+        muted = muted_types(now)
+        toastable = [a for a in fresh if a.get("typ") not in muted]
+        if toastable:
+            try:
+                import standing as standing_mod
+                standing_mod._queue_alert("Straż systemu", _alert_text(toastable, text))
+            except Exception:
+                pass
     return fresh
 
 
@@ -942,9 +1106,13 @@ def acknowledged() -> dict:
         return dict(_load_ack())
 
 
-def acknowledge(ts: str) -> bool:
-    """Oznacz wpis dziennika jako przeczytany. Nie dotykamy dziennika ani
-    łańcucha bezpieczeństwa - stan żyje w osobnym, małym pliku."""
+def acknowledge(ts: str = "", typ: str = "") -> bool:
+    """Oznacz wpis dziennika jako przeczytany (ts) albo wycisz typ alertu
+    na MUTE_TTL_S (typ, 1.45.7). Nie dotykamy dziennika ani łańcucha
+    bezpieczeństwa - stan żyje w osobnych, małych plikach."""
+    typ = str(typ or "").strip()
+    if typ:
+        return mute_type(typ)
     key = str(ts or "").strip()
     if not key:
         return False
@@ -997,6 +1165,30 @@ def status() -> dict:
               "ostatni_cykl": _STATE["ostatni_cykl"], "bledy": _STATE["bledy"],
               "oceny_doba": len(_STATE["oceny"]), "zrodlo_logowan": _STATE.get("zrodlo_logowan", "")}
     st["sekund_temu"] = round(time.time() - st["ostatni_cykl"]) if st["ostatni_cykl"] else None
+    # 1.45.7: metadane do `gregai diag straz`. Kotwica jest 0600 użytkownika
+    # usługi, więc CLI (człowiek) czyta ją przez /api/system_info, nie z dysku.
+    try:
+        a = _load_anchor()
+        akcept = a.get("pieczec_akceptowane") if isinstance(a.get("pieczec_akceptowane"), dict) else {}
+        st["kotwica"] = {"wersja": str(a.get("wersja") or ""),
+                         "manifest_h": str(a.get("manifest_h") or "")[:16],
+                         "akceptowane_pliki": len(akcept.get("pliki") or {}),
+                         "akceptowane_wersja": str(akcept.get("wersja") or ""),
+                         "akceptowane": dict(akcept.get("pliki") or {})}
+    except Exception:
+        st["kotwica"] = {"wersja": "", "manifest_h": "", "akceptowane_pliki": 0}
+    try:
+        # Sam odczyt (bez _load_base, które przy uszkodzonym pliku robi
+        # kwarantannę): status ma nie zmieniać stanu.
+        base = json.loads(BASELINE_PATH.read_text(encoding="utf-8-sig"))
+        if not isinstance(base, dict):
+            base = {}
+        st["baza"] = {"wersja": str(base.get("wersja") or ""),
+                      "plikow": len(base.get("pliki") or {})}
+    except (OSError, ValueError):
+        st["baza"] = {"wersja": "", "plikow": 0}
+    st["dedup_wpisy"] = seen_count()
+    st["wyciszone"] = sorted(muted_types())
     st["ostatnie"] = recent_alerts()
     try:
         st["dziennik_bezp"] = verify_seclog()

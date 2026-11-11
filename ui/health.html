@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
+<title>GREGAI - zdrowie</title>
+<link rel="icon" type="image/svg+xml" href="ikona.svg" />
+<script src="theme.js"></script>
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="crack.css" />
+<link rel="stylesheet" href="theme-light.css" />
+<link rel="stylesheet" href="health.css" />
+</head>
+<body class="health-page">
+<header class="health-head">
+  <div class="health-title">
+    <p class="lt-chip">Zdrowie</p>
+    <h1>GREGAI</h1>
+    <p class="health-sub" id="health-version">wersja …</p>
+    <p class="health-sub">Panel diagnostyczny. Odświeża się co 10 s.</p>
+  </div>
+  <div class="health-head-actions">
+    <span id="health-status" class="health-status">sprawdzam…</span>
+    <span id="health-updated" class="health-updated"></span>
+    <button type="button" class="theme-toggle" data-theme-toggle title="Motyw" aria-label="Motyw">◐</button>
+  </div>
+</header>
+
+<main class="health-grid">
+  <section class="health-card" aria-labelledby="health-service-h">
+    <h2 id="health-service-h">Usługa</h2>
+    <dl id="health-service" class="health-list"></dl>
+  </section>
+  <section class="health-card" aria-labelledby="health-system-h">
+    <h2 id="health-system-h">System</h2>
+    <dl id="health-system" class="health-list"></dl>
+  </section>
+  <section class="health-card health-wide" aria-labelledby="health-koryto-h">
+    <h2 id="health-koryto-h">Koryto</h2>
+    <dl id="health-koryto" class="health-list"></dl>
+    <ul id="health-providers" class="health-providers"></ul>
+  </section>
+  <section class="health-card" aria-labelledby="health-vault-h">
+    <h2 id="health-vault-h">Graf wiedzy</h2>
+    <dl id="health-vault" class="health-list"></dl>
+  </section>
+  <section class="health-card" aria-labelledby="health-wezly-h">
+    <h2 id="health-wezly-h">Dowęzłowywanie</h2>
+    <dl id="health-wezly" class="health-list"></dl>
+  </section>
+  <section class="health-card" aria-labelledby="health-profil-h">
+    <h2 id="health-profil-h">Profil</h2>
+    <dl id="health-profil" class="health-list"></dl>
+  </section>
+</main>
+<p id="health-error" class="health-error" role="status" aria-live="polite"></p>
+<script src="health.js" defer></script>
+</body>
+</html>
